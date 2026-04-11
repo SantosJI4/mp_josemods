@@ -44,6 +44,7 @@ public class OverlayService extends Service {
     private SurfaceView overlaySurface;
     private View toggleButton;
     private WindowManager.LayoutParams overlayParams;
+    private WindowManager.LayoutParams btnParams; // moved to field for inner class access
 
     private boolean menuActive = false;
 
@@ -144,7 +145,7 @@ public class OverlayService extends Service {
         float density = getResources().getDisplayMetrics().density;
         int btnPx = (int) (btnSize * density);
 
-        WindowManager.LayoutParams btnParams = new WindowManager.LayoutParams(
+        btnParams = new WindowManager.LayoutParams(
                 btnPx, btnPx,
                 getOverlayType(),
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE

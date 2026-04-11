@@ -8,6 +8,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
+import android.view.View;
 import android.widget.Button;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -37,18 +38,29 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        tvStatus = findViewById(R.id.tvStatus);
-        tvInfo = findViewById(R.id.tvInfo);
-        btnStart = findViewById(R.id.btnStart);
-        btnStop = findViewById(R.id.btnStop);
+        tvStatus = (TextView) findViewById(R.id.tvStatus);
+        tvInfo = (TextView) findViewById(R.id.tvInfo);
+        btnStart = (Button) findViewById(R.id.btnStart);
+        btnStop = (Button) findViewById(R.id.btnStop);
         handler = new Handler(Looper.getMainLooper());
 
-        btnStart.setOnClickListener(v -> onStartClicked());
-        btnStop.setOnClickListener(v -> onStopClicked());
+        btnStart.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                onStartClicked();
+            }
+        });
+
+        btnStop.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                onStopClicked();
+            }
+        });
 
         // Checar permissão de overlay
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
-            setStatus("Precisamos da permissão de overlay...");
+            setStatus("Precisamos da permissao de overlay...");
             Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                     Uri.parse("package:" + getPackageName()));
             startActivityForResult(intent, OVERLAY_PERMISSION_CODE);
@@ -62,9 +74,9 @@ public class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == OVERLAY_PERMISSION_CODE) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Settings.canDrawOverlays(this)) {
-                setStatus("Permissão OK. Abra o jogo e toque INICIAR.");
+                setStatus("Permissao OK. Abra o jogo e toque INICIAR.");
             } else {
-                setStatus("[ERRO] Permissão de overlay negada.");
+                setStatus("[ERRO] Permissao de overlay negada.");
             }
         }
     }
@@ -74,7 +86,7 @@ public class MainActivity extends Activity {
 
         // Verificar permissão de overlay
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
-            Toast.makeText(this, "Permissão de overlay necessária", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Permissao de overlay necessaria", Toast.LENGTH_SHORT).show();
             return;
         }
 
@@ -83,92 +95,131 @@ public class MainActivity extends Activity {
         setStatus("Iniciando...");
 
         // Tudo roda em background thread (su commands bloqueiam)
-        new Thread(this::doInjectAndStart).start();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                doInjectAndStart();
+            }
+        }).start();
     }
 
     private void onStopClicked() {
-        new Thread(() -> {
-            // Parar overlay
-            runOnUi(() -> {
-                stopService(new Intent(this, OverlayService.class));
-                setStatus("Overlay parado.");
-            });
-
-            // Limpar shared memory
-            rootExec("rm -f /data/local/tmp/.esp_shm");
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                runOnUi(new Runnable() {
+                    @Override
+                    public void run() {
+                        stopService(new Intent(MainActivity.this, OverlayService.class));
+                        setStatus("Overlay parado.");
+                    }
+                });
+                rootExec("rm -f /data/local/tmp/.esp_shm");
+            }
         }).start();
     }
 
     // ══════════════════════════════════════
-    // LÓGICA DE INJEÇÃO — roda em background
+    // LOGICA DE INJECAO — roda em background
     // ══════════════════════════════════════
     private void doInjectAndStart() {
         try {
-            // ── 1. Verificar root ──
-            runOnUi(() -> setStatus("Verificando root..."));
-            String rootCheck = rootExec("id");
+            // 1. Verificar root
+            runOnUi(new Runnable() {
+                @Override
+                public void run() {
+                    setStatus("Verificando root...");
+                }
+            });
+            final String rootCheck = rootExec("id");
             if (rootCheck == null || !rootCheck.contains("uid=0")) {
-                runOnUi(() -> {
-                    setStatus("[ERRO] Sem acesso root!\nO app precisa de root para injetar o hook.");
-                    btnStart.setEnabled(true);
-                    injecting = false;
+                runOnUi(new Runnable() {
+                    @Override
+                    public void run() {
+                        setStatus("[ERRO] Sem acesso root!\nO app precisa de root.");
+                        btnStart.setEnabled(true);
+                        injecting = false;
+                    }
                 });
                 return;
             }
-            runOnUi(() -> setStatus("Root OK ✓"));
+            runOnUi(new Runnable() {
+                @Override
+                public void run() {
+                    setStatus("Root OK");
+                }
+            });
 
-            // ── 2. SELinux permissive ──
+            // 2. SELinux permissive
             rootExec("setenforce 0");
 
-            // ── 3. Extrair libHook.so do APK para /data/local/tmp/ ──
-            runOnUi(() -> setStatus("Root OK ✓\nCopying libHook.so..."));
-            String nativeLibDir = getApplicationInfo().nativeLibraryDir;
-            String hookSrc = nativeLibDir + "/libHook.so";
-            String hookDst = "/data/local/tmp/libHook.so";
+            // 3. Extrair libHook.so do APK
+            runOnUi(new Runnable() {
+                @Override
+                public void run() {
+                    setStatus("Root OK\nCopiando libHook.so...");
+                }
+            });
+            final String nativeLibDir = getApplicationInfo().nativeLibraryDir;
+            final String hookSrc = nativeLibDir + "/libHook.so";
+            final String hookDst = "/data/local/tmp/libHook.so";
 
-            // O Android.mk compila libHook.so junto com libMEOW.so no APK
             if (!new File(hookSrc).exists()) {
-                runOnUi(() -> {
-                    setStatus("[ERRO] libHook.so não encontrada no APK!\n" +
-                              "Verifique se Android.mk está compilando o módulo Hook.");
-                    btnStart.setEnabled(true);
-                    injecting = false;
+                runOnUi(new Runnable() {
+                    @Override
+                    public void run() {
+                        setStatus("[ERRO] libHook.so nao encontrada no APK!\nVerifique Android.mk.");
+                        btnStart.setEnabled(true);
+                        injecting = false;
+                    }
                 });
                 return;
             }
             rootExec("cp " + hookSrc + " " + hookDst);
             rootExec("chmod 755 " + hookDst);
 
-            // ── 4. Limpar shared memory antiga ──
+            // 4. Limpar shared memory antiga
             rootExec("rm -f /data/local/tmp/.esp_shm");
 
-            // ── 5. Verificar se o jogo está aberto ──
-            runOnUi(() -> setStatus("Root OK ✓\nlibHook.so OK ✓\nAguardando jogo: " + GAME_PACKAGE + " ..."));
+            // 5. Verificar se o jogo esta aberto
+            runOnUi(new Runnable() {
+                @Override
+                public void run() {
+                    setStatus("Root OK\nlibHook.so OK\nAguardando jogo: " + GAME_PACKAGE + " ...");
+                }
+            });
 
-            String gamePid = null;
+            String foundPid = null;
             for (int i = 0; i < 30; i++) {
-                gamePid = rootExec("pidof " + GAME_PACKAGE);
-                if (gamePid != null && !gamePid.trim().isEmpty()) {
-                    gamePid = gamePid.trim().split("\\s+")[0]; // Primeiro PID
+                String pidResult = rootExec("pidof " + GAME_PACKAGE);
+                if (pidResult != null && !pidResult.trim().isEmpty()) {
+                    foundPid = pidResult.trim().split("\\s+")[0];
                     break;
                 }
-                gamePid = null;
                 Thread.sleep(1000);
             }
 
-            if (gamePid == null) {
-                runOnUi(() -> {
-                    setStatus("[ERRO] Jogo não encontrado!\nAbra " + GAME_PACKAGE + " primeiro.");
-                    btnStart.setEnabled(true);
-                    injecting = false;
+            if (foundPid == null) {
+                runOnUi(new Runnable() {
+                    @Override
+                    public void run() {
+                        setStatus("[ERRO] Jogo nao encontrado!\nAbra " + GAME_PACKAGE + " primeiro.");
+                        btnStart.setEnabled(true);
+                        injecting = false;
+                    }
                 });
                 return;
             }
 
-            final String pid = gamePid;
-            runOnUi(() -> setStatus("Root OK ✓\nlibHook.so OK ✓\nJogo PID: " + pid + " ✓\nAguardando libil2cpp.so..."));
+            final String pid = foundPid;
+            runOnUi(new Runnable() {
+                @Override
+                public void run() {
+                    setStatus("Root OK\nlibHook.so OK\nJogo PID: " + pid + "\nAguardando libil2cpp.so...");
+                }
+            });
 
-            // ── 6. Aguardar libil2cpp.so carregar ──
+            // 6. Aguardar libil2cpp.so carregar
             boolean il2cppLoaded = false;
             for (int i = 0; i < 30; i++) {
                 String maps = rootExec("grep libil2cpp.so /proc/" + pid + "/maps");
@@ -180,46 +231,58 @@ public class MainActivity extends Activity {
             }
 
             if (!il2cppLoaded) {
-                runOnUi(() -> {
-                    setStatus("[ERRO] Timeout: libil2cpp.so não carregou em 30s");
-                    btnStart.setEnabled(true);
-                    injecting = false;
+                runOnUi(new Runnable() {
+                    @Override
+                    public void run() {
+                        setStatus("[ERRO] Timeout: libil2cpp.so nao carregou em 30s");
+                        btnStart.setEnabled(true);
+                        injecting = false;
+                    }
                 });
                 return;
             }
 
-            runOnUi(() -> setStatus("Root OK ✓\nlibHook.so OK ✓\nJogo PID: " + pid + " ✓\nlibil2cpp.so ✓\nEsperando assemblies..."));
-            Thread.sleep(3000); // Aguardar assemblies carregarem
+            runOnUi(new Runnable() {
+                @Override
+                public void run() {
+                    setStatus("Root OK\nlibHook.so OK\nJogo PID: " + pid + "\nlibil2cpp.so OK\nEsperando assemblies...");
+                }
+            });
+            Thread.sleep(3000);
 
-            // ── 7. Copiar para diretório do jogo ──
-            String gameDir = "/data/data/" + GAME_PACKAGE;
-            String hookInGame = gameDir + "/libHook.so";
+            // 7. Copiar para diretorio do jogo
+            final String gameDir = "/data/data/" + GAME_PACKAGE;
+            final String hookInGame = gameDir + "/libHook.so";
             rootExec("cp " + hookDst + " " + hookInGame);
             rootExec("chmod 755 " + hookInGame);
 
-            // ── 8. INJETAR ──
-            runOnUi(() -> setStatus("Root OK ✓\nlibHook.so OK ✓\nJogo PID: " + pid + " ✓\nlibil2cpp.so ✓\nInjetando hook..."));
+            // 8. INJETAR
+            runOnUi(new Runnable() {
+                @Override
+                public void run() {
+                    setStatus("Root OK\nlibHook.so OK\nJogo PID: " + pid + "\nlibil2cpp.so OK\nInjetando hook...");
+                }
+            });
 
-            // ────────────────────────────────────────────
-            // MÉTODO DE INJEÇÃO — Escolha UM:
-            // ────────────────────────────────────────────
-
-            // MÉTODO 1: LD_PRELOAD (reinicia o jogo)
-            // Simples e funcional. O jogo reinicia com o hook carregado.
+            // METODO 1: LD_PRELOAD (reinicia o jogo)
             rootExec("am force-stop " + GAME_PACKAGE);
             Thread.sleep(1000);
-            // Pega a activity principal do jogo
+            final String launcherAct = getLauncherActivity(GAME_PACKAGE);
             String launchCmd = "LD_PRELOAD=" + hookInGame
-                    + " am start -n " + GAME_PACKAGE + "/"
-                    + getLauncherActivity(GAME_PACKAGE);
+                    + " am start -n " + GAME_PACKAGE + "/" + launcherAct;
             rootExec(launchCmd);
 
-            // MÉTODO 2: Injector ptrace (sem reiniciar)
-            // Descomente e comente o MÉTODO 1 se tiver um injector:
+            // METODO 2: Injector ptrace (sem reiniciar)
+            // Descomente e comente o METODO 1 se tiver um injector:
             // rootExec("/data/local/tmp/injector " + pid + " " + hookInGame);
 
-            // ── 9. Aguardar hook ativar (shared memory aparece) ──
-            runOnUi(() -> setStatus("Root OK ✓\nlibHook.so OK ✓\nJogo reiniciado ✓\nAguardando hook ativar..."));
+            // 9. Aguardar hook ativar
+            runOnUi(new Runnable() {
+                @Override
+                public void run() {
+                    setStatus("Root OK\nlibHook.so OK\nJogo reiniciado\nAguardando hook ativar...");
+                }
+            });
 
             boolean hookOk = false;
             for (int i = 0; i < 15; i++) {
@@ -231,37 +294,33 @@ public class MainActivity extends Activity {
                 Thread.sleep(1000);
             }
 
-            // ── 10. Iniciar overlay ──
+            // 10. Iniciar overlay
             final boolean hookResult = hookOk;
-            runOnUi(() -> {
-                if (hookResult) {
-                    setStatus("Root OK ✓\nlibHook.so OK ✓\nJogo OK ✓\nHook ATIVO ✓\nOverlay iniciando...");
-                } else {
-                    setStatus("Root OK ✓\nlibHook.so OK ✓\nJogo OK ✓\nHook: aguardando... (overlay vai conectar quando disponível)");
+            runOnUi(new Runnable() {
+                @Override
+                public void run() {
+                    rootExec("appops set " + getPackageName() + " SYSTEM_ALERT_WINDOW allow");
+                    startService(new Intent(MainActivity.this, OverlayService.class));
+
+                    if (hookResult) {
+                        setStatus("TUDO ATIVO\nHook: VMT (MethodInfo swap)\nIPC: /data/local/tmp/.esp_shm\nESP: Ative no menu do overlay");
+                    } else {
+                        setStatus("OVERLAY ATIVO (hook aguardando...)\nHook: VMT (MethodInfo swap)\nIPC: /data/local/tmp/.esp_shm\nESP: Ative no menu do overlay");
+                    }
+
+                    btnStart.setEnabled(true);
+                    injecting = false;
                 }
-
-                // Permissão overlay
-                rootExec("appops set " + getPackageName() + " SYSTEM_ALERT_WINDOW allow");
-
-                // Iniciar overlay service
-                startService(new Intent(this, OverlayService.class));
-
-                setStatus((hookResult
-                        ? "TUDO ATIVO ✓\n"
-                        : "OVERLAY ATIVO (hook aguardando...)\n")
-                        + "Hook: VMT (MethodInfo swap)\n"
-                        + "IPC: /data/local/tmp/.esp_shm\n"
-                        + "ESP: Ative no menu do overlay");
-
-                btnStart.setEnabled(true);
-                injecting = false;
             });
 
-        } catch (Exception e) {
-            runOnUi(() -> {
-                setStatus("[ERRO] " + e.getMessage());
-                btnStart.setEnabled(true);
-                injecting = false;
+        } catch (final Exception e) {
+            runOnUi(new Runnable() {
+                @Override
+                public void run() {
+                    setStatus("[ERRO] " + e.getMessage());
+                    btnStart.setEnabled(true);
+                    injecting = false;
+                }
             });
         }
     }
@@ -270,7 +329,6 @@ public class MainActivity extends Activity {
     // Helpers
     // ══════════════════════════════════════
 
-    /** Executa comando como root e retorna stdout */
     private String rootExec(String cmd) {
         try {
             Process su = Runtime.getRuntime().exec("su");
@@ -295,25 +353,21 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** Descobre a activity principal (launcher) do jogo */
     private String getLauncherActivity(String pkg) {
         String result = rootExec("cmd package resolve-activity --brief " + pkg
                 + " | tail -1");
         if (result != null && result.contains("/")) {
-            // Retorna algo como "com.game/.MainActivity"
             String activity = result.trim();
             if (activity.contains(pkg)) {
                 return activity.substring(activity.indexOf("/"));
             }
         }
-        // Fallback: tentar dumpsys
         result = rootExec("dumpsys package " + pkg
                 + " | grep -A1 'android.intent.action.MAIN' | grep -o '"
                 + pkg + "/[^ ]*'");
         if (result != null && result.contains("/")) {
             return result.trim().substring(result.indexOf("/"));
         }
-        // Último fallback
         return "/.MainActivity";
     }
 
