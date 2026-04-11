@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#1a1a2e"
+    android:padding="24dp"
+    android:gravity="center_horizontal">
+
+    <!-- Título -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="MEOW ESP"
+        android:textSize="28sp"
+        android:textColor="#e94560"
+        android:textStyle="bold"
+        android:layout_marginTop="40dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="VMT Hook + External Overlay"
+        android:textSize="14sp"
+        android:textColor="#888888"
+        android:layout_marginBottom="30dp" />
+
+    <!-- Status -->
+    <TextView
+        android:id="@+id/tvStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Pronto"
+        android:textSize="13sp"
+        android:textColor="#aaaaaa"
+        android:background="#0f3460"
+        android:padding="16dp"
+        android:lineSpacingExtra="4dp"
+        android:fontFamily="monospace"
+        android:layout_marginBottom="24dp" />
+
+    <!-- Botão: Injetar Hook + Overlay tudo junto -->
+    <Button
+        android:id="@+id/btnStart"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:text="INICIAR"
+        android:textSize="18sp"
+        android:textColor="#ffffff"
+        android:textStyle="bold"
+        android:background="#e94560"
+        android:layout_marginBottom="12dp" />
+
+    <!-- Botão: Parar tudo -->
+    <Button
+        android:id="@+id/btnStop"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:text="PARAR"
+        android:textSize="16sp"
+        android:textColor="#cccccc"
+        android:background="#333333"
+        android:layout_marginBottom="24dp" />
+
+    <!-- Info -->
+    <TextView
+        android:id="@+id/tvInfo"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="1. Abra o jogo\n2. Volte aqui e toque INICIAR\n3. O hook injeta e o overlay inicia"
+        android:textSize="12sp"
+        android:textColor="#666666"
+        android:lineSpacingExtra="3dp" />
+
+</LinearLayout>
