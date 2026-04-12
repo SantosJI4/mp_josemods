@@ -10,6 +10,7 @@ import android.os.Looper;
 import android.provider.Settings;
 import android.view.View;
 import android.widget.Button;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -27,7 +28,7 @@ public class MainActivity extends Activity {
     private static final String GAME_PACKAGE = "com.fungames.sniper3d";
 
     private TextView tvStatus;
-    private TextView tvInfo;
+    private ProgressBar progressInject;
     private Button btnStart;
     private Button btnStop;
     private Handler handler;
@@ -43,7 +44,7 @@ public class MainActivity extends Activity {
         setContentView(R.layout.activity_main);
 
         tvStatus = (TextView) findViewById(R.id.tvStatus);
-        tvInfo = (TextView) findViewById(R.id.tvInfo);
+        progressInject = (ProgressBar) findViewById(R.id.progressInject);
         btnStart = (Button) findViewById(R.id.btnStart);
         btnStop = (Button) findViewById(R.id.btnStop);
         handler = new Handler(Looper.getMainLooper());
@@ -64,12 +65,12 @@ public class MainActivity extends Activity {
 
         // Checar permissão de overlay
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
-            setStatus("Precisamos da permissao de overlay...");
+            setStatus("Requesting overlay permission...");
             Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                     Uri.parse("package:" + getPackageName()));
             startActivityForResult(intent, OVERLAY_PERMISSION_CODE);
         } else {
-            setStatus("Pronto. Abra o jogo e toque INICIAR.");
+            setStatus("Ready to inject");
         }
     }
 
@@ -78,11 +79,20 @@ public class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == OVERLAY_PERMISSION_CODE) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Settings.canDrawOverlays(this)) {
-                setStatus("Permissao OK. Abra o jogo e toque INICIAR.");
+                setStatus("Ready to inject");
             } else {
-                setStatus("[ERRO] Permissao de overlay negada.");
+                setStatus("Overlay permission denied");
             }
         }
+    }
+
+    private void showLoading(final boolean show) {
+        runOnUi(new Runnable() {
+            @Override
+            public void run() {
+                progressInject.setVisibility(show ? View.VISIBLE : View.GONE);
+            }
+        });
     }
 
     private void onStartClicked() {
@@ -90,13 +100,15 @@ public class MainActivity extends Activity {
 
         // Verificar permissão de overlay
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
-            Toast.makeText(this, "Permissao de overlay necessaria", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Overlay permission required", Toast.LENGTH_SHORT).show();
             return;
         }
 
         injecting = true;
         btnStart.setEnabled(false);
-        setStatus("Iniciando...");
+        btnStart.setVisibility(View.GONE);
+        showLoading(true);
+        setStatus("Initializing...");
 
         // Tudo roda em background thread (su commands bloqueiam)
         new Thread(new Runnable() {
@@ -115,7 +127,10 @@ public class MainActivity extends Activity {
                     @Override
                     public void run() {
                         stopService(new Intent(MainActivity.this, OverlayService.class));
-                        setStatus("Overlay parado.");
+                        setStatus("Stopped");
+                        btnStop.setVisibility(View.GONE);
+                        btnStart.setVisibility(View.VISIBLE);
+                        btnStart.setEnabled(true);
                     }
                 });
                 rootExec("rm -f /data/local/tmp/.esp_shm");
@@ -131,17 +146,17 @@ public class MainActivity extends Activity {
     private void doInjectAndStart() {
         try {
             // 1. Verificar root
-            updateStatus("Verificando root...");
+            updateStatus("Checking root...");
             final String rootCheck = rootExec("id");
             if (rootCheck == null || !rootCheck.contains("uid=0")) {
-                updateStatus("[ERRO] Sem acesso root!");
+                updateStatus("No root access");
                 resetButton();
                 return;
             }
 
             // 2. SELinux permissive
             rootExec("setenforce 0");
-            updateStatus("Root OK\nSELinux permissive");
+            updateStatus("Preparing environment...");
 
             // 3. Copiar libHook.so
             final String nativeLibDir = getApplicationInfo().nativeLibraryDir;
@@ -149,15 +164,14 @@ public class MainActivity extends Activity {
             final String hookDst = "/data/local/tmp/libHook.so";
 
             if (!new File(hookSrc).exists()) {
-                updateStatus("[ERRO] libHook.so nao encontrada no APK!\nnativeLibDir: " + nativeLibDir);
+                updateStatus("Hook library not found");
                 resetButton();
                 return;
             }
             rootExec("cp " + hookSrc + " " + hookDst);
             rootExec("chmod 777 " + hookDst);
-            // SELinux label para o linker aceitar
             rootExec("chcon u:object_r:system_lib_file:s0 " + hookDst);
-            updateStatus("Root OK\nlibHook.so copiada");
+            updateStatus("Copying libraries...");
 
             // 4. Pre-criar shared memory + hook log
             // IMPORTANTE: so criar em /data/local/tmp/ (UNICO path confiavel)
@@ -199,7 +213,7 @@ public class MainActivity extends Activity {
             });
 
             // 6. INJETAR via wrapper script + setprop wrap
-            updateStatus("Root OK\nlibHook.so OK\nCriando wrapper script...");
+            updateStatus("Injecting hook...");
 
             // Copiar .so para diretorio do jogo (garante acessibilidade no namespace)
             rootExec("cp " + hookDst + " " + gameDir + "/libHook.so");
@@ -247,7 +261,7 @@ public class MainActivity extends Activity {
                 rootExec("monkey -p " + GAME_PACKAGE + " -c android.intent.category.LAUNCHER 1");
             }
 
-            updateStatus("Jogo iniciado com wrap script\nAguardando hook...");
+            updateStatus("Waiting for hook...");
 
             // 7. Aguardar hook carregar — checa game dir + fallbacks
             boolean hookOk = false;
@@ -290,13 +304,10 @@ public class MainActivity extends Activity {
                     if (hookLog != null && hookLog.length() > 0) {
                         logTail = hookLog.length() > 150 ? hookLog.substring(hookLog.length() - 150) : hookLog;
                     }
-                    updateStatus("Aguardando hook... (" + sec + "s)\n"
-                            + "PID: " + gamePid + "\n"
-                            + "Hook maps: " + mapsInfo + "\n"
-                            + "Log: " + logTail);
+                    updateStatus("Injecting... (" + sec + "s)");
                 } else {
                     final int sec = i + 1;
-                    updateStatus("Aguardando jogo iniciar... (" + sec + "s)");
+                    updateStatus("Starting game... (" + sec + "s)");
                 }
             }
 
@@ -309,7 +320,7 @@ public class MainActivity extends Activity {
                 String pidResult = rootExec("pidof " + GAME_PACKAGE);
                 if (pidResult != null && !pidResult.trim().isEmpty()) {
                     final String gamePid = pidResult.trim().split("\\s+")[0];
-                    updateStatus("Wrap nao funcionou\nTentando attach-agent (PID: " + gamePid + ")...");
+                    updateStatus("Retrying injection...");
 
                     // Limpar hook log do game dir
                     rootExec("echo '' > " + gameDir + "/.hook_log 2>/dev/null");
@@ -334,46 +345,29 @@ public class MainActivity extends Activity {
                             break;
                         }
                         final int sec = j + 1;
-                        updateStatus("attach-agent (" + sec + "s)\nPID: " + gamePid);
+                        updateStatus("Retrying... (" + sec + "s)");
                     }
                 }
             }
 
             // 10. Status final
             if (hookOk) {
-                updateStatus("TUDO ATIVO!\n"
-                        + "Hook: VMT (MethodInfo swap)\n"
-                        + "IPC: /data/local/tmp/.esp_shm\n"
-                        + "ESP: Toggle no menu overlay");
+                showLoading(false);
+                updateStatus("Injected successfully");
+                runOnUi(new Runnable() {
+                    @Override
+                    public void run() {
+                        btnStop.setVisibility(View.VISIBLE);
+                    }
+                });
             } else {
-                // Diagnostico completo
-                String pidResult2 = rootExec("pidof " + GAME_PACKAGE);
-                final String diagPid = (pidResult2 != null) ? pidResult2.trim() : "N/A";
-                String diagMapsStr = "NAO";
-                if (!diagPid.equals("N/A") && !diagPid.isEmpty()) {
-                    String mResult = rootExec("grep -c libHook.so /proc/" + diagPid.split("\\s+")[0] + "/maps 2>/dev/null");
-                    diagMapsStr = (mResult != null && !mResult.trim().isEmpty() && !"0".equals(mResult.trim())) ? "SIM" : "NAO";
-                }
-                // Hook log de todos os locais
-                String hookLogDiag = rootExec("cat " + gameDir + "/.hook_log 2>/dev/null");
-                if (hookLogDiag == null || hookLogDiag.trim().isEmpty()) {
-                    hookLogDiag = rootExec("cat /data/local/tmp/.hook_log 2>/dev/null || cat /sdcard/.hook_log 2>/dev/null");
-                }
-                final String diagHookLog = (hookLogDiag != null && !hookLogDiag.trim().isEmpty()) ? hookLogDiag.trim() : "vazio";
-                // Logcat (mais linhas)
-                String logcatHook = rootExec("logcat -d -s GameHook:* | tail -10");
-                final String diagLog = (logcatHook != null && !logcatHook.trim().isEmpty()) ? logcatHook.trim() : "sem logs";
-
-                updateStatus("HOOK NAO CONFIRMADO\n"
-                        + "PID: " + diagPid + " | Maps: " + diagMapsStr + "\n"
-                        + "HookLog: " + diagHookLog + "\n"
-                        + "Logcat:\n" + diagLog);
+                updateStatus("Injection failed. Retry?");
             }
 
             resetButton();
 
         } catch (final Exception e) {
-            updateStatus("[ERRO] " + e.getMessage());
+            updateStatus("Error: " + e.getMessage());
             resetButton();
         }
     }
@@ -388,9 +382,11 @@ public class MainActivity extends Activity {
     }
 
     private void resetButton() {
+        showLoading(false);
         runOnUi(new Runnable() {
             @Override
             public void run() {
+                btnStart.setVisibility(View.VISIBLE);
                 btnStart.setEnabled(true);
                 injecting = false;
             }

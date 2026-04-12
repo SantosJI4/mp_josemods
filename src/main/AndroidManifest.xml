@@ -17,13 +17,20 @@
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true">
-        <activity android:name="com.android.support.MainActivity"
+
+        <!-- Key validation screen (launcher) -->
+        <activity android:name="com.android.support.KeyActivity"
             android:theme="@style/AppTheme">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Injection screen (launched after key validation) -->
+        <activity android:name="com.android.support.MainActivity"
+            android:theme="@style/AppTheme" />
+
         <service
             android:name="com.android.support.OverlayService"
             android:enabled="true"

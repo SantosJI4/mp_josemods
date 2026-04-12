@@ -3,73 +3,112 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:background="#1a1a2e"
-    android:padding="24dp"
-    android:gravity="center_horizontal">
+    android:background="@color/bg_dark"
+    android:gravity="center_horizontal"
+    android:padding="32dp">
 
-    <!-- Título -->
+    <!-- Spacer top -->
+    <View
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
+    <!-- Title -->
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="MEOW ESP"
-        android:textSize="28sp"
-        android:textColor="#e94560"
+        android:text="JAW"
+        android:textSize="42sp"
+        android:textColor="@color/green_primary"
         android:textStyle="bold"
-        android:layout_marginTop="40dp" />
+        android:letterSpacing="0.15"
+        android:fontFamily="sans-serif-black" />
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="VMT Hook + External Overlay"
-        android:textSize="14sp"
-        android:textColor="#888888"
-        android:layout_marginBottom="30dp" />
+        android:text="MODS"
+        android:textSize="18sp"
+        android:textColor="@color/text_secondary"
+        android:letterSpacing="0.5"
+        android:fontFamily="sans-serif-light"
+        android:layout_marginBottom="12dp" />
 
-    <!-- Status -->
-    <TextView
-        android:id="@+id/tvStatus"
+    <View
+        android:layout_width="60dp"
+        android:layout_height="2dp"
+        android:background="@color/green_primary"
+        android:layout_marginBottom="32dp" />
+
+    <!-- Status card -->
+    <LinearLayout
+        android:id="@+id/statusCard"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Pronto"
-        android:textSize="13sp"
-        android:textColor="#aaaaaa"
-        android:background="#0f3460"
-        android:padding="16dp"
-        android:lineSpacingExtra="4dp"
-        android:fontFamily="monospace"
-        android:layout_marginBottom="24dp" />
+        android:orientation="vertical"
+        android:background="@drawable/bg_card"
+        android:padding="20dp"
+        android:gravity="center"
+        android:layout_marginBottom="32dp">
 
-    <!-- Botão: Injetar Hook + Overlay tudo junto -->
+        <!-- Loading spinner (hidden by default) -->
+        <ProgressBar
+            android:id="@+id/progressInject"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_gravity="center"
+            android:visibility="gone"
+            android:indeterminateTint="@color/green_primary"
+            android:layout_marginBottom="12dp" />
+
+        <TextView
+            android:id="@+id/tvStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Ready to inject"
+            android:textSize="14sp"
+            android:textColor="@color/text_secondary"
+            android:gravity="center"
+            android:lineSpacingExtra="4dp" />
+    </LinearLayout>
+
+    <!-- Inject button -->
     <Button
         android:id="@+id/btnStart"
         android:layout_width="match_parent"
         android:layout_height="56dp"
-        android:text="INICIAR"
+        android:text="INJECT"
         android:textSize="18sp"
-        android:textColor="#ffffff"
+        android:textColor="#FF0D0D0D"
         android:textStyle="bold"
-        android:background="#e94560"
-        android:layout_marginBottom="12dp" />
+        android:background="@drawable/btn_green"
+        android:letterSpacing="0.1"
+        android:layout_marginBottom="14dp" />
 
-    <!-- Botão: Parar tudo -->
+    <!-- Stop button -->
     <Button
         android:id="@+id/btnStop"
         android:layout_width="match_parent"
         android:layout_height="48dp"
-        android:text="PARAR"
-        android:textSize="16sp"
-        android:textColor="#cccccc"
-        android:background="#333333"
-        android:layout_marginBottom="24dp" />
+        android:text="STOP"
+        android:textSize="14sp"
+        android:textColor="@color/text_secondary"
+        android:background="@drawable/btn_outline_green"
+        android:letterSpacing="0.05"
+        android:visibility="gone" />
 
-    <!-- Info -->
+    <!-- Spacer bottom -->
+    <View
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
+    <!-- Footer -->
     <TextView
-        android:id="@+id/tvInfo"
-        android:layout_width="match_parent"
+        android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="1. Abra o jogo\n2. Volte aqui e toque INICIAR\n3. O hook injeta e o overlay inicia"
-        android:textSize="12sp"
-        android:textColor="#666666"
-        android:lineSpacingExtra="3dp" />
+        android:text="jawmods v1.0"
+        android:textSize="11sp"
+        android:textColor="@color/text_hint" />
 
 </LinearLayout>
