@@ -199,25 +199,96 @@ private:
         ImGuiIO& io = ImGui::GetIO();
 
         io.DisplaySize = ImVec2((float)screenW, (float)screenH);
+        // ── JawMods Dark + Green Theme ──
         ImGui::StyleColorsDark();
-
         ImGuiStyle* style = &ImGui::GetStyle();
+        ImVec4* c = style->Colors;
+
+        // Main green accent
+        ImVec4 green     = ImVec4(0.00f, 0.90f, 0.46f, 1.00f); // #00E676
+        ImVec4 greenDim  = ImVec4(0.00f, 0.55f, 0.28f, 1.00f);
+        ImVec4 greenDark = ImVec4(0.00f, 0.35f, 0.18f, 1.00f);
+        ImVec4 bg        = ImVec4(0.05f, 0.05f, 0.05f, 0.94f);
+        ImVec4 bgChild   = ImVec4(0.08f, 0.08f, 0.08f, 1.00f);
+        ImVec4 bgFrame   = ImVec4(0.12f, 0.12f, 0.12f, 1.00f);
+        ImVec4 border    = ImVec4(0.16f, 0.16f, 0.16f, 1.00f);
+        ImVec4 textMain  = ImVec4(1.00f, 1.00f, 1.00f, 1.00f);
+        ImVec4 textDim   = ImVec4(0.60f, 0.60f, 0.60f, 1.00f);
+
+        // Window
+        c[ImGuiCol_WindowBg]       = bg;
+        c[ImGuiCol_ChildBg]        = bgChild;
+        c[ImGuiCol_PopupBg]        = ImVec4(0.08f, 0.08f, 0.08f, 0.96f);
+        c[ImGuiCol_Border]         = border;
+        c[ImGuiCol_BorderShadow]   = ImVec4(0, 0, 0, 0);
+
+        // Title bar
+        c[ImGuiCol_TitleBg]        = ImVec4(0.04f, 0.04f, 0.04f, 1.00f);
+        c[ImGuiCol_TitleBgActive]  = ImVec4(0.00f, 0.18f, 0.09f, 1.00f);
+        c[ImGuiCol_TitleBgCollapsed] = ImVec4(0.02f, 0.02f, 0.02f, 0.50f);
+
+        // Text
+        c[ImGuiCol_Text]           = textMain;
+        c[ImGuiCol_TextDisabled]   = textDim;
+
+        // Frame (inputs, checkboxes)
+        c[ImGuiCol_FrameBg]        = bgFrame;
+        c[ImGuiCol_FrameBgHovered] = ImVec4(0.00f, 0.30f, 0.15f, 0.40f);
+        c[ImGuiCol_FrameBgActive]  = ImVec4(0.00f, 0.45f, 0.23f, 0.60f);
+
+        // Button
+        c[ImGuiCol_Button]         = greenDark;
+        c[ImGuiCol_ButtonHovered]  = greenDim;
+        c[ImGuiCol_ButtonActive]   = green;
+
+        // Check, slider
+        c[ImGuiCol_CheckMark]      = green;
+        c[ImGuiCol_SliderGrab]     = greenDim;
+        c[ImGuiCol_SliderGrabActive] = green;
+
+        // Header (collapsing, selectable)
+        c[ImGuiCol_Header]         = ImVec4(0.00f, 0.25f, 0.13f, 0.50f);
+        c[ImGuiCol_HeaderHovered]  = ImVec4(0.00f, 0.40f, 0.20f, 0.60f);
+        c[ImGuiCol_HeaderActive]   = greenDim;
+
+        // Separator
+        c[ImGuiCol_Separator]      = border;
+        c[ImGuiCol_SeparatorHovered] = greenDim;
+        c[ImGuiCol_SeparatorActive]  = green;
+
+        // Scrollbar
+        c[ImGuiCol_ScrollbarBg]    = ImVec4(0.03f, 0.03f, 0.03f, 0.50f);
+        c[ImGuiCol_ScrollbarGrab]  = ImVec4(0.20f, 0.20f, 0.20f, 1.00f);
+        c[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.30f, 0.30f, 0.30f, 1.00f);
+        c[ImGuiCol_ScrollbarGrabActive]  = greenDim;
+
+        // Tab
+        c[ImGuiCol_Tab]            = greenDark;
+        c[ImGuiCol_TabHovered]     = greenDim;
+
+        // Resize grip
+        c[ImGuiCol_ResizeGrip]         = ImVec4(0.00f, 0.30f, 0.15f, 0.25f);
+        c[ImGuiCol_ResizeGripHovered]   = greenDim;
+        c[ImGuiCol_ResizeGripActive]    = green;
+
+        // Style metrics
         style->Alpha = 1.0f;
         style->WindowTitleAlign = ImVec2(0.5f, 0.5f);
-        style->PopupRounding = 3;
-        style->WindowPadding = ImVec2(4, 4);
-        style->FramePadding = ImVec2(2, 2);
-        style->ItemSpacing = ImVec2(2, 2);
-        style->ScrollbarSize = 17;
+        style->WindowPadding = ImVec2(16, 12);
+        style->FramePadding = ImVec2(10, 6);
+        style->ItemSpacing = ImVec2(10, 8);
+        style->ScrollbarSize = 14;
         style->WindowBorderSize = 1;
         style->ChildBorderSize = 1;
-        style->PopupBorderSize = 3;
-        style->FrameBorderSize = 1;
-        style->WindowRounding = 3;
-        style->ChildRounding = 3;
-        style->FrameRounding = 3;
-        style->ScrollbarRounding = 2;
-        style->GrabRounding = 3;
+        style->PopupBorderSize = 1;
+        style->FrameBorderSize = 0;
+        style->WindowRounding = 10;
+        style->ChildRounding = 8;
+        style->FrameRounding = 8;
+        style->PopupRounding = 8;
+        style->ScrollbarRounding = 6;
+        style->GrabRounding = 6;
+        style->GrabMinSize = 10;
 
         ImGui_ImplOpenGL3_Init("#version 300 es");
 

@@ -305,8 +305,12 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     // Sanity check
     if (std::isnan(worldPos.x) || std::isnan(worldPos.y) || std::isnan(worldPos.z)) return;
 
-    Vector3 bottomWorld(worldPos.x, worldPos.y - 0.1f, worldPos.z);
-    Vector3 topWorld(worldPos.x, worldPos.y + 1.8f, worldPos.z);
+    // Unity humanoid pivot pode ser nos pes OU no centro do capsule.
+    // Sniper3D PersonTarget: pivot nos pes (ground level).
+    // Pés = y, Cabeça = y + ~1.75m (humano medio)
+    // Adicionamos margem embaixo (-0.05) e em cima (+0.05) para cobrir modelo
+    Vector3 bottomWorld(worldPos.x, worldPos.y - 0.05f, worldPos.z);
+    Vector3 topWorld(worldPos.x, worldPos.y + 1.75f, worldPos.z);
 
     Vector3 screenBottom, screenTop;
 

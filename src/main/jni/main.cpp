@@ -207,34 +207,42 @@ void DrawESP(int screenW, int screenH) {
         // Filtro de distância
         if (entry.distance > espMaxDistance) continue;
 
-        float boxHeight = fabsf(entry.bottomY - entry.topY);
-        if (boxHeight < 3.0f) continue; // Muito pequeno
-        float boxWidth = boxHeight * 0.5f; // Proporcao mais justa
+        // topY = screen Y da cabeca, bottomY = screen Y dos pes
+        // Em screen coords: topY < bottomY (Y cresce pra baixo)
+        float top = fminf(entry.topY, entry.bottomY);
+        float bot = fmaxf(entry.topY, entry.bottomY);
+        float boxHeight = bot - top;
+        if (boxHeight < 2.0f) continue;
 
-        // Usar bottomX como referencia primaria (pes sao mais estaveis)
-        float centerX = entry.bottomX;
+        // Largura proporcional: corpo humano ~0.45x da altura
+        float boxWidth = boxHeight * 0.45f;
 
-        // Padding vertical para cobrir melhor o modelo
-        float padY = boxHeight * 0.05f;
-        ImVec2 boxMin = ImVec2(centerX - (boxWidth * 0.5f), entry.topY - padY);
-        ImVec2 boxMax = ImVec2(centerX + (boxWidth * 0.5f), entry.bottomY + padY);
+        // Centro X: media entre top e bottom (perspectiva)
+        float centerX = (entry.topX + entry.bottomX) * 0.5f;
+
+        // Box com margem minima
+        float padY = boxHeight * 0.03f;
+        float halfW = boxWidth * 0.5f;
+        ImVec2 boxMin = ImVec2(centerX - halfW, top - padY);
+        ImVec2 boxMax = ImVec2(centerX + halfW, bot + padY);
 
         // Box
         if (drawEnemyBox) {
-            draw->AddRect(boxMin, boxMax, color, 0.0f, 15, 1.5f);
+            draw->AddRect(boxMin, boxMax, color, 1.0f, 15, 1.5f);
         }
 
-        // Snap line
+        // Snap line: from top-center of screen to center of body
         if (drawSnapLine) {
+            float bodyCenterY = (top + bot) * 0.5f;
             draw->AddLine(screenTopLine,
-                         ImVec2(centerX, entry.topY), color, 1.5f);
+                         ImVec2(centerX, bodyCenterY), color, 1.2f);
         }
 
-        // Distância
+        // Distancia embaixo do box
         if (drawDistance) {
             char distText[16];
             snprintf(distText, sizeof(distText), "%.0fm", entry.distance);
-            draw->AddText(ImVec2(centerX - 15, entry.bottomY + 2), color, distText);
+            draw->AddText(ImVec2(centerX - 12, bot + padY + 2), color, distText);
         }
     }
 
@@ -285,50 +293,57 @@ static void readHookLog() {
 // Draw Menu
 // ============================================================
 void DrawMenu() {
-    const ImVec2 windowSize = ImVec2(700, 600);
+    ImVec4 green = ImVec4(0.00f, 0.90f, 0.46f, 1.00f);
+    ImVec4 greenDim = ImVec4(0.00f, 0.55f, 0.28f, 1.00f);
+    ImVec4 textDim = ImVec4(0.55f, 0.55f, 0.55f, 1.00f);
+    ImVec4 red = ImVec4(1.00f, 0.32f, 0.32f, 1.00f);
+
+    const ImVec2 windowSize = ImVec2(700, 520);
     ImGui::SetNextWindowSize(windowSize, ImGuiCond_Once);
-    ImGui::Begin("OVERLAY MENU", nullptr, ImGuiWindowFlags_NoBringToFrontOnFocus);
+    ImGui::Begin("JAWMODS", nullptr,
+        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollbar);
 
-    // ── Status ──
-    if (shmConnected.load() && sharedData) {
-        uint32_t magic = sharedData->magic;
-        int count = sharedData->playerCount;
-        uint32_t seq = sharedData->writeSeq.load(std::memory_order_relaxed);
-        int dbg = sharedData->debugLastCall;
-        int espOn = sharedData->espEnabled;
-
-        if (magic == 0xDEADF00D) {
-            ImGui::TextColored(ImVec4(0, 1, 0, 1), "[HOOK] Conectado | Players: %d | Seq: %u",
-                              count, seq);
-        } else {
-            ImGui::TextColored(ImVec4(1, 1, 0, 1), "[SHM] Conectado (magic=0x%08X, hook nao escreveu)",
-                              magic);
-        }
-        ImGui::TextColored(ImVec4(0.5f, 0.5f, 1, 1), "Debug: %d | espEnabled: %d | ESP UI: %s",
-                          dbg, espOn, esp ? "ON" : "OFF");
+    // ── Status indicator (compact) ──
+    bool hooked = shmConnected.load() && sharedData && sharedData->magic == 0xDEADF00D;
+    if (hooked) {
+        ImGui::TextColored(green, "Connected");
+        ImGui::SameLine();
+        ImGui::TextColored(textDim, "| %d targets", sharedData->playerCount);
     } else {
-        ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "[SHM] Aguardando conexao...");
-        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1), "%s", shmStatus);
+        ImGui::TextColored(red, "Waiting for hook...");
     }
 
-    // ── Hook Log (diagnostico do processo do jogo) ──
-    readHookLog();
-    ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1), "Hook Log:");
-    ImGui::TextWrapped("%s", hookLogBuf);
-
+    ImGui::Spacing();
     ImGui::Separator();
+    ImGui::Spacing();
 
-    // ── ESP ──
-    ImGui::SeparatorText("ESP");
-    ImGui::Checkbox("Ativar ESP", &esp);
-    ImGui::Checkbox("Box", &drawEnemyBox);
-    ImGui::Checkbox("Snap Line", &drawSnapLine);
-    ImGui::Checkbox("Distancia", &drawDistance);
+    // ── ESP Toggle (big) ──
+    ImGui::PushStyleColor(ImGuiCol_CheckMark, green);
+    ImGui::Checkbox("  ESP", &esp);
+    ImGui::PopStyleColor();
 
     if (esp) {
-        ImGui::ColorEdit4("Cor", (float*)&espLineColor, ImGuiColorEditFlags_NoInputs);
-        ImGui::SliderFloat("Distancia Max", &espMaxDistance, 10.0f, 999.0f, "%.0f");
-        ImGui::SliderFloat("Linha X", &linePositionX, 0.0f, 1.0f, "%.2f");
+        ImGui::Spacing();
+
+        // ── Visuals ──
+        ImGui::TextColored(textDim, "VISUALS");
+        ImGui::Spacing();
+        ImGui::Checkbox("  Box", &drawEnemyBox);
+        ImGui::Checkbox("  Snapline", &drawSnapLine);
+        ImGui::Checkbox("  Distance", &drawDistance);
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // ── Settings ──
+        ImGui::TextColored(textDim, "SETTINGS");
+        ImGui::Spacing();
+        ImGui::ColorEdit4("Color", (float*)&espLineColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
+        ImGui::SameLine();
+        ImGui::Text("ESP Color");
+        ImGui::SliderFloat("Max Distance", &espMaxDistance, 10.0f, 999.0f, "%.0fm");
+        ImGui::SliderFloat("Line Origin", &linePositionX, 0.0f, 1.0f, "%.2f");
     }
 
     ImGui::End();
