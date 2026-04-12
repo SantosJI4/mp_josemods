@@ -29,6 +29,7 @@
 #include <mutex>
 #include <atomic>
 #include <unistd.h>
+#include <cerrno>
 #include <GLES3/gl3.h>
 #include <EGL/egl.h>
 
@@ -65,53 +66,87 @@ static uint32_t lastWriteSeq = 0;
 // ============================================================
 static std::atomic<bool> readerRunning{false};
 static pthread_t readerThread = 0;
+static char shmStatus[256] = "Iniciando...";
 
 void* shmReaderLoop(void*) {
+    int attempt = 0;
+
     while (readerRunning.load()) {
-        // Tentar abrir o arquivo compartilhado
-        int fd = shm_open_file();
-        if (fd >= 0) {
-            SharedESPData* data = shm_map(fd);
-            if (data && data->magic == 0xDEADF00D) {
-                shmFd = fd;
-                sharedData = data;
-                shmConnected.store(true);
-                break;
+        attempt++;
+
+        // Tentar abrir PATH_1
+        int fd = open(SHM_PATH_1, O_RDWR);
+        if (fd < 0) {
+            // Tentar PATH_2
+            fd = open(SHM_PATH_2, O_RDWR);
+            if (fd < 0) {
+                snprintf(shmStatus, sizeof(shmStatus),
+                    "Tentativa %d: nao consegue abrir arquivos shm (errno=%d: %s)",
+                    attempt, errno, strerror(errno));
+                MLOGI("%s", shmStatus);
+                sleep(1);
+                continue;
+            } else {
+                MLOGI("Tentativa %d: aberto %s (fd=%d)", attempt, SHM_PATH_2, fd);
             }
-            if (data) shm_unmap(data);
-            close(fd);
+        } else {
+            MLOGI("Tentativa %d: aberto %s (fd=%d)", attempt, SHM_PATH_1, fd);
         }
-        sleep(1); // Retry a cada segundo
+
+        // Verificar tamanho
+        off_t sz = lseek(fd, 0, SEEK_END);
+        lseek(fd, 0, SEEK_SET);
+        MLOGI("Tentativa %d: tamanho=%ld", attempt, (long)sz);
+
+        if (sz < (off_t)SHARED_MEM_SIZE) {
+            snprintf(shmStatus, sizeof(shmStatus),
+                "Tentativa %d: arquivo pequeno (%ld < %d)",
+                attempt, (long)sz, SHARED_MEM_SIZE);
+            MLOGI("%s", shmStatus);
+            close(fd);
+            sleep(1);
+            continue;
+        }
+
+        // Mapear
+        SharedESPData* data = shm_map(fd);
+        if (!data) {
+            snprintf(shmStatus, sizeof(shmStatus),
+                "Tentativa %d: mmap falhou (errno=%d: %s)",
+                attempt, errno, strerror(errno));
+            MLOGI("%s", shmStatus);
+            close(fd);
+            sleep(1);
+            continue;
+        }
+
+        // Log magic value
+        MLOGI("Tentativa %d: mmap OK, magic=0x%08X (esperado 0xDEADF00D)", attempt, data->magic);
+
+        // FORÇAR CONEXÃO: conecta se o arquivo existe e é mapeável
+        // Não espera magic — o hook pode não ter escrito ainda
+        shmFd = fd;
+        sharedData = data;
+        shmConnected.store(true);
+        snprintf(shmStatus, sizeof(shmStatus),
+            "Conectado! magic=0x%08X", data->magic);
+        MLOGI("SharedMemory CONECTADO (forçado). magic=0x%08X", data->magic);
+        break;
     }
 
-    // Mantém a thread viva para reconexão se necessário
+    // Manter thread viva para monitoramento
     while (readerRunning.load()) {
-        if (sharedData && sharedData->magic != 0xDEADF00D) {
-            shmConnected.store(false);
-            // Hook saiu, tentar reconectar
-            shm_unmap(sharedData);
-            sharedData = nullptr;
-            close(shmFd);
-            shmFd = -1;
-
-            // Retry
-            while (readerRunning.load()) {
-                int fd = shm_open_file();
-                if (fd >= 0) {
-                    SharedESPData* data = shm_map(fd);
-                    if (data && data->magic == 0xDEADF00D) {
-                        shmFd = fd;
-                        sharedData = data;
-                        shmConnected.store(true);
-                        break;
-                    }
-                    if (data) shm_unmap(data);
-                    close(fd);
-                }
-                sleep(1);
-            }
+        if (sharedData) {
+            // Atualizar status periodicamente
+            snprintf(shmStatus, sizeof(shmStatus),
+                "magic=0x%08X seq=%u players=%d esp=%d dbg=%d",
+                sharedData->magic,
+                sharedData->writeSeq.load(std::memory_order_relaxed),
+                sharedData->playerCount,
+                sharedData->espEnabled,
+                sharedData->debugLastCall);
         }
-        usleep(500000); // Check a cada 500ms
+        usleep(500000);
     }
 
     // Cleanup
@@ -133,10 +168,14 @@ void* shmReaderLoop(void*) {
 void DrawESP(int screenW, int screenH) {
     if (!sharedData || !shmConnected.load()) return;
 
-    // Controle: overlay diz ao hook se deve processar
+    // SEMPRE setar espEnabled (mesmo se ESP desligado no UI)
+    // Isso comunica ao hook no jogo se deve processar players
     sharedData->espEnabled = esp ? 1 : 0;
 
     if (!esp) return;
+
+    // Verificar se hook escreveu dados válidos
+    if (sharedData->magic != 0xDEADF00D) return;
 
     // Ler dados do shared memory (escrito pelo hook no jogo)
     uint32_t seq = sharedData->writeSeq.load(std::memory_order_acquire);
@@ -198,18 +237,26 @@ void DrawMenu() {
     ImGui::Begin("OVERLAY MENU", nullptr, ImGuiWindowFlags_NoBringToFrontOnFocus);
 
     // ── Status ──
-    if (shmConnected.load()) {
-        int count = sharedData ? sharedData->playerCount : 0;
-        uint32_t seq = sharedData ? sharedData->writeSeq.load(std::memory_order_relaxed) : 0;
-        int dbg = sharedData ? sharedData->debugLastCall : -1;
-        ImGui::TextColored(ImVec4(0, 1, 0, 1), "[HOOK] Conectado | Players: %d | Seq: %u",
-                          count, seq);
-        ImGui::TextColored(ImVec4(0.5f, 0.5f, 1, 1), "Debug: %d | ESP: %s",
-                          dbg, esp ? "ON" : "OFF");
+    if (shmConnected.load() && sharedData) {
+        uint32_t magic = sharedData->magic;
+        int count = sharedData->playerCount;
+        uint32_t seq = sharedData->writeSeq.load(std::memory_order_relaxed);
+        int dbg = sharedData->debugLastCall;
+        int espOn = sharedData->espEnabled;
+
+        if (magic == 0xDEADF00D) {
+            ImGui::TextColored(ImVec4(0, 1, 0, 1), "[HOOK] Conectado | Players: %d | Seq: %u",
+                              count, seq);
+        } else {
+            ImGui::TextColored(ImVec4(1, 1, 0, 1), "[SHM] Conectado (magic=0x%08X, hook nao escreveu)",
+                              magic);
+        }
+        ImGui::TextColored(ImVec4(0.5f, 0.5f, 1, 1), "Debug: %d | espEnabled: %d | ESP UI: %s",
+                          dbg, espOn, esp ? "ON" : "OFF");
+        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1), "SHM: %s", shmStatus);
     } else {
-        ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "[HOOK] Aguardando hook no jogo...");
-        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1),
-            "Execute o script root para injetar o hook");
+        ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "[HOOK] Aguardando conexao SHM...");
+        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1), "%s", shmStatus);
     }
 
     ImGui::Separator();
