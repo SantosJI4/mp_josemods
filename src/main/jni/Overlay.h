@@ -50,6 +50,11 @@ public:
         }
 
         setupImGui();
+
+        // CRITICO: Liberar o contexto EGL deste thread (Java UI)
+        // O render thread vai pegar o contexto com eglMakeCurrent
+        eglMakeCurrent(eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+
         running.store(true);
         pthread_create(&renderThread, nullptr, renderThreadEntry, this);
         OLOGI("init: SUCCESS, render thread started");
