@@ -113,29 +113,32 @@ static void hookLogWrite(const char* fmt, ...) {
 // ============================================================
 // Function Pointers — resolvidos em runtime pelo il2cpp
 // ============================================================
-static void*   (*fn_Camera_get_main)() = nullptr;
-static void*   (*fn_get_transform)(void* component) = nullptr;
-static Vector3 (*fn_get_position)(void* transform) = nullptr;
-static int     (*fn_Screen_get_width)(void*) = nullptr;
-static int     (*fn_Screen_get_height)(void*) = nullptr;
+// Il2Cpp ABI: TODOS os metodos recebem MethodInfo* como ultimo param
+// Estaticos: fn(MethodInfo*), Instancia: fn(self, MethodInfo*)
+// Se a assinatura nao bater, ARM64 passa lixo nos registros → SIGSEGV
+// ============================================================
+static void*   (*fn_Camera_get_main)(void* method) = nullptr;
+static void*   (*fn_get_transform)(void* component, void* method) = nullptr;
+static Vector3 (*fn_get_position)(void* transform, void* method) = nullptr;
+static int     (*fn_Screen_get_width)(void* method) = nullptr;
+static int     (*fn_Screen_get_height)(void* method) = nullptr;
 
 // Para VP Matrix (Camera)
 struct Matrix4x4 { float m[16]; };
 // ARM64 ABI: structs > 16 bytes (Matrix4x4 = 64 bytes) são retornadas via
 // hidden register x8. Declarar como RETURN TYPE faz o compilador setar x8.
-// ERRADO: void(*)(Matrix4x4*, void*) — coloca o ptr em x0 onde il2cpp espera 'this'!
 static Matrix4x4 (*fn_get_worldToCameraMatrix)(void* camera, void* method) = nullptr;
 static Matrix4x4 (*fn_get_projectionMatrix)(void* camera, void* method) = nullptr;
 
-// Fallback: WorldToScreenPoint direto (pode travar se chamado muitas vezes)
-static Vector3 (*fn_WorldToScreenPoint)(void* camera, Vector3 pos, int eye) = nullptr;
+// Fallback: WorldToScreenPoint(self, Vector3 pos, int eye, MethodInfo*)
+static Vector3 (*fn_WorldToScreenPoint)(void* camera, Vector3 pos, int eye, void* method) = nullptr;
 static bool useManualW2S = true; // true = VP matrix, false = fallback direto
 
 // il2cpp_class_get_method_from_name — resolvido direto do libil2cpp.so
 static void* (*resolve_method)(void* klass, const char* name, int argsCount) = nullptr;
 
-// Original OnUpdate
-static void (*orig_OnUpdate)(void* self) = nullptr;
+// Original OnUpdate — il2cpp ABI: TODOS os metodos recebem (self, methodInfo)
+static void (*orig_OnUpdate)(void* self, void* methodInfo) = nullptr;
 
 // Shared memory
 static SharedESPData* sharedData = nullptr;
@@ -233,10 +236,10 @@ static Vector3 ManualWorldToScreen(Vector3 world, const Matrix4x4& vp, int sw, i
 // HOOK DO OnUpdate — Chamado pelo jogo para CADA player
 // ============================================================
 
-static void Hook_OnUpdate(void* self) {
+static void Hook_OnUpdate(void* self, void* methodInfo) {
     // Chamar original primeiro (mantém o jogo funcionando)
     if (orig_OnUpdate) {
-        orig_OnUpdate(self);
+        orig_OnUpdate(self, methodInfo);
     }
 
     // Se shared memory não está pronto ou hook desativado, retorna
@@ -257,8 +260,8 @@ static void Hook_OnUpdate(void* self) {
         g_frameId++;
         sharedData->debugLastCall = 10;
 
-        // Camera.get_main — UMA VEZ por frame
-        g_cachedCamera = fn_Camera_get_main ? fn_Camera_get_main() : nullptr;
+        // Camera.get_main — UMA VEZ por frame (static: só MethodInfo*)
+        g_cachedCamera = fn_Camera_get_main ? fn_Camera_get_main(nullptr) : nullptr;
         sharedData->debugLastCall = 11;
 
         // VP Matrix — UMA VEZ por frame (se disponível)
@@ -291,12 +294,12 @@ static void Hook_OnUpdate(void* self) {
 
     // ── Pegar transform do player ──
     sharedData->debugLastCall = 20 + idx;
-    void* transform = fn_get_transform ? fn_get_transform(self) : nullptr;
+    void* transform = fn_get_transform ? fn_get_transform(self, nullptr) : nullptr;
     if (!transform) return;
 
     // ── Pegar posição 3D do player ──
     sharedData->debugLastCall = 40 + idx;
-    Vector3 worldPos = fn_get_position(transform);
+    Vector3 worldPos = fn_get_position(transform, nullptr);
 
     // Sanity check
     if (std::isnan(worldPos.x) || std::isnan(worldPos.y) || std::isnan(worldPos.z)) return;
@@ -315,8 +318,8 @@ static void Hook_OnUpdate(void* self) {
         // ── Fallback: WorldToScreenPoint direto ──
         // Chamado POR PLAYER — mais lento, mas funciona se VP matrix não resolve
         sharedData->debugLastCall = 80 + idx;
-        screenBottom = fn_WorldToScreenPoint(camera, bottomWorld, 2); // MonoOrStereoscopicEye.Mono=2
-        screenTop = fn_WorldToScreenPoint(camera, topWorld, 2);
+        screenBottom = fn_WorldToScreenPoint(camera, bottomWorld, 2, nullptr);
+        screenTop = fn_WorldToScreenPoint(camera, topWorld, 2, nullptr);
         // Unity Y invertido
         screenBottom.y = (float)screenH - screenBottom.y;
         screenTop.y = (float)screenH - screenTop.y;
@@ -362,21 +365,7 @@ static void* hack_thread(void*) {
     Il2CppAttach("libil2cpp.so");
     sleep(3); // Esperar assemblies carregarem
 
-    // ── Forçar re-leitura do /proc/self/cmdline ──
-    // No constructor, cmdline era 'app_process64' (zygote). Agora deve ser o package name.
-    resetGameDataDir();
-    {
-        const char* gdir = getGameDataDir();
-        hookLogWrite("Game data dir (pos-attach): %s", gdir[0] ? gdir : "N/A - tentando hardcoded");
-        if (!gdir[0]) {
-            // Fallback: se cmdline ainda nao mudou, usar package hardcoded
-            snprintf(g_gameDataDir, sizeof(g_gameDataDir), "/data/data/com.fungames.sniper3d");
-            g_gameDirInit = true;
-            g_shmGamePath[0] = '\0';
-            g_logGamePath[0] = '\0';
-            hookLogWrite("Game data dir (hardcoded): %s", g_gameDataDir);
-        }
-    }
+    hookLogWrite("Game data dir: %s", getGameDataDir());
 
     // ── Resolver il2cpp_class_get_method_from_name DIRETO do libil2cpp.so ──
     // Precisamos do MethodInfo* para VMT hook (Il2CppGetMethodOffset retorna *method, não MethodInfo*)
@@ -394,26 +383,26 @@ static void* hack_thread(void*) {
     }
 
     // ── Resolver funções pelo NOME (usa seus offsets do dump automaticamente) ──
-    fn_Camera_get_main = (void*(*)()) Il2CppGetMethodOffset(
+    fn_Camera_get_main = (void*(*)(void*)) Il2CppGetMethodOffset(
         OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_CAMERA),
         OBFUSCATE(CLS_CAMERA), OBFUSCATE("get_main"), 0);
 
-    // VP Matrix: hidden return pointer para Matrix4x4 (64 bytes > 16 → ARM64 usa x8)
-    fn_get_worldToCameraMatrix = (void(*)(Matrix4x4*, void*)) Il2CppGetMethodOffset(
+    // VP Matrix: ARM64 ABI — Matrix4x4 retornada via x8 (return type, nao param)
+    fn_get_worldToCameraMatrix = (Matrix4x4(*)(void*, void*)) Il2CppGetMethodOffset(
         OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_CAMERA),
         OBFUSCATE(CLS_CAMERA), OBFUSCATE("get_worldToCameraMatrix"), 0);
 
-    fn_get_projectionMatrix = (void(*)(Matrix4x4*, void*)) Il2CppGetMethodOffset(
+    fn_get_projectionMatrix = (Matrix4x4(*)(void*, void*)) Il2CppGetMethodOffset(
         OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_CAMERA),
         OBFUSCATE(CLS_CAMERA), OBFUSCATE("get_projectionMatrix"), 0);
 
     // Fallback: WorldToScreenPoint(Vector3 pos, MonoOrStereoscopicEye eye) — 2 args
-    fn_WorldToScreenPoint = (Vector3(*)(void*, Vector3, int)) Il2CppGetMethodOffset(
+    fn_WorldToScreenPoint = (Vector3(*)(void*, Vector3, int, void*)) Il2CppGetMethodOffset(
         OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_CAMERA),
         OBFUSCATE(CLS_CAMERA), OBFUSCATE("WorldToScreenPoint"), 2);
     // Tentar versão com 1 arg se 2 args falhou
     if (!fn_WorldToScreenPoint) {
-        fn_WorldToScreenPoint = (Vector3(*)(void*, Vector3, int)) Il2CppGetMethodOffset(
+        fn_WorldToScreenPoint = (Vector3(*)(void*, Vector3, int, void*)) Il2CppGetMethodOffset(
             OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_CAMERA),
             OBFUSCATE(CLS_CAMERA), OBFUSCATE("WorldToScreenPoint"), 1);
     }
@@ -429,11 +418,11 @@ static void* hack_thread(void*) {
         LOGE("Nenhum metodo W2S disponivel!");
     }
 
-    fn_get_transform = (void*(*)(void*)) Il2CppGetMethodOffset(
+    fn_get_transform = (void*(*)(void*, void*)) Il2CppGetMethodOffset(
         OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_COMPONENT),
         OBFUSCATE(CLS_COMPONENT), OBFUSCATE("get_transform"), 0);
 
-    fn_get_position = (Vector3(*)(void*)) Il2CppGetMethodOffset(
+    fn_get_position = (Vector3(*)(void*, void*)) Il2CppGetMethodOffset(
         OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_TRANSFORM),
         OBFUSCATE(CLS_TRANSFORM), OBFUSCATE("get_position"), 0);
 

@@ -88,47 +88,19 @@ static void shm_unmap(SharedESPData* data) {
 
 static const char* shmActivePath = nullptr;
 
-// Detecta o data dir do processo atual via /proc/self/cmdline
-// Retorna path como "/data/data/com.fungames.sniper3d"
-static char g_gameDataDir[256] = {0};
-static bool g_gameDirInit = false;
+// Game data dir — hardcode o package pois /proc/self/cmdline nao e confiavel
+// (no constructor ainda e 'app_process64' do zygote)
+#ifndef HOOK_GAME_PACKAGE
+#define HOOK_GAME_PACKAGE "com.fungames.sniper3d"
+#endif
 
-// Constroi path: <gameDataDir>/<filename>
+static char g_gameDataDir[256] = {0};
 static char g_shmGamePath[512] = {0};
 static char g_logGamePath[512] = {0};
 
-// Reseta cache para forçar re-leitura do /proc/self/cmdline
-static void resetGameDataDir() {
-    g_gameDirInit = false;
-    g_gameDataDir[0] = '\0';
-    g_shmGamePath[0] = '\0';
-    g_logGamePath[0] = '\0';
-}
-
 static const char* getGameDataDir() {
-    if (g_gameDirInit && g_gameDataDir[0]) return g_gameDataDir;
-    
-    char cmdline[256] = {0};
-    int fd = open("/proc/self/cmdline", O_RDONLY);
-    if (fd >= 0) {
-        int rd = read(fd, cmdline, sizeof(cmdline) - 1);
-        close(fd);
-        if (rd > 0) {
-            cmdline[rd] = '\0';
-            for (int i = 0; i < rd; i++) {
-                if (cmdline[i] == '\0' || cmdline[i] == '\n' || cmdline[i] == ' ') {
-                    cmdline[i] = '\0';
-                    break;
-                }
-            }
-            // So cacheia se parece um package name valido (contem '.')
-            // No constructor, /proc/self/cmdline ainda e 'app_process64' (zygote)
-            if (strlen(cmdline) > 0 && strchr(cmdline, '.') != nullptr) {
-                snprintf(g_gameDataDir, sizeof(g_gameDataDir), "/data/data/%s", cmdline);
-                g_gameDirInit = true;
-            }
-        }
-    }
+    if (g_gameDataDir[0]) return g_gameDataDir;
+    snprintf(g_gameDataDir, sizeof(g_gameDataDir), "/data/data/%s", HOOK_GAME_PACKAGE);
     return g_gameDataDir;
 }
 
