@@ -305,8 +305,8 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     // Sanity check
     if (std::isnan(worldPos.x) || std::isnan(worldPos.y) || std::isnan(worldPos.z)) return;
 
-    Vector3 bottomWorld(worldPos.x, worldPos.y, worldPos.z);
-    Vector3 topWorld(worldPos.x, worldPos.y + 2.0f, worldPos.z);
+    Vector3 bottomWorld(worldPos.x, worldPos.y - 0.1f, worldPos.z);
+    Vector3 topWorld(worldPos.x, worldPos.y + 1.8f, worldPos.z);
 
     Vector3 screenBottom, screenTop;
 

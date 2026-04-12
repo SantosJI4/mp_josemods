@@ -208,13 +208,16 @@ void DrawESP(int screenW, int screenH) {
         if (entry.distance > espMaxDistance) continue;
 
         float boxHeight = fabsf(entry.bottomY - entry.topY);
-        if (boxHeight < 5.0f) continue; // Muito pequeno
-        float boxWidth = boxHeight * 0.6f;
+        if (boxHeight < 3.0f) continue; // Muito pequeno
+        float boxWidth = boxHeight * 0.5f; // Proporcao mais justa
 
-        float centerX = (entry.topX + entry.bottomX) * 0.5f;
+        // Usar bottomX como referencia primaria (pes sao mais estaveis)
+        float centerX = entry.bottomX;
 
-        ImVec2 boxMin = ImVec2(centerX - (boxWidth * 0.5f), entry.topY);
-        ImVec2 boxMax = ImVec2(centerX + (boxWidth * 0.5f), entry.bottomY);
+        // Padding vertical para cobrir melhor o modelo
+        float padY = boxHeight * 0.05f;
+        ImVec2 boxMin = ImVec2(centerX - (boxWidth * 0.5f), entry.topY - padY);
+        ImVec2 boxMax = ImVec2(centerX + (boxWidth * 0.5f), entry.bottomY + padY);
 
         // Box
         if (drawEnemyBox) {
