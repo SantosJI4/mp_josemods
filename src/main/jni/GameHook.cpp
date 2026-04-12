@@ -449,7 +449,7 @@ static void* hack_thread(void*) {
     // IMPORTANTE: usar /data/local/tmp/ como PRIMARIO
     // O overlay tambem tenta /data/local/tmp/ PRIMEIRO
     // O game dir falha quando /proc/self/cmdline retorna zygote
-    hookLogWrite(\"Tentando shm [%s]... uid=%d gid=%d\", HOOK_BUILD_VER, getuid(), getgid());
+    hookLogWrite("Tentando shm [%s]... uid=%d gid=%d", HOOK_BUILD_VER, getuid(), getgid());
     hookLogWrite("Paths: %s, /data/data/%s/%s, %s", SHM_PATH_1, HOOK_GAME_PACKAGE, SHM_FILENAME, SHM_PATH_2);
 
     shmFd = shm_create_file();
