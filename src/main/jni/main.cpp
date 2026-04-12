@@ -62,8 +62,12 @@ static int shmFd = -1;
 static std::atomic<bool> shmConnected{false};
 static uint32_t lastWriteSeq = 0;
 
+// Game package — para encontrar SHM no data dir do jogo
+#define GAME_PACKAGE "com.fungames.sniper3d"
+
 // ============================================================
 // SharedMemory Reader — Conecta ao arquivo criado pelo hook
+// Tenta: 1) /data/data/<game>/.esp_shm, 2) /data/local/tmp/, 3) /sdcard/
 // ============================================================
 static std::atomic<bool> readerRunning{false};
 static pthread_t readerThread = 0;
@@ -72,26 +76,32 @@ static char shmStatus[256] = "Iniciando...";
 void* shmReaderLoop(void*) {
     int attempt = 0;
 
+    // Paths para tentar (game dir primeiro)
+    char gameShmPath[512];
+    snprintf(gameShmPath, sizeof(gameShmPath), "/data/data/%s/%s", GAME_PACKAGE, SHM_FILENAME);
+    const char* paths[] = { gameShmPath, SHM_PATH_1, SHM_PATH_2 };
+    const int numPaths = 3;
+
     while (readerRunning.load()) {
         attempt++;
 
-        // Tentar abrir PATH_1
-        int fd = open(SHM_PATH_1, O_RDWR);
-        if (fd < 0) {
-            // Tentar PATH_2
-            fd = open(SHM_PATH_2, O_RDWR);
-            if (fd < 0) {
-                snprintf(shmStatus, sizeof(shmStatus),
-                    "Tentativa %d: nao consegue abrir arquivos shm (errno=%d: %s)",
-                    attempt, errno, strerror(errno));
-                MLOGI("%s", shmStatus);
-                sleep(1);
-                continue;
-            } else {
-                MLOGI("Tentativa %d: aberto %s (fd=%d)", attempt, SHM_PATH_2, fd);
+        int fd = -1;
+        const char* usedPath = nullptr;
+        for (int p = 0; p < numPaths; p++) {
+            fd = open(paths[p], O_RDWR);
+            if (fd >= 0) {
+                usedPath = paths[p];
+                MLOGI("Tentativa %d: aberto %s (fd=%d)", attempt, usedPath, fd);
+                break;
             }
-        } else {
-            MLOGI("Tentativa %d: aberto %s (fd=%d)", attempt, SHM_PATH_1, fd);
+        }
+        if (fd < 0) {
+            snprintf(shmStatus, sizeof(shmStatus),
+                "Tentativa %d: nenhum shm acessivel (errno=%d: %s)",
+                attempt, errno, strerror(errno));
+            MLOGI("%s", shmStatus);
+            sleep(1);
+            continue;
         }
 
         // Verificar tamanho
@@ -231,6 +241,7 @@ void DrawESP(int screenW, int screenH) {
 
 // ============================================================
 // Hook Log Reader — lê o arquivo de log do hook para diagnostico
+// Tenta: game dir, /data/local/tmp/, /sdcard/
 // ============================================================
 #define HOOK_LOG_PATH_1 "/data/local/tmp/.hook_log"
 #define HOOK_LOG_PATH_2 "/sdcard/.hook_log"
@@ -243,8 +254,10 @@ static void readHookLog() {
     if (now - hookLogLastRead < 2) return;
     hookLogLastRead = now;
 
-    const char* paths[] = { HOOK_LOG_PATH_1, HOOK_LOG_PATH_2 };
-    for (int i = 0; i < 2; i++) {
+    char gameLogPath[512];
+    snprintf(gameLogPath, sizeof(gameLogPath), "/data/data/%s/%s", GAME_PACKAGE, HOOKLOG_FILENAME);
+    const char* paths[] = { gameLogPath, HOOK_LOG_PATH_1, HOOK_LOG_PATH_2 };
+    for (int i = 0; i < 3; i++) {
         int fd = open(paths[i], O_RDONLY);
         if (fd >= 0) {
             off_t sz = lseek(fd, 0, SEEK_END);

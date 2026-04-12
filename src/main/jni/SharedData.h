@@ -80,23 +80,86 @@ static void shm_unmap(SharedESPData* data) {
 // ============================================================
 
 // Paths para shared memory (o hook tenta em ordem)
+// PATH_1 e PATH_2 sao fallbacks — o PRIMARY e o data dir do jogo
 #define SHM_PATH_1 "/data/local/tmp/.esp_shm"
 #define SHM_PATH_2 "/sdcard/.esp_shm"
+#define SHM_FILENAME ".esp_shm"
+#define HOOKLOG_FILENAME ".hook_log"
 
 static const char* shmActivePath = nullptr;
 
-// Cria/abre shared memory (hook no jogo — roda como UID do app, NÃO root)
-// O arquivo deve ser pré-criado com chmod 666 pelo app root
+// Detecta o data dir do processo atual via /proc/self/cmdline
+// Retorna path como "/data/data/com.fungames.sniper3d"
+static char g_gameDataDir[256] = {0};
+static bool g_gameDirInit = false;
+
+static const char* getGameDataDir() {
+    if (g_gameDirInit) return g_gameDataDir;
+    g_gameDirInit = true;
+    
+    char cmdline[256] = {0};
+    int fd = open("/proc/self/cmdline", O_RDONLY);
+    if (fd >= 0) {
+        int rd = read(fd, cmdline, sizeof(cmdline) - 1);
+        close(fd);
+        if (rd > 0) {
+            cmdline[rd] = '\0';
+            // cmdline contem o package name (null-terminated)
+            // Remover qualquer caracter nao-alfanumerico do final
+            for (int i = 0; i < rd; i++) {
+                if (cmdline[i] == '\0' || cmdline[i] == '\n' || cmdline[i] == ' ') {
+                    cmdline[i] = '\0';
+                    break;
+                }
+            }
+            if (strlen(cmdline) > 0) {
+                snprintf(g_gameDataDir, sizeof(g_gameDataDir), "/data/data/%s", cmdline);
+            }
+        }
+    }
+    return g_gameDataDir;
+}
+
+// Constroi path: <gameDataDir>/<filename>
+static char g_shmGamePath[512] = {0};
+static char g_logGamePath[512] = {0};
+
+static const char* getGameShmPath() {
+    if (g_shmGamePath[0]) return g_shmGamePath;
+    const char* dir = getGameDataDir();
+    if (dir[0]) snprintf(g_shmGamePath, sizeof(g_shmGamePath), "%s/%s", dir, SHM_FILENAME);
+    return g_shmGamePath;
+}
+
+static const char* getGameLogPath() {
+    if (g_logGamePath[0]) return g_logGamePath;
+    const char* dir = getGameDataDir();
+    if (dir[0]) snprintf(g_logGamePath, sizeof(g_logGamePath), "%s/%s", dir, HOOKLOG_FILENAME);
+    return g_logGamePath;
+}
+
+// Cria/abre shared memory (hook no jogo — roda como UID do app)
+// Tenta: 1) data dir do jogo, 2) /data/local/tmp/, 3) /sdcard/
 static int shm_create_file() {
-    // Tentar abrir arquivo pré-criado pelo app (com permissões corretas)
+    // PRIMARIO: diretorio de dados do jogo (sempre acessivel pelo app)
+    const char* gamePath = getGameShmPath();
+    if (gamePath[0]) {
+        int fd = open(gamePath, O_RDWR);
+        if (fd < 0) fd = open(gamePath, O_CREAT | O_RDWR, 0666);
+        if (fd >= 0) {
+            ftruncate(fd, SHARED_MEM_SIZE);
+            shmActivePath = gamePath;
+            return fd;
+        }
+    }
+
+    // Fallback 1: pre-criado pelo app
     int fd = open(SHM_PATH_1, O_RDWR);
     if (fd >= 0) {
         ftruncate(fd, SHARED_MEM_SIZE);
         shmActivePath = SHM_PATH_1;
         return fd;
     }
-
-    // Fallback: tentar criar (pode falhar se sem permissão)
     fd = open(SHM_PATH_1, O_CREAT | O_RDWR, 0666);
     if (fd >= 0) {
         ftruncate(fd, SHARED_MEM_SIZE);
@@ -104,7 +167,7 @@ static int shm_create_file() {
         return fd;
     }
 
-    // Fallback 2: /sdcard/ (acessível por todos os apps)
+    // Fallback 2: /sdcard/
     fd = open(SHM_PATH_2, O_CREAT | O_RDWR, 0666);
     if (fd >= 0) {
         ftruncate(fd, SHARED_MEM_SIZE);
@@ -115,8 +178,22 @@ static int shm_create_file() {
     return -1;
 }
 
-static int shm_open_file() {
-    // Tentar na ordem, verificando tamanho minimo
+// Abre shared memory para leitura (overlay)
+// Tenta: 1) data dir do jogo, 2) /data/local/tmp/, 3) /sdcard/
+static int shm_open_file(const char* gamePackage) {
+    // Tentar data dir do jogo especifico
+    if (gamePackage && gamePackage[0]) {
+        char path[512];
+        snprintf(path, sizeof(path), "/data/data/%s/%s", gamePackage, SHM_FILENAME);
+        int fd = open(path, O_RDWR);
+        if (fd >= 0) {
+            off_t sz = lseek(fd, 0, SEEK_END);
+            lseek(fd, 0, SEEK_SET);
+            if (sz >= (off_t)SHARED_MEM_SIZE) return fd;
+            close(fd);
+        }
+    }
+    // Fallback paths
     int fd = open(SHM_PATH_1, O_RDWR);
     if (fd >= 0) {
         off_t sz = lseek(fd, 0, SEEK_END);

@@ -49,7 +49,7 @@
 
 // ============================================================
 // Hook Log File — escreve diagnostico que o overlay pode ler
-// Locations: /data/local/tmp/.hook_log e /sdcard/.hook_log
+// Usa diretorio de dados do jogo como primario (sempre acessivel)
 // ============================================================
 #define HOOK_LOG_PATH_1 "/data/local/tmp/.hook_log"
 #define HOOK_LOG_PATH_2 "/sdcard/.hook_log"
@@ -61,7 +61,18 @@ static void hookLogWrite(const char* fmt, ...) {
     vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
 
-    // Tentar ambos paths
+    // PRIMARIO: diretorio do jogo (sempre acessivel pelo processo)
+    const char* gamePath = getGameLogPath();
+    if (gamePath && gamePath[0]) {
+        int fd = open(gamePath, O_CREAT | O_WRONLY | O_APPEND, 0666);
+        if (fd >= 0) {
+            write(fd, buf, strlen(buf));
+            write(fd, "\n", 1);
+            close(fd);
+        }
+    }
+
+    // Fallback: tentar paths classicos
     const char* paths[] = { HOOK_LOG_PATH_1, HOOK_LOG_PATH_2 };
     for (int i = 0; i < 2; i++) {
         int fd = open(paths[i], O_CREAT | O_WRONLY | O_APPEND, 0666);
@@ -427,20 +438,22 @@ static void* hack_thread(void*) {
          fn_WorldToScreenPoint, fn_get_transform, fn_get_position);
 
     // ── Criar shared memory ──
+    const char* gameDir = getGameDataDir();
+    const char* gameShmPath = getGameShmPath();
+    hookLogWrite("Game data dir: %s", gameDir[0] ? gameDir : "N/A");
     hookLogWrite("Tentando shm... uid=%d gid=%d", getuid(), getgid());
-    hookLogWrite("PATH_1=%s PATH_2=%s", SHM_PATH_1, SHM_PATH_2);
+    hookLogWrite("Game SHM path: %s", gameShmPath[0] ? gameShmPath : "N/A");
+    hookLogWrite("Fallback paths: %s, %s", SHM_PATH_1, SHM_PATH_2);
 
-    // Tentar abrir path1
-    int testFd1 = open(SHM_PATH_1, O_RDWR);
-    hookLogWrite("open(%s, O_RDWR) = %d (errno=%d: %s)", SHM_PATH_1, testFd1, errno, strerror(errno));
-    if (testFd1 >= 0) close(testFd1);
+    // Testar acesso ao dir do jogo
+    if (gameShmPath[0]) {
+        int testFd = open(gameShmPath, O_RDWR);
+        if (testFd < 0) testFd = open(gameShmPath, O_CREAT | O_RDWR, 0666);
+        hookLogWrite("open(gameDir) = %d (errno=%d: %s)", testFd, errno, strerror(errno));
+        if (testFd >= 0) close(testFd);
+    }
 
-    // Tentar abrir path2
-    int testFd2 = open(SHM_PATH_2, O_RDWR);
-    hookLogWrite("open(%s, O_RDWR) = %d (errno=%d: %s)", SHM_PATH_2, testFd2, errno, strerror(errno));
-    if (testFd2 >= 0) close(testFd2);
-
-    LOGI("Tentando criar shared memory... uid=%d", getuid());
+    LOGI("Tentando criar shared memory... uid=%d gameDir=%s", getuid(), gameDir);
     shmFd = shm_create_file();
     if (shmFd < 0) {
         LOGE("Falha ao criar shared memory: errno=%d (%s)", errno, strerror(errno));
