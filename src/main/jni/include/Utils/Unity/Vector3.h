@@ -3,6 +3,7 @@
 #define _USE_MATH_DEFINES
 #include <math.h>
 #include <string.h>
+#include <stdio.h>
 
 
 struct Vector3 {
@@ -80,7 +81,7 @@ struct Vector3 {
     static inline float Distance(Vector3 a, Vector3 b);
 
     static inline char ToChar(Vector3 a);
-    static inline std::string ToString(Vector3 a);
+    static inline const char* ToString(Vector3 a);
     /**
      * Returns the dot product of two vectors.
      * @param lhs: The left side of the multiplication.
@@ -575,11 +576,9 @@ char Vector3::ToChar(Vector3 a) {
     return buffer[24];
 }
 
-std::string Vector3::ToString(Vector3 a) {
-    std::string x = std::to_string(a.x);
-    std::string y = std::to_string(a.y);
-    std::string z = std::to_string(a.z);
-    std::string buf = "Vector3(" + x + ", " + y + ", " + z + ")";
+const char* Vector3::ToString(Vector3 a) {
+    static char buf[128];
+    snprintf(buf, sizeof(buf), "Vector3(%f, %f, %f)", a.x, a.y, a.z);
     return buf;
 }
 
