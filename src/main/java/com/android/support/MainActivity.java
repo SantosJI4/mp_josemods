@@ -162,10 +162,17 @@ public class MainActivity extends Activity {
             // 4. Pre-criar shared memory + hook log nos 3 locais possiveis
             // PRIMARIO: diretorio de dados do jogo (game pode SEMPRE escrever aqui)
             final String gameDir = "/data/data/" + GAME_PACKAGE;
+
+            // Tornar diretorio do jogo traversavel pelo overlay (o+x)
+            // Sem isso, nosso overlay (outro UID) nao entra em /data/data/game/
+            rootExec("chmod 711 " + gameDir);
+            rootExec("chmod 711 /data/user/0/" + GAME_PACKAGE + " 2>/dev/null");
+
             rootExec("dd if=/dev/zero of=" + gameDir + "/.esp_shm bs=4096 count=1 2>/dev/null");
             rootExec("chmod 666 " + gameDir + "/.esp_shm");
+            rootExec("chcon u:object_r:app_data_file:s0 " + gameDir + "/.esp_shm");
             rootExec("rm -f " + gameDir + "/.hook_log");
-            rootExec("touch " + gameDir + "/.hook_log; chmod 666 " + gameDir + "/.hook_log");
+            rootExec("touch " + gameDir + "/.hook_log; chmod 666 " + gameDir + "/.hook_log; chcon u:object_r:app_data_file:s0 " + gameDir + "/.hook_log");
 
             // Fallback: /data/local/tmp/ (pode nao ser acessivel pelo jogo)
             rootExec("rm -f /data/local/tmp/.esp_shm");
