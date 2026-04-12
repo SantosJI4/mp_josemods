@@ -39,6 +39,10 @@
 #include "Overlay.h"
 #include "SharedData.h"
 
+#include <android/log.h>
+#define MTAG "MeowESP"
+#define MLOGI(...) __android_log_print(ANDROID_LOG_INFO, MTAG, __VA_ARGS__)
+
 // ============================================================
 // ESP State
 // ============================================================
@@ -243,14 +247,18 @@ JNIEXPORT void JNICALL
 Java_com_android_support_OverlayService_nativeOnSurfaceCreated(
         JNIEnv* env, jclass, jobject surface, jint width, jint height) {
 
+    MLOGI("nativeOnSurfaceCreated: w=%d h=%d surface=%p", width, height, surface);
+
     Overlay& overlay = Overlay::get();
     overlay.onDraw = onOverlayDraw;
-    overlay.init(env, surface, width, height);
+    bool ok = overlay.init(env, surface, width, height);
+    MLOGI("nativeOnSurfaceCreated: init=%s", ok ? "OK" : "FAILED");
 
     // Inicia thread de leitura SharedMemory
     if (!readerRunning.load()) {
         readerRunning.store(true);
         pthread_create(&readerThread, nullptr, shmReaderLoop, nullptr);
+        MLOGI("shmReaderLoop started");
     }
 }
 

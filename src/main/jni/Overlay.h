@@ -9,6 +9,7 @@
 #endif
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
+#include <android/log.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <atomic>
@@ -19,6 +20,10 @@
 #include "imgui_impl_opengl3.h"
 #include "Roboto-Regular.h"
 
+#define OVERLAY_TAG "OverlayRender"
+#define OLOGI(...) __android_log_print(ANDROID_LOG_INFO, OVERLAY_TAG, __VA_ARGS__)
+#define OLOGE(...) __android_log_print(ANDROID_LOG_ERROR, OVERLAY_TAG, __VA_ARGS__)
+
 class Overlay {
 public:
     static Overlay& get() {
@@ -28,15 +33,17 @@ public:
 
     bool init(JNIEnv* env, jobject surface, int w, int h) {
         std::lock_guard<std::mutex> lock(mtx);
-        if (running.load()) return false;
+        if (running.load()) { OLOGI("init: already running"); return false; }
 
+        OLOGI("init: surface=%p w=%d h=%d", surface, w, h);
         nativeWindow = ANativeWindow_fromSurface(env, surface);
-        if (!nativeWindow) return false;
+        if (!nativeWindow) { OLOGE("init: ANativeWindow_fromSurface failed"); return false; }
 
         screenW = w;
         screenH = h;
 
         if (!initEGL()) {
+            OLOGE("init: initEGL failed");
             ANativeWindow_release(nativeWindow);
             nativeWindow = nullptr;
             return false;
@@ -45,6 +52,7 @@ public:
         setupImGui();
         running.store(true);
         pthread_create(&renderThread, nullptr, renderThreadEntry, this);
+        OLOGI("init: SUCCESS, render thread started");
         return true;
     }
 
@@ -111,11 +119,13 @@ private:
     Overlay& operator=(const Overlay&) = delete;
 
     bool initEGL() {
+        OLOGI("initEGL: start");
         eglDisplay = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-        if (eglDisplay == EGL_NO_DISPLAY) return false;
+        if (eglDisplay == EGL_NO_DISPLAY) { OLOGE("initEGL: no display"); return false; }
 
         EGLint major, minor;
-        if (!eglInitialize(eglDisplay, &major, &minor)) return false;
+        if (!eglInitialize(eglDisplay, &major, &minor)) { OLOGE("initEGL: eglInitialize failed"); return false; }
+        OLOGI("initEGL: EGL %d.%d", major, minor);
 
         const EGLint configAttribs[] = {
             EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
@@ -131,8 +141,24 @@ private:
 
         EGLConfig config;
         EGLint numConfigs;
-        if (!eglChooseConfig(eglDisplay, configAttribs, &config, 1, &numConfigs) || numConfigs == 0)
-            return false;
+        if (!eglChooseConfig(eglDisplay, configAttribs, &config, 1, &numConfigs) || numConfigs == 0) {
+            // Fallback: try ES2
+            OLOGI("initEGL: ES3 config failed, trying ES2");
+            const EGLint fallbackAttribs[] = {
+                EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+                EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+                EGL_RED_SIZE, 8,
+                EGL_GREEN_SIZE, 8,
+                EGL_BLUE_SIZE, 8,
+                EGL_ALPHA_SIZE, 8,
+                EGL_NONE
+            };
+            if (!eglChooseConfig(eglDisplay, fallbackAttribs, &config, 1, &numConfigs) || numConfigs == 0) {
+                OLOGE("initEGL: no config found");
+                return false;
+            }
+        }
+        OLOGI("initEGL: config found, numConfigs=%d", numConfigs);
 
         ANativeWindow_setBuffersGeometry(nativeWindow, 0, 0, EGL_NATIVE_VISUAL_ID);
 
@@ -142,7 +168,8 @@ private:
         ANativeWindow_setBuffersGeometry(nativeWindow, 0, 0, format);
 
         eglSurface = eglCreateWindowSurface(eglDisplay, config, nativeWindow, nullptr);
-        if (eglSurface == EGL_NO_SURFACE) return false;
+        if (eglSurface == EGL_NO_SURFACE) { OLOGE("initEGL: no surface"); return false; }
+        OLOGI("initEGL: surface created");
 
         const EGLint contextAttribs[] = {
             EGL_CONTEXT_CLIENT_VERSION, 3,
@@ -150,11 +177,14 @@ private:
         };
 
         eglContext = eglCreateContext(eglDisplay, config, EGL_NO_CONTEXT, contextAttribs);
-        if (eglContext == EGL_NO_CONTEXT) return false;
+        if (eglContext == EGL_NO_CONTEXT) { OLOGE("initEGL: no context"); return false; }
 
-        if (!eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext))
+        if (!eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)) {
+            OLOGE("initEGL: eglMakeCurrent failed");
             return false;
+        }
 
+        OLOGI("initEGL: SUCCESS");
         return true;
     }
 
@@ -256,12 +286,22 @@ private:
     static void* renderThreadEntry(void* arg) {
         Overlay* self = static_cast<Overlay*>(arg);
 
+        OLOGI("renderThread: started, making EGL current");
         // Re-bind EGL context nesta thread
-        eglMakeCurrent(self->eglDisplay, self->eglSurface,
-                        self->eglSurface, self->eglContext);
+        if (!eglMakeCurrent(self->eglDisplay, self->eglSurface,
+                        self->eglSurface, self->eglContext)) {
+            OLOGE("renderThread: eglMakeCurrent FAILED");
+            return nullptr;
+        }
+        OLOGI("renderThread: EGL current OK, entering loop");
 
+        int frameCount = 0;
         while (self->running.load()) {
             self->renderFrame();
+            frameCount++;
+            if (frameCount == 1 || frameCount == 60 || frameCount % 300 == 0) {
+                OLOGI("renderThread: frame %d", frameCount);
+            }
             usleep(16000); // ~60 FPS
         }
 
