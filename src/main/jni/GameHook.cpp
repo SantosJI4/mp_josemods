@@ -71,15 +71,18 @@
 // ============================================================
 // Function Pointers — resolvidos em runtime pelo il2cpp
 // ============================================================
-static Vector3 (*fn_WorldToScreenPoint)(void* camera, Vector3 pos) = nullptr;
 static void*   (*fn_Camera_get_main)() = nullptr;
 static void*   (*fn_get_transform)(void* component) = nullptr;
 static Vector3 (*fn_get_position)(void* transform) = nullptr;
 static int     (*fn_Screen_get_width)(void*) = nullptr;
 static int     (*fn_Screen_get_height)(void*) = nullptr;
 
+// Para VP Matrix (Camera) — Matrix4x4 tem 64 bytes, usa hidden return pointer no ARM64
+struct Matrix4x4 { float m[16]; };
+static void (*fn_get_worldToCameraMatrix)(Matrix4x4* ret, void* camera) = nullptr;
+static void (*fn_get_projectionMatrix)(Matrix4x4* ret, void* camera) = nullptr;
+
 // il2cpp_class_get_method_from_name — resolvido direto do libil2cpp.so
-// Retorna MethodInfo* (NÃO o function pointer — precisamos do MethodInfo para VMT hook)
 static void* (*resolve_method)(void* klass, const char* name, int argsCount) = nullptr;
 
 // Original OnUpdate
@@ -89,8 +92,14 @@ static void (*orig_OnUpdate)(void* self) = nullptr;
 static SharedESPData* sharedData = nullptr;
 static int shmFd = -1;
 
-// Frame sync: o overlay zera playerCount quando lê
+// Frame sync
 static std::atomic<bool> hookActive{false};
+
+// Cache por frame
+static void* g_cachedCamera = nullptr;
+static Matrix4x4 g_vpMatrix;
+static bool g_vpValid = false;
+static int g_frameId = 0;
 
 // ============================================================
 // VMT HOOK — Troca methodPointer no MethodInfo
@@ -139,14 +148,41 @@ static bool VmtHook(void* methodInfo, void* newFunc, void** origFunc) {
 }
 
 // ============================================================
+// Manual WorldToScreen — Evita chamar Camera.WorldToScreenPoint
+// que pode causar deadlock no Update loop
+// ============================================================
+static void MultiplyMatrix(const Matrix4x4& a, const Matrix4x4& b, Matrix4x4& out) {
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            out.m[j * 4 + i] = 0;
+            for (int k = 0; k < 4; k++) {
+                out.m[j * 4 + i] += a.m[k * 4 + i] * b.m[j * 4 + k];
+            }
+        }
+    }
+}
+
+static Vector3 ManualWorldToScreen(Vector3 world, const Matrix4x4& vp, int sw, int sh) {
+    const float* m = vp.m;
+    // Unity Matrix4x4 is column-major: m[col*4+row]
+    float clipX = world.x * m[0] + world.y * m[4] + world.z * m[8]  + m[12];
+    float clipY = world.x * m[1] + world.y * m[5] + world.z * m[9]  + m[13];
+    float clipW = world.x * m[3] + world.y * m[7] + world.z * m[11] + m[15];
+
+    if (clipW < 0.001f) return Vector3(0, 0, -1);
+
+    float ndcX = clipX / clipW;
+    float ndcY = clipY / clipW;
+
+    float screenX = (ndcX * 0.5f + 0.5f) * (float)sw;
+    float screenY = (1.0f - (ndcY * 0.5f + 0.5f)) * (float)sh;
+
+    return Vector3(screenX, screenY, clipW);
+}
+
+// ============================================================
 // HOOK DO OnUpdate — Chamado pelo jogo para CADA player
 // ============================================================
-//
-// O jogo chama: bl_PlayerNetwork::OnUpdate(this)
-// O 'this' é o ponteiro do player — entregue de graça, zero busca
-//
-// Aqui dentro chamamos as funções do Unity DIRETAMENTE
-// usando os mesmos offsets do seu dump — sem ponteiros manuais
 
 static void Hook_OnUpdate(void* self) {
     // Chamar original primeiro (mantém o jogo funcionando)
@@ -157,50 +193,70 @@ static void Hook_OnUpdate(void* self) {
     // Se shared memory não está pronto ou hook desativado, retorna
     if (!sharedData || !self || !hookActive.load()) return;
 
-    // ── Pegar câmera principal ──
-    void* camera = fn_Camera_get_main ? fn_Camera_get_main() : nullptr;
-    if (!camera) return;
+    // Overlay controla se o hook processa
+    if (!sharedData->espEnabled) return;
+
+    int idx = sharedData->playerCount;
+    if (idx >= MAX_ESP_PLAYERS || idx >= 20) return; // Limitar a 20 players
+
+    // ── Primeiro player do frame: atualiza cache ──
+    if (idx == 0) {
+        g_frameId++;
+        sharedData->debugLastCall = 10; // Iniciando novo frame
+
+        // Camera.get_main — UMA VEZ por frame
+        g_cachedCamera = fn_Camera_get_main ? fn_Camera_get_main() : nullptr;
+        sharedData->debugLastCall = 11; // Camera OK
+
+        // VP Matrix — UMA VEZ por frame
+        g_vpValid = false;
+        if (g_cachedCamera && fn_get_worldToCameraMatrix && fn_get_projectionMatrix) {
+            Matrix4x4 viewMat, projMat;
+            fn_get_worldToCameraMatrix(&viewMat, g_cachedCamera);
+            sharedData->debugLastCall = 12; // ViewMatrix OK
+            fn_get_projectionMatrix(&projMat, g_cachedCamera);
+            sharedData->debugLastCall = 13; // ProjMatrix OK
+            MultiplyMatrix(projMat, viewMat, g_vpMatrix);
+            g_vpValid = true;
+        }
+
+        // Tela
+        if (sharedData->screenW <= 0 && fn_Screen_get_width && fn_Screen_get_height) {
+            sharedData->screenW = fn_Screen_get_width(nullptr);
+            sharedData->screenH = fn_Screen_get_height(nullptr);
+        }
+    }
+
+    void* camera = g_cachedCamera;
+    if (!camera || !g_vpValid) return;
+
+    int screenH = sharedData->screenH;
+    int screenW = sharedData->screenW;
+    if (screenW <= 0 || screenH <= 0) return;
 
     // ── Pegar transform do player ──
+    sharedData->debugLastCall = 20 + idx;
     void* transform = fn_get_transform ? fn_get_transform(self) : nullptr;
     if (!transform) return;
 
     // ── Pegar posição 3D do player ──
+    sharedData->debugLastCall = 40 + idx;
     Vector3 worldPos = fn_get_position(transform);
 
     // Sanity check
     if (std::isnan(worldPos.x) || std::isnan(worldPos.y) || std::isnan(worldPos.z)) return;
 
-    // ── WorldToScreenPoint — chamado DIRETO, 100% preciso ──
-    Vector3 bottomWorld = { worldPos.x, worldPos.y, worldPos.z };
-    Vector3 topWorld = { worldPos.x, worldPos.y + 2.0f, worldPos.z };
+    // ── WorldToScreen — MATH PURA, zero chamada il2cpp ──
+    Vector3 bottomWorld(worldPos.x, worldPos.y, worldPos.z);
+    Vector3 topWorld(worldPos.x, worldPos.y + 2.0f, worldPos.z);
 
-    Vector3 screenBottom = fn_WorldToScreenPoint(camera, bottomWorld);
-    Vector3 screenTop = fn_WorldToScreenPoint(camera, topWorld);
-
-    // Obter tamanho da tela
-    int screenH = sharedData->screenH;
-    if (screenH <= 0) {
-        if (fn_Screen_get_height) {
-            screenH = fn_Screen_get_height(nullptr);
-            sharedData->screenH = screenH;
-        }
-        if (fn_Screen_get_width) {
-            sharedData->screenW = fn_Screen_get_width(nullptr);
-        }
-    }
+    Vector3 screenBottom = ManualWorldToScreen(bottomWorld, g_vpMatrix, screenW, screenH);
+    Vector3 screenTop = ManualWorldToScreen(topWorld, g_vpMatrix, screenW, screenH);
 
     // Verificar se está na frente da câmera
-    if (screenBottom.z < 1.0f || screenTop.z < 1.0f) return;
-
-    // Inverter Y (Unity: Y=0 embaixo, Tela: Y=0 em cima)
-    screenBottom.y = (float)screenH - screenBottom.y;
-    screenTop.y = (float)screenH - screenTop.y;
+    if (screenBottom.z < 0.1f || screenTop.z < 0.1f) return;
 
     // ── Escrever no SharedMemory ──
-    int idx = sharedData->playerCount;
-    if (idx >= MAX_ESP_PLAYERS) return;
-
     ESPEntry& entry = sharedData->players[idx];
     entry.topX = screenTop.x;
     entry.topY = screenTop.y;
@@ -208,7 +264,7 @@ static void Hook_OnUpdate(void* self) {
     entry.bottomX = screenBottom.x;
     entry.bottomY = screenBottom.y;
     entry.bottomZ = screenBottom.z;
-    entry.distance = screenBottom.z; // z ≈ distância
+    entry.distance = screenBottom.z;
     entry.team = 0;
     entry.health = 100.0f;
     entry.valid = true;
@@ -255,9 +311,14 @@ static void* hack_thread(void*) {
         OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_CAMERA),
         OBFUSCATE(CLS_CAMERA), OBFUSCATE("get_main"), 0);
 
-    fn_WorldToScreenPoint = (Vector3(*)(void*, Vector3)) Il2CppGetMethodOffset(
+    // VP Matrix: hidden return pointer para Matrix4x4 (64 bytes > 16 → ARM64 usa x8)
+    fn_get_worldToCameraMatrix = (void(*)(Matrix4x4*, void*)) Il2CppGetMethodOffset(
         OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_CAMERA),
-        OBFUSCATE(CLS_CAMERA), OBFUSCATE("WorldToScreenPoint"), 1);
+        OBFUSCATE(CLS_CAMERA), OBFUSCATE("get_worldToCameraMatrix"), 0);
+
+    fn_get_projectionMatrix = (void(*)(Matrix4x4*, void*)) Il2CppGetMethodOffset(
+        OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_CAMERA),
+        OBFUSCATE(CLS_CAMERA), OBFUSCATE("get_projectionMatrix"), 0);
 
     fn_get_transform = (void*(*)(void*)) Il2CppGetMethodOffset(
         OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_COMPONENT),
@@ -276,13 +337,14 @@ static void* hack_thread(void*) {
         OBFUSCATE(CLS_SCREEN), OBFUSCATE("get_height"), 0);
 
     // Verificar se tudo resolveu
-    if (!fn_Camera_get_main || !fn_WorldToScreenPoint ||
-        !fn_get_transform || !fn_get_position) {
-        LOGE("Falha ao resolver funções: cam=%p wts=%p trans=%p pos=%p",
-             fn_Camera_get_main, fn_WorldToScreenPoint, fn_get_transform, fn_get_position);
+    if (!fn_Camera_get_main || !fn_get_transform || !fn_get_position) {
+        LOGE("Falha ao resolver funções: cam=%p trans=%p pos=%p",
+             fn_Camera_get_main, fn_get_transform, fn_get_position);
         return nullptr;
     }
-    LOGI("Funções resolvidas com sucesso");
+    LOGI("Funções resolvidas: cam=%p viewMat=%p projMat=%p trans=%p pos=%p",
+         fn_Camera_get_main, fn_get_worldToCameraMatrix, fn_get_projectionMatrix,
+         fn_get_transform, fn_get_position);
 
     // ── Criar shared memory ──
     shmFd = shm_create_file();

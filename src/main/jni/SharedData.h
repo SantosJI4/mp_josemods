@@ -40,6 +40,8 @@ struct SharedESPData {
     int screenW;
     int screenH;
     int playerCount;
+    volatile int espEnabled;      // Overlay seta 1/0 → hook verifica
+    volatile int debugLastCall;   // Diagnóstico: último il2cpp call completado
     ESPEntry players[MAX_ESP_PLAYERS];
 };
 

@@ -127,7 +127,12 @@ void* shmReaderLoop(void*) {
 // Draw ESP — Lê direto do SharedMemory (sem cópia)
 // ============================================================
 void DrawESP(int screenW, int screenH) {
-    if (!esp || !sharedData || !shmConnected.load()) return;
+    if (!sharedData || !shmConnected.load()) return;
+
+    // Controle: overlay diz ao hook se deve processar
+    sharedData->espEnabled = esp ? 1 : 0;
+
+    if (!esp) return;
 
     // Ler dados do shared memory (escrito pelo hook no jogo)
     uint32_t seq = sharedData->writeSeq.load(std::memory_order_acquire);
@@ -192,8 +197,11 @@ void DrawMenu() {
     if (shmConnected.load()) {
         int count = sharedData ? sharedData->playerCount : 0;
         uint32_t seq = sharedData ? sharedData->writeSeq.load(std::memory_order_relaxed) : 0;
+        int dbg = sharedData ? sharedData->debugLastCall : -1;
         ImGui::TextColored(ImVec4(0, 1, 0, 1), "[HOOK] Conectado | Players: %d | Seq: %u",
                           count, seq);
+        ImGui::TextColored(ImVec4(0.5f, 0.5f, 1, 1), "Debug: %d | ESP: %s",
+                          dbg, esp ? "ON" : "OFF");
     } else {
         ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "[HOOK] Aguardando hook no jogo...");
         ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1),
