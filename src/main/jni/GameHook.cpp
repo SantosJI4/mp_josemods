@@ -198,7 +198,11 @@ static void Hook_OnUpdate(void* self) {
     // Se shared memory não está pronto ou hook desativado, retorna
     if (!sharedData || !self || !hookActive.load()) return;
 
-    // Overlay controla se o hook processa
+    // Sempre manter magic ativo para overlay detectar
+    sharedData->magic = 0xDEADF00D;
+
+    // Overlay controla se o hook processa ESP
+    // (Mas permite que overlay conecte primeiro lendo magic)
     if (!sharedData->espEnabled) return;
 
     int idx = sharedData->playerCount;
@@ -407,7 +411,8 @@ static void* hack_thread(void*) {
     }
 
     memset(sharedData, 0, sizeof(SharedESPData));
-    LOGI("Shared memory criado em %s", shmActivePath ? shmActivePath : "???");
+    sharedData->magic = 0xDEADF00D;  // Overlay espera isso para conectar
+    LOGI("Shared memory criado em %s (magic=0xDEADF00D)", shmActivePath ? shmActivePath : "???");
 
     // Preencher tamanho de tela
     if (fn_Screen_get_width && fn_Screen_get_height) {
