@@ -53,8 +53,15 @@ fi
 chmod 777 "$HOOK_LIB"
 chcon u:object_r:system_lib_file:s0 "$HOOK_LIB" 2>/dev/null
 
-# -- Limpar shared memory anterior --
+# -- Limpar e pre-criar shared memory com permissoes abertas --
+# O jogo roda como UID do app, nao como root
 rm -f /data/local/tmp/.esp_shm 2>/dev/null
+rm -f /sdcard/.esp_shm 2>/dev/null
+touch /data/local/tmp/.esp_shm
+chmod 666 /data/local/tmp/.esp_shm
+chcon u:object_r:app_data_file:s0 /data/local/tmp/.esp_shm 2>/dev/null
+touch /sdcard/.esp_shm
+chmod 666 /sdcard/.esp_shm
 
 # -- Garantir permissao overlay --
 appops set "$PACKAGE" SYSTEM_ALERT_WINDOW allow 2>/dev/null
@@ -92,7 +99,10 @@ monkey -p "$GAME_PACKAGE" -c android.intent.category.LAUNCHER 1 2>/dev/null
 echo "[*] Aguardando hook ativar..."
 HOOK_OK=0
 for i in $(seq 1 30); do
-    if [ -f /data/local/tmp/.esp_shm ]; then
+    # Checar se hook fez ftruncate (arquivo cresce de 0 para 4096)
+    SZ=$(wc -c < /data/local/tmp/.esp_shm 2>/dev/null)
+    SZ2=$(wc -c < /sdcard/.esp_shm 2>/dev/null)
+    if [ "${SZ:-0}" -ge 4096 ] 2>/dev/null || [ "${SZ2:-0}" -ge 4096 ] 2>/dev/null; then
         HOOK_OK=1
         break
     fi
@@ -132,7 +142,9 @@ WRAPEOF
 
     echo "[*] Aguardando hook (fallback)..."
     for i in $(seq 1 20); do
-        if [ -f /data/local/tmp/.esp_shm ]; then
+        SZ=$(wc -c < /data/local/tmp/.esp_shm 2>/dev/null)
+        SZ2=$(wc -c < /sdcard/.esp_shm 2>/dev/null)
+        if [ "${SZ:-0}" -ge 4096 ] 2>/dev/null || [ "${SZ2:-0}" -ge 4096 ] 2>/dev/null; then
             HOOK_OK=1
             break
         fi

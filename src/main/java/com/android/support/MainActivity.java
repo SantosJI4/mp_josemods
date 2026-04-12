@@ -157,8 +157,17 @@ public class MainActivity extends Activity {
             rootExec("chcon u:object_r:system_lib_file:s0 " + hookDst);
             updateStatus("Root OK\nlibHook.so copiada");
 
-            // 4. Limpar shared memory antiga
+            // 4. Pre-criar shared memory com permissoes abertas
+            // O jogo roda como UID do app, nao como root
+            // Entao precisamos criar o arquivo ANTES com chmod 666
             rootExec("rm -f /data/local/tmp/.esp_shm");
+            rootExec("rm -f /sdcard/.esp_shm");
+            rootExec("touch /data/local/tmp/.esp_shm");
+            rootExec("chmod 666 /data/local/tmp/.esp_shm");
+            rootExec("chcon u:object_r:app_data_file:s0 /data/local/tmp/.esp_shm");
+            // Fallback no sdcard
+            rootExec("touch /sdcard/.esp_shm");
+            rootExec("chmod 666 /sdcard/.esp_shm");
 
             // 5. Iniciar overlay ANTES da injecao (para estar pronto)
             runOnUi(new Runnable() {
@@ -199,9 +208,27 @@ public class MainActivity extends Activity {
             for (int i = 0; i < 30; i++) {
                 Thread.sleep(1000);
 
-                // Verificar se .esp_shm existe
-                String check = rootExec("ls -la /data/local/tmp/.esp_shm 2>/dev/null");
-                if (check != null && check.contains(".esp_shm")) {
+                // Verificar se o hook escreveu na shared memory
+                // O arquivo foi pre-criado (0 bytes), hook faz ftruncate(4096) + escreve magic
+                String check = rootExec("wc -c < /data/local/tmp/.esp_shm 2>/dev/null");
+                boolean shmReady = false;
+                if (check != null) {
+                    try {
+                        int sz = Integer.parseInt(check.trim());
+                        if (sz >= 4096) shmReady = true;
+                    } catch (NumberFormatException ignored) {}
+                }
+                if (!shmReady) {
+                    // Checar fallback sdcard
+                    check = rootExec("wc -c < /sdcard/.esp_shm 2>/dev/null");
+                    if (check != null) {
+                        try {
+                            int sz = Integer.parseInt(check.trim());
+                            if (sz >= 4096) shmReady = true;
+                        } catch (NumberFormatException ignored) {}
+                    }
+                }
+                if (shmReady) {
                     hookOk = true;
                     break;
                 }
@@ -249,7 +276,11 @@ public class MainActivity extends Activity {
                     rootExec("setprop wrap." + GAME_PACKAGE + " /data/local/tmp/wrap_hook.sh");
 
                     rootExec("am force-stop " + GAME_PACKAGE);
-                    Thread.sleep(1000);
+                    Thread.sleep(500);
+                    // Re-criar shm (game foi morto, pode ter ficado sujo)
+                    rootExec("truncate -s 0 /data/local/tmp/.esp_shm");
+                    rootExec("truncate -s 0 /sdcard/.esp_shm");
+                    Thread.sleep(500);
                     if (launcherAct != null && launcherAct.length() > 1) {
                         rootExec("am start -n " + GAME_PACKAGE + "/" + launcherAct);
                     } else {
@@ -261,8 +292,22 @@ public class MainActivity extends Activity {
                     // Aguardar novamente
                     for (int i = 0; i < 20; i++) {
                         Thread.sleep(1000);
-                        String check = rootExec("ls /data/local/tmp/.esp_shm 2>/dev/null");
-                        if (check != null && check.contains(".esp_shm")) {
+                        String check2 = rootExec("wc -c < /data/local/tmp/.esp_shm 2>/dev/null");
+                        boolean ready2 = false;
+                        if (check2 != null) {
+                            try {
+                                if (Integer.parseInt(check2.trim()) >= 4096) ready2 = true;
+                            } catch (NumberFormatException ignored) {}
+                        }
+                        if (!ready2) {
+                            check2 = rootExec("wc -c < /sdcard/.esp_shm 2>/dev/null");
+                            if (check2 != null) {
+                                try {
+                                    if (Integer.parseInt(check2.trim()) >= 4096) ready2 = true;
+                                } catch (NumberFormatException ignored) {}
+                            }
+                        }
+                        if (ready2) {
                             hookOk = true;
                             break;
                         }

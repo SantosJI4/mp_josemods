@@ -79,13 +79,46 @@ static void shm_unmap(SharedESPData* data) {
 // Mais simples que ashmem, funciona com root
 // ============================================================
 
+// Paths para shared memory (o hook tenta em ordem)
+#define SHM_PATH_1 "/data/local/tmp/.esp_shm"
+#define SHM_PATH_2 "/sdcard/.esp_shm"
+
+static const char* shmActivePath = nullptr;
+
+// Cria/abre shared memory (hook no jogo — roda como UID do app, NÃO root)
+// O arquivo deve ser pré-criado com chmod 666 pelo app root
 static int shm_create_file() {
-    int fd = open("/data/local/tmp/.esp_shm", O_CREAT | O_RDWR, 0666);
-    if (fd < 0) return -1;
-    ftruncate(fd, SHARED_MEM_SIZE);
-    return fd;
+    // Tentar abrir arquivo pré-criado pelo app (com permissões corretas)
+    int fd = open(SHM_PATH_1, O_RDWR);
+    if (fd >= 0) {
+        ftruncate(fd, SHARED_MEM_SIZE);
+        shmActivePath = SHM_PATH_1;
+        return fd;
+    }
+
+    // Fallback: tentar criar (pode falhar se sem permissão)
+    fd = open(SHM_PATH_1, O_CREAT | O_RDWR, 0666);
+    if (fd >= 0) {
+        ftruncate(fd, SHARED_MEM_SIZE);
+        shmActivePath = SHM_PATH_1;
+        return fd;
+    }
+
+    // Fallback 2: /sdcard/ (acessível por todos os apps)
+    fd = open(SHM_PATH_2, O_CREAT | O_RDWR, 0666);
+    if (fd >= 0) {
+        ftruncate(fd, SHARED_MEM_SIZE);
+        shmActivePath = SHM_PATH_2;
+        return fd;
+    }
+
+    return -1;
 }
 
 static int shm_open_file() {
-    return open("/data/local/tmp/.esp_shm", O_RDWR);
+    // Tentar na ordem
+    int fd = open(SHM_PATH_1, O_RDWR);
+    if (fd >= 0) return fd;
+    fd = open(SHM_PATH_2, O_RDWR);
+    return fd;
 }

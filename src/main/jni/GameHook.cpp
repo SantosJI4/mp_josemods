@@ -30,6 +30,7 @@
 #include <cstring>
 #include <cmath>
 #include <atomic>
+#include <cerrno>
 #include <android/log.h>
 
 #include "Utils.h"
@@ -390,21 +391,23 @@ static void* hack_thread(void*) {
          fn_WorldToScreenPoint, fn_get_transform, fn_get_position);
 
     // ── Criar shared memory ──
+    LOGI("Tentando criar shared memory... uid=%d", getuid());
     shmFd = shm_create_file();
     if (shmFd < 0) {
-        LOGE("Falha ao criar shared memory");
+        LOGE("Falha ao criar shared memory: errno=%d (%s)", errno, strerror(errno));
+        LOGE("uid=%d gid=%d", getuid(), getgid());
         return nullptr;
     }
 
     sharedData = shm_map(shmFd);
     if (!sharedData) {
         close(shmFd);
-        LOGE("Falha ao mapear shared memory");
+        LOGE("Falha ao mapear shared memory: errno=%d (%s)", errno, strerror(errno));
         return nullptr;
     }
 
     memset(sharedData, 0, sizeof(SharedESPData));
-    LOGI("Shared memory criado em /data/local/tmp/.esp_shm");
+    LOGI("Shared memory criado em %s", shmActivePath ? shmActivePath : "???");
 
     // Preencher tamanho de tela
     if (fn_Screen_get_width && fn_Screen_get_height) {
