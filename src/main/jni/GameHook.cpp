@@ -44,6 +44,7 @@
 #include "ByNameModding/Il2Cpp.h"
 
 #define HOOK_TAG "GameHook"
+#define HOOK_BUILD_VER "v7-fixed-abi"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, HOOK_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, HOOK_TAG, __VA_ARGS__)
 
@@ -448,7 +449,7 @@ static void* hack_thread(void*) {
     // IMPORTANTE: usar /data/local/tmp/ como PRIMARIO
     // O overlay tambem tenta /data/local/tmp/ PRIMEIRO
     // O game dir falha quando /proc/self/cmdline retorna zygote
-    hookLogWrite("Tentando shm... uid=%d gid=%d", getuid(), getgid());
+    hookLogWrite(\"Tentando shm [%s]... uid=%d gid=%d\", HOOK_BUILD_VER, getuid(), getgid());
     hookLogWrite("Paths: %s, /data/data/%s/%s, %s", SHM_PATH_1, HOOK_GAME_PACKAGE, SHM_FILENAME, SHM_PATH_2);
 
     shmFd = shm_create_file();
@@ -515,8 +516,8 @@ static void* hack_thread(void*) {
 // ============================================================
 __attribute__((constructor))
 void lib_main() {
-    LOGI("libHook.so carregada no processo do jogo");
-    hookLogWrite("=== HOOK CARREGADO === pid=%d uid=%d", getpid(), getuid());
+    LOGI("libHook.so carregada [%s] pid=%d", HOOK_BUILD_VER, getpid());
+    hookLogWrite("=== HOOK CARREGADO [%s] === pid=%d uid=%d", HOOK_BUILD_VER, getpid(), getuid());
     pthread_t t;
     pthread_create(&t, nullptr, hack_thread, nullptr);
     pthread_detach(t);

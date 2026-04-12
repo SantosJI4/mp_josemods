@@ -75,6 +75,7 @@ static char shmStatus[256] = "Iniciando...";
 
 void* shmReaderLoop(void*) {
     int attempt = 0;
+    MLOGI("shmReaderLoop started (build: v7-fixed-paths)");
 
     // Paths para tentar: /data/local/tmp/ PRIMEIRO (o hook comprovou que funciona la)
     // game dir como fallback (pode falhar por SELinux/namespace)

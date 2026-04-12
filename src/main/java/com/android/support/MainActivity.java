@@ -159,22 +159,24 @@ public class MainActivity extends Activity {
             rootExec("chcon u:object_r:system_lib_file:s0 " + hookDst);
             updateStatus("Root OK\nlibHook.so copiada");
 
-            // 4. Pre-criar shared memory + hook log nos 3 locais possiveis
-            // PRIMARIO: diretorio de dados do jogo (game pode SEMPRE escrever aqui)
+            // 4. Pre-criar shared memory + hook log
+            // IMPORTANTE: so criar em /data/local/tmp/ (UNICO path confiavel)
+            // O hook confirmou que pode escrever la (fd=196)
+            // O overlay tambem pode ler de la
+            // NÃO criar no game dir — isso causa SHM mismatch
             final String gameDir = "/data/data/" + GAME_PACKAGE;
 
-            // Tornar diretorio do jogo traversavel pelo overlay (o+x)
-            // Sem isso, nosso overlay (outro UID) nao entra em /data/data/game/
+            // DELETAR qualquer SHM stale no game dir para evitar que o overlay conecte nele
+            rootExec("rm -f " + gameDir + "/.esp_shm");
+            rootExec("rm -f /data/user/0/" + GAME_PACKAGE + "/.esp_shm 2>/dev/null");
+
+            // Hook log no game dir ainda e util (hook pode escrever por ser owner)
             rootExec("chmod 711 " + gameDir);
             rootExec("chmod 711 /data/user/0/" + GAME_PACKAGE + " 2>/dev/null");
-
-            rootExec("dd if=/dev/zero of=" + gameDir + "/.esp_shm bs=4096 count=1 2>/dev/null");
-            rootExec("chmod 666 " + gameDir + "/.esp_shm");
-            rootExec("chcon u:object_r:app_data_file:s0 " + gameDir + "/.esp_shm");
             rootExec("rm -f " + gameDir + "/.hook_log");
             rootExec("touch " + gameDir + "/.hook_log; chmod 666 " + gameDir + "/.hook_log; chcon u:object_r:app_data_file:s0 " + gameDir + "/.hook_log");
 
-            // Fallback: /data/local/tmp/ (pode nao ser acessivel pelo jogo)
+            // PRIMARIO: /data/local/tmp/ — UNICO path para SHM
             rootExec("rm -f /data/local/tmp/.esp_shm");
             rootExec("dd if=/dev/zero of=/data/local/tmp/.esp_shm bs=4096 count=1 2>/dev/null");
             rootExec("chmod 666 /data/local/tmp/.esp_shm");
@@ -341,7 +343,7 @@ public class MainActivity extends Activity {
             if (hookOk) {
                 updateStatus("TUDO ATIVO!\n"
                         + "Hook: VMT (MethodInfo swap)\n"
-                        + "IPC: " + gameDir + "/.esp_shm\n"
+                        + "IPC: /data/local/tmp/.esp_shm\n"
                         + "ESP: Toggle no menu overlay");
             } else {
                 // Diagnostico completo
