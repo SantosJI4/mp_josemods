@@ -119,10 +119,13 @@ static Vector3 (*fn_get_position)(void* transform) = nullptr;
 static int     (*fn_Screen_get_width)(void*) = nullptr;
 static int     (*fn_Screen_get_height)(void*) = nullptr;
 
-// Para VP Matrix (Camera) — Matrix4x4 tem 64 bytes, usa hidden return pointer no ARM64
+// Para VP Matrix (Camera)
 struct Matrix4x4 { float m[16]; };
-static void (*fn_get_worldToCameraMatrix)(Matrix4x4* ret, void* camera) = nullptr;
-static void (*fn_get_projectionMatrix)(Matrix4x4* ret, void* camera) = nullptr;
+// ARM64 ABI: structs > 16 bytes (Matrix4x4 = 64 bytes) são retornadas via
+// hidden register x8. Declarar como RETURN TYPE faz o compilador setar x8.
+// ERRADO: void(*)(Matrix4x4*, void*) — coloca o ptr em x0 onde il2cpp espera 'this'!
+static Matrix4x4 (*fn_get_worldToCameraMatrix)(void* camera, void* method) = nullptr;
+static Matrix4x4 (*fn_get_projectionMatrix)(void* camera, void* method) = nullptr;
 
 // Fallback: WorldToScreenPoint direto (pode travar se chamado muitas vezes)
 static Vector3 (*fn_WorldToScreenPoint)(void* camera, Vector3 pos, int eye) = nullptr;
@@ -261,10 +264,9 @@ static void Hook_OnUpdate(void* self) {
         // VP Matrix — UMA VEZ por frame (se disponível)
         g_vpValid = false;
         if (useManualW2S && g_cachedCamera && fn_get_worldToCameraMatrix && fn_get_projectionMatrix) {
-            Matrix4x4 viewMat, projMat;
-            fn_get_worldToCameraMatrix(&viewMat, g_cachedCamera);
+            Matrix4x4 viewMat = fn_get_worldToCameraMatrix(g_cachedCamera, nullptr);
             sharedData->debugLastCall = 12;
-            fn_get_projectionMatrix(&projMat, g_cachedCamera);
+            Matrix4x4 projMat = fn_get_projectionMatrix(g_cachedCamera, nullptr);
             sharedData->debugLastCall = 13;
             MultiplyMatrix(projMat, viewMat, g_vpMatrix);
             g_vpValid = true;
@@ -359,6 +361,22 @@ static void* hack_thread(void*) {
     // ── Resolver APIs do il2cpp via ByNameModding ──
     Il2CppAttach("libil2cpp.so");
     sleep(3); // Esperar assemblies carregarem
+
+    // ── Forçar re-leitura do /proc/self/cmdline ──
+    // No constructor, cmdline era 'app_process64' (zygote). Agora deve ser o package name.
+    resetGameDataDir();
+    {
+        const char* gdir = getGameDataDir();
+        hookLogWrite("Game data dir (pos-attach): %s", gdir[0] ? gdir : "N/A - tentando hardcoded");
+        if (!gdir[0]) {
+            // Fallback: se cmdline ainda nao mudou, usar package hardcoded
+            snprintf(g_gameDataDir, sizeof(g_gameDataDir), "/data/data/com.fungames.sniper3d");
+            g_gameDirInit = true;
+            g_shmGamePath[0] = '\0';
+            g_logGamePath[0] = '\0';
+            hookLogWrite("Game data dir (hardcoded): %s", g_gameDataDir);
+        }
+    }
 
     // ── Resolver il2cpp_class_get_method_from_name DIRETO do libil2cpp.so ──
     // Precisamos do MethodInfo* para VMT hook (Il2CppGetMethodOffset retorna *method, não MethodInfo*)

@@ -93,9 +93,16 @@ static const char* shmActivePath = nullptr;
 static char g_gameDataDir[256] = {0};
 static bool g_gameDirInit = false;
 
+// Reseta cache para forçar re-leitura do /proc/self/cmdline
+static void resetGameDataDir() {
+    g_gameDirInit = false;
+    g_gameDataDir[0] = '\0';
+    g_shmGamePath[0] = '\0';
+    g_logGamePath[0] = '\0';
+}
+
 static const char* getGameDataDir() {
-    if (g_gameDirInit) return g_gameDataDir;
-    g_gameDirInit = true;
+    if (g_gameDirInit && g_gameDataDir[0]) return g_gameDataDir;
     
     char cmdline[256] = {0};
     int fd = open("/proc/self/cmdline", O_RDONLY);
@@ -104,16 +111,17 @@ static const char* getGameDataDir() {
         close(fd);
         if (rd > 0) {
             cmdline[rd] = '\0';
-            // cmdline contem o package name (null-terminated)
-            // Remover qualquer caracter nao-alfanumerico do final
             for (int i = 0; i < rd; i++) {
                 if (cmdline[i] == '\0' || cmdline[i] == '\n' || cmdline[i] == ' ') {
                     cmdline[i] = '\0';
                     break;
                 }
             }
-            if (strlen(cmdline) > 0) {
+            // So cacheia se parece um package name valido (contem '.')
+            // No constructor, /proc/self/cmdline ainda e 'app_process64' (zygote)
+            if (strlen(cmdline) > 0 && strchr(cmdline, '.') != nullptr) {
                 snprintf(g_gameDataDir, sizeof(g_gameDataDir), "/data/data/%s", cmdline);
+                g_gameDirInit = true;
             }
         }
     }
