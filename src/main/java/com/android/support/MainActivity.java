@@ -162,11 +162,13 @@ public class MainActivity extends Activity {
             // Entao precisamos criar o arquivo ANTES com chmod 666
             rootExec("rm -f /data/local/tmp/.esp_shm");
             rootExec("rm -f /sdcard/.esp_shm");
-            rootExec("touch /data/local/tmp/.esp_shm");
+            // Criar arquivos com tamanho correto (4096 bytes zerados)
+            // Se criar vazio (0 bytes), mmap causa SIGBUS
+            rootExec("dd if=/dev/zero of=/data/local/tmp/.esp_shm bs=4096 count=1 2>/dev/null");
             rootExec("chmod 666 /data/local/tmp/.esp_shm");
             rootExec("chcon u:object_r:app_data_file:s0 /data/local/tmp/.esp_shm");
             // Fallback no sdcard
-            rootExec("touch /sdcard/.esp_shm");
+            rootExec("dd if=/dev/zero of=/sdcard/.esp_shm bs=4096 count=1 2>/dev/null");
             rootExec("chmod 666 /sdcard/.esp_shm");
 
             // 5. Iniciar overlay ANTES da injecao (para estar pronto)
@@ -278,8 +280,10 @@ public class MainActivity extends Activity {
                     rootExec("am force-stop " + GAME_PACKAGE);
                     Thread.sleep(500);
                     // Re-criar shm (game foi morto, pode ter ficado sujo)
-                    rootExec("truncate -s 0 /data/local/tmp/.esp_shm");
-                    rootExec("truncate -s 0 /sdcard/.esp_shm");
+                    rootExec("dd if=/dev/zero of=/data/local/tmp/.esp_shm bs=4096 count=1 2>/dev/null");
+                    rootExec("chmod 666 /data/local/tmp/.esp_shm");
+                    rootExec("dd if=/dev/zero of=/sdcard/.esp_shm bs=4096 count=1 2>/dev/null");
+                    rootExec("chmod 666 /sdcard/.esp_shm");
                     Thread.sleep(500);
                     if (launcherAct != null && launcherAct.length() > 1) {
                         rootExec("am start -n " + GAME_PACKAGE + "/" + launcherAct);

@@ -55,12 +55,13 @@ chcon u:object_r:system_lib_file:s0 "$HOOK_LIB" 2>/dev/null
 
 # -- Limpar e pre-criar shared memory com permissoes abertas --
 # O jogo roda como UID do app, nao como root
+# IMPORTANTE: criar com 4096 bytes (nao vazio), senao mmap causa SIGBUS
 rm -f /data/local/tmp/.esp_shm 2>/dev/null
 rm -f /sdcard/.esp_shm 2>/dev/null
-touch /data/local/tmp/.esp_shm
+dd if=/dev/zero of=/data/local/tmp/.esp_shm bs=4096 count=1 2>/dev/null
 chmod 666 /data/local/tmp/.esp_shm
 chcon u:object_r:app_data_file:s0 /data/local/tmp/.esp_shm 2>/dev/null
-touch /sdcard/.esp_shm
+dd if=/dev/zero of=/sdcard/.esp_shm bs=4096 count=1 2>/dev/null
 chmod 666 /sdcard/.esp_shm
 
 # -- Garantir permissao overlay --

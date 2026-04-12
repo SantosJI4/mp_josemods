@@ -116,9 +116,20 @@ static int shm_create_file() {
 }
 
 static int shm_open_file() {
-    // Tentar na ordem
+    // Tentar na ordem, verificando tamanho minimo
     int fd = open(SHM_PATH_1, O_RDWR);
-    if (fd >= 0) return fd;
+    if (fd >= 0) {
+        off_t sz = lseek(fd, 0, SEEK_END);
+        lseek(fd, 0, SEEK_SET);
+        if (sz >= (off_t)SHARED_MEM_SIZE) return fd;
+        close(fd);
+    }
     fd = open(SHM_PATH_2, O_RDWR);
-    return fd;
+    if (fd >= 0) {
+        off_t sz = lseek(fd, 0, SEEK_END);
+        lseek(fd, 0, SEEK_SET);
+        if (sz >= (off_t)SHARED_MEM_SIZE) return fd;
+        close(fd);
+    }
+    return -1;
 }
