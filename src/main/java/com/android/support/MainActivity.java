@@ -34,6 +34,10 @@ public class MainActivity extends Activity {
     private volatile boolean injecting = false;
 
     @Override
+    public void onPointerCaptureChanged(boolean hasCapture) {
+    }
+
+    @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
