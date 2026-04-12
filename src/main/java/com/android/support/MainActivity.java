@@ -119,6 +119,7 @@ public class MainActivity extends Activity {
                     }
                 });
                 rootExec("rm -f /data/local/tmp/.esp_shm");
+                rootExec("rm -f /data/local/tmp/.hook_log /sdcard/.hook_log");
             }
         }).start();
     }
@@ -171,6 +172,11 @@ public class MainActivity extends Activity {
             rootExec("dd if=/dev/zero of=/sdcard/.esp_shm bs=4096 count=1 2>/dev/null");
             rootExec("chmod 666 /sdcard/.esp_shm");
 
+            // 4b. Pre-criar hook log files (hook escreve diagnostico aqui)
+            rootExec("rm -f /data/local/tmp/.hook_log /sdcard/.hook_log");
+            rootExec("touch /data/local/tmp/.hook_log; chmod 666 /data/local/tmp/.hook_log; chcon u:object_r:app_data_file:s0 /data/local/tmp/.hook_log");
+            rootExec("touch /sdcard/.hook_log; chmod 666 /sdcard/.hook_log");
+
             // 5. Iniciar overlay ANTES da injecao (para estar pronto)
             runOnUi(new Runnable() {
                 @Override
@@ -205,32 +211,19 @@ public class MainActivity extends Activity {
 
             updateStatus("Root OK\nlibHook.so OK\nJogo iniciado com LD_PRELOAD\nAguardando hook...");
 
-            // 7. Aguardar hook criar shared memory (prova que carregou)
+            // 7. Aguardar hook carregar (via hook log, nao file size)
             boolean hookOk = false;
             for (int i = 0; i < 30; i++) {
                 Thread.sleep(1000);
 
-                // Verificar se o hook escreveu na shared memory
-                // O arquivo foi pre-criado (0 bytes), hook faz ftruncate(4096) + escreve magic
-                String check = rootExec("wc -c < /data/local/tmp/.esp_shm 2>/dev/null");
-                boolean shmReady = false;
-                if (check != null) {
-                    try {
-                        int sz = Integer.parseInt(check.trim());
-                        if (sz >= 4096) shmReady = true;
-                    } catch (NumberFormatException ignored) {}
+                // Ler hook log (escrito pelo hook quando carrega)
+                String hookLog = rootExec("cat /data/local/tmp/.hook_log 2>/dev/null");
+                if (hookLog == null || hookLog.trim().isEmpty()) {
+                    hookLog = rootExec("cat /sdcard/.hook_log 2>/dev/null");
                 }
-                if (!shmReady) {
-                    // Checar fallback sdcard
-                    check = rootExec("wc -c < /sdcard/.esp_shm 2>/dev/null");
-                    if (check != null) {
-                        try {
-                            int sz = Integer.parseInt(check.trim());
-                            if (sz >= 4096) shmReady = true;
-                        } catch (NumberFormatException ignored) {}
-                    }
-                }
-                if (shmReady) {
+
+                // Hook escreveu "HOOK ATIVO" = tudo OK
+                if (hookLog != null && hookLog.contains("HOOK ATIVO")) {
                     hookOk = true;
                     break;
                 }
@@ -244,10 +237,16 @@ public class MainActivity extends Activity {
                     String il2cpp = rootExec("grep -c libil2cpp.so /proc/" + gamePid + "/maps 2>/dev/null");
                     final String il2cppInfo = (il2cpp != null) ? il2cpp.trim() : "0";
                     final int sec = i + 1;
+                    // Mostrar ultimas linhas do hook log
+                    String logTail = "";
+                    if (hookLog != null && hookLog.length() > 0) {
+                        logTail = hookLog.length() > 200 ? hookLog.substring(hookLog.length() - 200) : hookLog;
+                    }
                     updateStatus("Aguardando hook... (" + sec + "s)\n"
                             + "PID: " + gamePid + "\n"
-                            + "Hook nos maps: " + mapsInfo + "\n"
-                            + "il2cpp nos maps: " + il2cppInfo);
+                            + "Hook maps: " + mapsInfo + "\n"
+                            + "il2cpp maps: " + il2cppInfo + "\n"
+                            + "Log: " + logTail);
                 } else {
                     final int sec = i + 1;
                     updateStatus("Aguardando jogo iniciar... (" + sec + "s)");
@@ -279,11 +278,14 @@ public class MainActivity extends Activity {
 
                     rootExec("am force-stop " + GAME_PACKAGE);
                     Thread.sleep(500);
-                    // Re-criar shm (game foi morto, pode ter ficado sujo)
+                    // Re-criar shm e hook log (game foi morto, pode ter ficado sujo)
                     rootExec("dd if=/dev/zero of=/data/local/tmp/.esp_shm bs=4096 count=1 2>/dev/null");
                     rootExec("chmod 666 /data/local/tmp/.esp_shm");
                     rootExec("dd if=/dev/zero of=/sdcard/.esp_shm bs=4096 count=1 2>/dev/null");
                     rootExec("chmod 666 /sdcard/.esp_shm");
+                    rootExec("rm -f /data/local/tmp/.hook_log /sdcard/.hook_log");
+                    rootExec("touch /data/local/tmp/.hook_log; chmod 666 /data/local/tmp/.hook_log");
+                    rootExec("touch /sdcard/.hook_log; chmod 666 /sdcard/.hook_log");
                     Thread.sleep(500);
                     if (launcherAct != null && launcherAct.length() > 1) {
                         rootExec("am start -n " + GAME_PACKAGE + "/" + launcherAct);
@@ -293,25 +295,14 @@ public class MainActivity extends Activity {
 
                     updateStatus("Fallback: wrap script\nAguardando hook...");
 
-                    // Aguardar novamente
+                    // Aguardar novamente (via hook log)
                     for (int i = 0; i < 20; i++) {
                         Thread.sleep(1000);
-                        String check2 = rootExec("wc -c < /data/local/tmp/.esp_shm 2>/dev/null");
-                        boolean ready2 = false;
-                        if (check2 != null) {
-                            try {
-                                if (Integer.parseInt(check2.trim()) >= 4096) ready2 = true;
-                            } catch (NumberFormatException ignored) {}
+                        String hookLog2 = rootExec("cat /data/local/tmp/.hook_log 2>/dev/null");
+                        if (hookLog2 == null || hookLog2.trim().isEmpty()) {
+                            hookLog2 = rootExec("cat /sdcard/.hook_log 2>/dev/null");
                         }
-                        if (!ready2) {
-                            check2 = rootExec("wc -c < /sdcard/.esp_shm 2>/dev/null");
-                            if (check2 != null) {
-                                try {
-                                    if (Integer.parseInt(check2.trim()) >= 4096) ready2 = true;
-                                } catch (NumberFormatException ignored) {}
-                            }
-                        }
-                        if (ready2) {
+                        if (hookLog2 != null && hookLog2.contains("HOOK ATIVO")) {
                             hookOk = true;
                             break;
                         }
@@ -320,8 +311,13 @@ public class MainActivity extends Activity {
                             final String gp = pid2.trim().split("\\s+")[0];
                             String m = rootExec("grep -c libHook.so /proc/" + gp + "/maps 2>/dev/null");
                             final int sec = i + 1;
+                            String logTail2 = "";
+                            if (hookLog2 != null && hookLog2.length() > 0) {
+                                logTail2 = hookLog2.length() > 150 ? hookLog2.substring(hookLog2.length() - 150) : hookLog2;
+                            }
                             updateStatus("Fallback aguardando... (" + sec + "s)\n"
-                                    + "PID: " + gp + " | Hook maps: " + (m != null ? m.trim() : "0"));
+                                    + "PID: " + gp + " | Hook maps: " + (m != null ? m.trim() : "0")
+                                    + "\nLog: " + logTail2);
                         }
                     }
 
@@ -349,11 +345,15 @@ public class MainActivity extends Activity {
                 final String diagProp = (prop != null) ? prop.trim() : "vazio";
                 String logcatHook = rootExec("logcat -d -s GameHook:* | tail -5");
                 final String diagLog = (logcatHook != null) ? logcatHook.trim() : "sem logs";
+                // Hook log file
+                String hookLogDiag = rootExec("cat /data/local/tmp/.hook_log 2>/dev/null || cat /sdcard/.hook_log 2>/dev/null");
+                final String diagHookLog = (hookLogDiag != null && !hookLogDiag.trim().isEmpty()) ? hookLogDiag.trim() : "vazio";
 
                 updateStatus("OVERLAY ATIVO (hook NAO carregou)\n"
                         + "PID jogo: " + diagPid + "\n"
                         + "Hook nos maps: " + diagMaps + "\n"
                         + "wrap prop: " + diagProp + "\n"
+                        + "HookLog: " + diagHookLog + "\n"
                         + "Logcat: " + diagLog + "\n"
                         + "\nTente: instale um injector em\n/data/local/tmp/injector");
             }

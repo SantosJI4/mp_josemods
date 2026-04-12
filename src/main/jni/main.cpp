@@ -30,6 +30,7 @@
 #include <atomic>
 #include <unistd.h>
 #include <cerrno>
+#include <ctime>
 #include <GLES3/gl3.h>
 #include <EGL/egl.h>
 
@@ -229,6 +230,39 @@ void DrawESP(int screenW, int screenH) {
 }
 
 // ============================================================
+// Hook Log Reader — lê o arquivo de log do hook para diagnostico
+// ============================================================
+#define HOOK_LOG_PATH_1 "/data/local/tmp/.hook_log"
+#define HOOK_LOG_PATH_2 "/sdcard/.hook_log"
+static char hookLogBuf[2048] = "Nenhum log do hook";
+static time_t hookLogLastRead = 0;
+
+static void readHookLog() {
+    // Ler no maximo a cada 2 segundos
+    time_t now = time(nullptr);
+    if (now - hookLogLastRead < 2) return;
+    hookLogLastRead = now;
+
+    const char* paths[] = { HOOK_LOG_PATH_1, HOOK_LOG_PATH_2 };
+    for (int i = 0; i < 2; i++) {
+        int fd = open(paths[i], O_RDONLY);
+        if (fd >= 0) {
+            off_t sz = lseek(fd, 0, SEEK_END);
+            if (sz > 0) {
+                // Ler ultimos 2000 bytes
+                off_t start = (sz > 2000) ? sz - 2000 : 0;
+                lseek(fd, start, SEEK_SET);
+                int toRead = (sz - start < (off_t)sizeof(hookLogBuf) - 1) ? (int)(sz - start) : (int)sizeof(hookLogBuf) - 1;
+                int rd = read(fd, hookLogBuf, toRead);
+                if (rd > 0) hookLogBuf[rd] = '\0';
+            }
+            close(fd);
+            return; // Encontrou, para
+        }
+    }
+}
+
+// ============================================================
 // Draw Menu
 // ============================================================
 void DrawMenu() {
@@ -253,11 +287,15 @@ void DrawMenu() {
         }
         ImGui::TextColored(ImVec4(0.5f, 0.5f, 1, 1), "Debug: %d | espEnabled: %d | ESP UI: %s",
                           dbg, espOn, esp ? "ON" : "OFF");
-        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1), "SHM: %s", shmStatus);
     } else {
-        ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "[HOOK] Aguardando conexao SHM...");
+        ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "[SHM] Aguardando conexao...");
         ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1), "%s", shmStatus);
     }
+
+    // ── Hook Log (diagnostico do processo do jogo) ──
+    readHookLog();
+    ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1), "Hook Log:");
+    ImGui::TextWrapped("%s", hookLogBuf);
 
     ImGui::Separator();
 

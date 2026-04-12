@@ -31,6 +31,7 @@
 #include <cmath>
 #include <atomic>
 #include <cerrno>
+#include <cstdarg>
 #include <android/log.h>
 
 #include "Utils.h"
@@ -45,6 +46,35 @@
 #define HOOK_TAG "GameHook"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, HOOK_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, HOOK_TAG, __VA_ARGS__)
+
+// ============================================================
+// Hook Log File — escreve diagnostico que o overlay pode ler
+// Locations: /data/local/tmp/.hook_log e /sdcard/.hook_log
+// ============================================================
+#define HOOK_LOG_PATH_1 "/data/local/tmp/.hook_log"
+#define HOOK_LOG_PATH_2 "/sdcard/.hook_log"
+
+static void hookLogWrite(const char* fmt, ...) {
+    char buf[512];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+
+    // Tentar ambos paths
+    const char* paths[] = { HOOK_LOG_PATH_1, HOOK_LOG_PATH_2 };
+    for (int i = 0; i < 2; i++) {
+        int fd = open(paths[i], O_CREAT | O_WRONLY | O_APPEND, 0666);
+        if (fd >= 0) {
+            write(fd, buf, strlen(buf));
+            write(fd, "\n", 1);
+            close(fd);
+        }
+    }
+
+    // Logcat tambem
+    __android_log_print(ANDROID_LOG_INFO, HOOK_TAG, "%s", buf);
+}
 
 // ============================================================
 // CONFIGURAÇÃO DE NOMES (do dump.cs)
@@ -305,6 +335,7 @@ static void Hook_OnUpdate(void* self) {
 // ============================================================
 
 static void* hack_thread(void*) {
+    hookLogWrite("Thread iniciada, aguardando libil2cpp.so...");
     LOGI("Hook thread iniciada, aguardando libil2cpp.so...");
 
     // ── Aguardar il2cpp carregar ──
@@ -312,6 +343,7 @@ static void* hack_thread(void*) {
         sleep(1);
     }
     LOGI("libil2cpp.so detectada");
+    hookLogWrite("libil2cpp.so detectada");
 
     // ── Resolver APIs do il2cpp via ByNameModding ──
     Il2CppAttach("libil2cpp.so");
@@ -395,24 +427,41 @@ static void* hack_thread(void*) {
          fn_WorldToScreenPoint, fn_get_transform, fn_get_position);
 
     // ── Criar shared memory ──
+    hookLogWrite("Tentando shm... uid=%d gid=%d", getuid(), getgid());
+    hookLogWrite("PATH_1=%s PATH_2=%s", SHM_PATH_1, SHM_PATH_2);
+
+    // Tentar abrir path1
+    int testFd1 = open(SHM_PATH_1, O_RDWR);
+    hookLogWrite("open(%s, O_RDWR) = %d (errno=%d: %s)", SHM_PATH_1, testFd1, errno, strerror(errno));
+    if (testFd1 >= 0) close(testFd1);
+
+    // Tentar abrir path2
+    int testFd2 = open(SHM_PATH_2, O_RDWR);
+    hookLogWrite("open(%s, O_RDWR) = %d (errno=%d: %s)", SHM_PATH_2, testFd2, errno, strerror(errno));
+    if (testFd2 >= 0) close(testFd2);
+
     LOGI("Tentando criar shared memory... uid=%d", getuid());
     shmFd = shm_create_file();
     if (shmFd < 0) {
         LOGE("Falha ao criar shared memory: errno=%d (%s)", errno, strerror(errno));
         LOGE("uid=%d gid=%d", getuid(), getgid());
+        hookLogWrite("FALHA shm_create_file: errno=%d (%s) uid=%d", errno, strerror(errno), getuid());
         return nullptr;
     }
+    hookLogWrite("shm_create_file OK: fd=%d path=%s", shmFd, shmActivePath ? shmActivePath : "???");
 
     sharedData = shm_map(shmFd);
     if (!sharedData) {
         close(shmFd);
         LOGE("Falha ao mapear shared memory: errno=%d (%s)", errno, strerror(errno));
+        hookLogWrite("FALHA shm_map: errno=%d (%s)", errno, strerror(errno));
         return nullptr;
     }
 
     memset(sharedData, 0, sizeof(SharedESPData));
     sharedData->magic = 0xDEADF00D;  // Overlay espera isso para conectar
     LOGI("Shared memory criado em %s (magic=0xDEADF00D)", shmActivePath ? shmActivePath : "???");
+    hookLogWrite("SHM OK: path=%s magic=0xDEADF00D mmap=%p", shmActivePath ? shmActivePath : "???", sharedData);
 
     // Preencher tamanho de tela
     if (fn_Screen_get_width && fn_Screen_get_height) {
@@ -447,6 +496,7 @@ static void* hack_thread(void*) {
 
     hookActive.store(true);
     LOGI("=== HOOK ATIVO === VMT hook em %s::%s", CLS_PLAYER, MTD_ONUPDATE);
+    hookLogWrite("=== HOOK ATIVO === VMT em %s::%s", CLS_PLAYER, MTD_ONUPDATE);
 
     return nullptr;
 }
@@ -457,6 +507,7 @@ static void* hack_thread(void*) {
 __attribute__((constructor))
 void lib_main() {
     LOGI("libHook.so carregada no processo do jogo");
+    hookLogWrite("=== HOOK CARREGADO === pid=%d uid=%d", getpid(), getuid());
     pthread_t t;
     pthread_create(&t, nullptr, hack_thread, nullptr);
     pthread_detach(t);
