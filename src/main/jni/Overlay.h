@@ -1,7 +1,12 @@
 #pragma once
 
 #include <EGL/egl.h>
+#include <EGL/eglext.h>
 #include <GLES3/gl3.h>
+
+#ifndef EGL_OPENGL_ES3_BIT
+#define EGL_OPENGL_ES3_BIT 0x0040
+#endif
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
 #include <pthread.h>
