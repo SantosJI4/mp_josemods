@@ -82,6 +82,10 @@ struct Matrix4x4 { float m[16]; };
 static void (*fn_get_worldToCameraMatrix)(Matrix4x4* ret, void* camera) = nullptr;
 static void (*fn_get_projectionMatrix)(Matrix4x4* ret, void* camera) = nullptr;
 
+// Fallback: WorldToScreenPoint direto (pode travar se chamado muitas vezes)
+static Vector3 (*fn_WorldToScreenPoint)(void* camera, Vector3 pos, int eye) = nullptr;
+static bool useManualW2S = true; // true = VP matrix, false = fallback direto
+
 // il2cpp_class_get_method_from_name — resolvido direto do libil2cpp.so
 static void* (*resolve_method)(void* klass, const char* name, int argsCount) = nullptr;
 
@@ -202,20 +206,20 @@ static void Hook_OnUpdate(void* self) {
     // ── Primeiro player do frame: atualiza cache ──
     if (idx == 0) {
         g_frameId++;
-        sharedData->debugLastCall = 10; // Iniciando novo frame
+        sharedData->debugLastCall = 10;
 
         // Camera.get_main — UMA VEZ por frame
         g_cachedCamera = fn_Camera_get_main ? fn_Camera_get_main() : nullptr;
-        sharedData->debugLastCall = 11; // Camera OK
+        sharedData->debugLastCall = 11;
 
-        // VP Matrix — UMA VEZ por frame
+        // VP Matrix — UMA VEZ por frame (se disponível)
         g_vpValid = false;
-        if (g_cachedCamera && fn_get_worldToCameraMatrix && fn_get_projectionMatrix) {
+        if (useManualW2S && g_cachedCamera && fn_get_worldToCameraMatrix && fn_get_projectionMatrix) {
             Matrix4x4 viewMat, projMat;
             fn_get_worldToCameraMatrix(&viewMat, g_cachedCamera);
-            sharedData->debugLastCall = 12; // ViewMatrix OK
+            sharedData->debugLastCall = 12;
             fn_get_projectionMatrix(&projMat, g_cachedCamera);
-            sharedData->debugLastCall = 13; // ProjMatrix OK
+            sharedData->debugLastCall = 13;
             MultiplyMatrix(projMat, viewMat, g_vpMatrix);
             g_vpValid = true;
         }
@@ -228,7 +232,10 @@ static void Hook_OnUpdate(void* self) {
     }
 
     void* camera = g_cachedCamera;
-    if (!camera || !g_vpValid) return;
+    if (!camera) return;
+
+    // Precisamos de VP matrix OU WorldToScreenPoint fallback
+    if (!g_vpValid && !fn_WorldToScreenPoint) return;
 
     int screenH = sharedData->screenH;
     int screenW = sharedData->screenW;
@@ -246,12 +253,26 @@ static void Hook_OnUpdate(void* self) {
     // Sanity check
     if (std::isnan(worldPos.x) || std::isnan(worldPos.y) || std::isnan(worldPos.z)) return;
 
-    // ── WorldToScreen — MATH PURA, zero chamada il2cpp ──
     Vector3 bottomWorld(worldPos.x, worldPos.y, worldPos.z);
     Vector3 topWorld(worldPos.x, worldPos.y + 2.0f, worldPos.z);
 
-    Vector3 screenBottom = ManualWorldToScreen(bottomWorld, g_vpMatrix, screenW, screenH);
-    Vector3 screenTop = ManualWorldToScreen(topWorld, g_vpMatrix, screenW, screenH);
+    Vector3 screenBottom, screenTop;
+
+    if (g_vpValid) {
+        // ── Modo VP Matrix — MATH PURA, zero chamada il2cpp ──
+        sharedData->debugLastCall = 60 + idx;
+        screenBottom = ManualWorldToScreen(bottomWorld, g_vpMatrix, screenW, screenH);
+        screenTop = ManualWorldToScreen(topWorld, g_vpMatrix, screenW, screenH);
+    } else {
+        // ── Fallback: WorldToScreenPoint direto ──
+        // Chamado POR PLAYER — mais lento, mas funciona se VP matrix não resolve
+        sharedData->debugLastCall = 80 + idx;
+        screenBottom = fn_WorldToScreenPoint(camera, bottomWorld, 2); // MonoOrStereoscopicEye.Mono=2
+        screenTop = fn_WorldToScreenPoint(camera, topWorld, 2);
+        // Unity Y invertido
+        screenBottom.y = (float)screenH - screenBottom.y;
+        screenTop.y = (float)screenH - screenTop.y;
+    }
 
     // Verificar se está na frente da câmera
     if (screenBottom.z < 0.1f || screenTop.z < 0.1f) return;
@@ -320,6 +341,28 @@ static void* hack_thread(void*) {
         OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_CAMERA),
         OBFUSCATE(CLS_CAMERA), OBFUSCATE("get_projectionMatrix"), 0);
 
+    // Fallback: WorldToScreenPoint(Vector3 pos, MonoOrStereoscopicEye eye) — 2 args
+    fn_WorldToScreenPoint = (Vector3(*)(void*, Vector3, int)) Il2CppGetMethodOffset(
+        OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_CAMERA),
+        OBFUSCATE(CLS_CAMERA), OBFUSCATE("WorldToScreenPoint"), 2);
+    // Tentar versão com 1 arg se 2 args falhou
+    if (!fn_WorldToScreenPoint) {
+        fn_WorldToScreenPoint = (Vector3(*)(void*, Vector3, int)) Il2CppGetMethodOffset(
+            OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_CAMERA),
+            OBFUSCATE(CLS_CAMERA), OBFUSCATE("WorldToScreenPoint"), 1);
+    }
+
+    // Decidir método de W2S
+    if (fn_get_worldToCameraMatrix && fn_get_projectionMatrix) {
+        useManualW2S = true;
+        LOGI("Usando VP Matrix manual para W2S");
+    } else if (fn_WorldToScreenPoint) {
+        useManualW2S = false;
+        LOGI("VP Matrix nao disponivel, usando WorldToScreenPoint fallback");
+    } else {
+        LOGE("Nenhum metodo W2S disponivel!");
+    }
+
     fn_get_transform = (void*(*)(void*)) Il2CppGetMethodOffset(
         OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_COMPONENT),
         OBFUSCATE(CLS_COMPONENT), OBFUSCATE("get_transform"), 0);
@@ -342,9 +385,9 @@ static void* hack_thread(void*) {
              fn_Camera_get_main, fn_get_transform, fn_get_position);
         return nullptr;
     }
-    LOGI("Funções resolvidas: cam=%p viewMat=%p projMat=%p trans=%p pos=%p",
+    LOGI("Funções resolvidas: cam=%p viewMat=%p projMat=%p wts=%p trans=%p pos=%p",
          fn_Camera_get_main, fn_get_worldToCameraMatrix, fn_get_projectionMatrix,
-         fn_get_transform, fn_get_position);
+         fn_WorldToScreenPoint, fn_get_transform, fn_get_position);
 
     // ── Criar shared memory ──
     shmFd = shm_create_file();
