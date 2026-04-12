@@ -32,6 +32,7 @@
 #include <atomic>
 #include <cerrno>
 #include <cstdarg>
+#include <ctime>
 #include <android/log.h>
 
 #include "Utils.h"
@@ -250,22 +251,30 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     sharedData->magic = 0xDEADF00D;
 
     // Overlay controla se o hook processa ESP
-    // (Mas permite que overlay conecte primeiro lendo magic)
     if (!sharedData->espEnabled) return;
 
-    int idx = sharedData->playerCount;
-    if (idx >= MAX_ESP_PLAYERS || idx >= 20) return; // Limitar a 20 players
+    // ── Detectar início de novo frame por tempo ──
+    // Unity chama Update() para todos os objetos em sequência dentro do mesmo frame.
+    // Se passaram >2ms desde a última chamada, é um novo frame.
+    // Isso é independente do overlay — VP matrix SEMPRE atualiza a cada frame.
+    static long long g_lastCallMs = 0;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    long long nowMs = ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL;
+    bool newFrame = (nowMs - g_lastCallMs) > 2;
+    g_lastCallMs = nowMs;
 
-    // ── Primeiro player do frame: atualiza cache ──
-    if (idx == 0) {
+    if (newFrame) {
+        // Reset player count no HOOK, não depende do overlay
+        sharedData->playerCount = 0;
         g_frameId++;
         sharedData->debugLastCall = 10;
 
-        // Camera.get_main — UMA VEZ por frame (static: só MethodInfo*)
+        // Camera.get_main — UMA VEZ por frame
         g_cachedCamera = fn_Camera_get_main ? fn_Camera_get_main(nullptr) : nullptr;
         sharedData->debugLastCall = 11;
 
-        // VP Matrix — UMA VEZ por frame (se disponível)
+        // VP Matrix — SEMPRE atualiza (captura FOV atual: scope vs hip-fire)
         g_vpValid = false;
         if (useManualW2S && g_cachedCamera && fn_get_worldToCameraMatrix && fn_get_projectionMatrix) {
             Matrix4x4 viewMat = fn_get_worldToCameraMatrix(g_cachedCamera, nullptr);
@@ -276,12 +285,15 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
             g_vpValid = true;
         }
 
-        // Tela
-        if (sharedData->screenW <= 0 && fn_Screen_get_width && fn_Screen_get_height) {
+        // Tela (atualiza sempre — pode mudar com rotação)
+        if (fn_Screen_get_width && fn_Screen_get_height) {
             sharedData->screenW = fn_Screen_get_width(nullptr);
             sharedData->screenH = fn_Screen_get_height(nullptr);
         }
     }
+
+    int idx = sharedData->playerCount;
+    if (idx >= MAX_ESP_PLAYERS || idx >= 20) return;
 
     void* camera = g_cachedCamera;
     if (!camera) return;

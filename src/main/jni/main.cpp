@@ -246,9 +246,7 @@ void DrawESP(int screenW, int screenH) {
         }
     }
 
-    // Resetar playerCount para o hook escrever de novo no próximo frame
-    // (O hook incrementa, overlay reseta)
-    sharedData->playerCount = 0;
+    // Hook gerencia playerCount reset por frame (detecao por tempo)
     lastWriteSeq = seq;
 }
 
@@ -298,12 +296,11 @@ void DrawMenu() {
     ImVec4 textDim = ImVec4(0.55f, 0.55f, 0.55f, 1.00f);
     ImVec4 red = ImVec4(1.00f, 0.32f, 0.32f, 1.00f);
 
-    const ImVec2 windowSize = ImVec2(700, 520);
+    const ImVec2 windowSize = ImVec2(620, 400);
     ImGui::SetNextWindowSize(windowSize, ImGuiCond_Once);
-    ImGui::Begin("JAWMODS", nullptr,
-        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollbar);
+    ImGui::Begin("JAWMODS", nullptr, ImGuiWindowFlags_None);
 
-    // ── Status indicator (compact) ──
+    // ── Status ──
     bool hooked = shmConnected.load() && sharedData && sharedData->magic == 0xDEADF00D;
     if (hooked) {
         ImGui::TextColored(green, "Connected");
@@ -317,7 +314,7 @@ void DrawMenu() {
     ImGui::Separator();
     ImGui::Spacing();
 
-    // ── ESP Toggle (big) ──
+    // ── ESP Toggle ──
     ImGui::PushStyleColor(ImGuiCol_CheckMark, green);
     ImGui::Checkbox("  ESP", &esp);
     ImGui::PopStyleColor();
@@ -325,12 +322,16 @@ void DrawMenu() {
     if (esp) {
         ImGui::Spacing();
 
-        // ── Visuals ──
+        // ── Visuals (inline) ──
         ImGui::TextColored(textDim, "VISUALS");
         ImGui::Spacing();
-        ImGui::Checkbox("  Box", &drawEnemyBox);
-        ImGui::Checkbox("  Snapline", &drawSnapLine);
-        ImGui::Checkbox("  Distance", &drawDistance);
+        ImGui::PushStyleColor(ImGuiCol_CheckMark, green);
+        ImGui::Checkbox("Box", &drawEnemyBox);
+        ImGui::SameLine(0, 20);
+        ImGui::Checkbox("Snapline", &drawSnapLine);
+        ImGui::SameLine(0, 20);
+        ImGui::Checkbox("Distance", &drawDistance);
+        ImGui::PopStyleColor();
 
         ImGui::Spacing();
         ImGui::Separator();
@@ -339,11 +340,13 @@ void DrawMenu() {
         // ── Settings ──
         ImGui::TextColored(textDim, "SETTINGS");
         ImGui::Spacing();
-        ImGui::ColorEdit4("Color", (float*)&espLineColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
+        ImGui::ColorEdit4("##color", (float*)&espLineColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
         ImGui::SameLine();
         ImGui::Text("ESP Color");
-        ImGui::SliderFloat("Max Distance", &espMaxDistance, 10.0f, 999.0f, "%.0fm");
-        ImGui::SliderFloat("Line Origin", &linePositionX, 0.0f, 1.0f, "%.2f");
+        ImGui::PushItemWidth(-1);
+        ImGui::SliderFloat("##dist", &espMaxDistance, 10.0f, 999.0f, "Max Distance: %.0fm");
+        ImGui::SliderFloat("##line", &linePositionX, 0.0f, 1.0f, "Line Origin: %.2f");
+        ImGui::PopItemWidth();
     }
 
     ImGui::End();
