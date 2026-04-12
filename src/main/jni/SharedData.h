@@ -93,6 +93,10 @@ static const char* shmActivePath = nullptr;
 static char g_gameDataDir[256] = {0};
 static bool g_gameDirInit = false;
 
+// Constroi path: <gameDataDir>/<filename>
+static char g_shmGamePath[512] = {0};
+static char g_logGamePath[512] = {0};
+
 // Reseta cache para forçar re-leitura do /proc/self/cmdline
 static void resetGameDataDir() {
     g_gameDirInit = false;
@@ -127,10 +131,6 @@ static const char* getGameDataDir() {
     }
     return g_gameDataDir;
 }
-
-// Constroi path: <gameDataDir>/<filename>
-static char g_shmGamePath[512] = {0};
-static char g_logGamePath[512] = {0};
 
 static const char* getGameShmPath() {
     if (g_shmGamePath[0]) return g_shmGamePath;
