@@ -136,6 +136,8 @@ public class MainActivity extends Activity {
                 rootExec("rm -f /data/local/tmp/.esp_shm");
                 rootExec("rm -f /data/local/tmp/.hook_log /sdcard/.hook_log");
                 rootExec("rm -f /data/data/" + GAME_PACKAGE + "/.esp_shm /data/data/" + GAME_PACKAGE + "/.hook_log");
+                rootExec("setprop wrap." + GAME_PACKAGE + " \"\"");
+                rootExec("am clear-debug-app");
             }
         }).start();
     }
@@ -215,44 +217,60 @@ public class MainActivity extends Activity {
             // 6. INJETAR via wrapper script + setprop wrap
             updateStatus("Injecting hook...");
 
-            // Copiar .so para diretorio do jogo (garante acessibilidade no namespace)
+            // Garantir que o diretorio do jogo existe
+            rootExec("mkdir -p " + gameDir);
+            rootExec("chmod 711 " + gameDir);
+
+            // Copiar .so para diretorio do jogo E /data/local/tmp/
             rootExec("cp " + hookDst + " " + gameDir + "/libHook.so");
             rootExec("chmod 755 " + gameDir + "/libHook.so");
             rootExec("chcon u:object_r:app_data_file:s0 " + gameDir + "/libHook.so");
+            rootExec("chmod 755 " + hookDst);
+            rootExec("chcon u:object_r:system_data_file:s0 " + hookDst);
 
-            // Criar wrapper scripts (cada echo = uma linha separada)
-            // Script 1: usa .so do diretorio do jogo (mais confiavel)
+            // Criar wrapper script — tenta /data/local/tmp/ primeiro (sempre existe),
+            // depois game dir como fallback
             rootExec("echo '#!/system/bin/sh' > /data/local/tmp/wrap_hook.sh");
-            rootExec("echo 'export LD_PRELOAD=" + gameDir + "/libHook.so' >> /data/local/tmp/wrap_hook.sh");
+            rootExec("echo 'export LD_PRELOAD=" + hookDst + "' >> /data/local/tmp/wrap_hook.sh");
             rootExec("echo 'exec \"$@\"' >> /data/local/tmp/wrap_hook.sh");
             rootExec("chmod 755 /data/local/tmp/wrap_hook.sh");
             rootExec("chcon u:object_r:system_file:s0 /data/local/tmp/wrap_hook.sh");
 
-            // Script 2: usa .so de /data/local/tmp/ (fallback)
+            // Script 2: usa .so do game dir (fallback se namespace bloquear /data/local/tmp/)
             rootExec("echo '#!/system/bin/sh' > /data/local/tmp/wrap_hook2.sh");
-            rootExec("echo 'export LD_PRELOAD=" + hookDst + "' >> /data/local/tmp/wrap_hook2.sh");
+            rootExec("echo 'export LD_PRELOAD=" + gameDir + "/libHook.so' >> /data/local/tmp/wrap_hook2.sh");
             rootExec("echo 'exec \"$@\"' >> /data/local/tmp/wrap_hook2.sh");
             rootExec("chmod 755 /data/local/tmp/wrap_hook2.sh");
             rootExec("chcon u:object_r:system_file:s0 /data/local/tmp/wrap_hook2.sh");
 
-            // Habilitar debug mode (necessario para wrap em Android 10+)
-            rootExec("am set-debug-app " + GAME_PACKAGE);
+            // Habilitar debug mode PERSISTENTE (necessario para wrap em Android 10+)
+            // --persistent garante que nao e limpo apos primeiro launch
+            rootExec("am set-debug-app --persistent " + GAME_PACKAGE);
             // Se Magisk: resetprop para garantir debuggable
             rootExec("resetprop ro.debuggable 1 2>/dev/null");
+            // KernelSU/APatch: ksud como fallback
+            rootExec("ksud debug-setprop ro.debuggable 1 2>/dev/null");
 
             // Limpar wrap anterior
             rootExec("setprop wrap." + GAME_PACKAGE + " \"\"");
-            Thread.sleep(300);
+            Thread.sleep(500);
 
-            // Setar wrap property para o script (usa .so do game dir)
+            // Setar wrap property — usa /data/local/tmp/libHook.so (sempre existe)
             rootExec("setprop wrap." + GAME_PACKAGE + " /data/local/tmp/wrap_hook.sh");
+
+            // Verificar se property foi setado
+            String wrapCheck = rootExec("getprop wrap." + GAME_PACKAGE);
+            if (wrapCheck == null || !wrapCheck.contains("wrap_hook")) {
+                // Fallback: tentar setprop via resetprop (Magisk)
+                rootExec("resetprop wrap." + GAME_PACKAGE + " /data/local/tmp/wrap_hook.sh 2>/dev/null");
+            }
 
             // Limpar logcat para diagnostico limpo
             rootExec("logcat -c 2>/dev/null");
 
             // Kill e reiniciar o jogo (UMA VEZ so)
             rootExec("am force-stop " + GAME_PACKAGE);
-            Thread.sleep(1000);
+            Thread.sleep(1500);
 
             final String launcherAct = getLauncherActivity(GAME_PACKAGE);
             if (launcherAct != null && launcherAct.length() > 1) {
@@ -314,28 +332,67 @@ public class MainActivity extends Activity {
             // 8. Limpar wrap property
             rootExec("setprop wrap." + GAME_PACKAGE + " \"\"");
 
-            // 9. Se metodo 1 falhou, tentar script com path alternativo (sem reiniciar jogo)
+            // 9. Se metodo 1 falhou, tentar wrap_hook2.sh (game dir path) + reiniciar
             if (!hookOk) {
-                // Tentar attach-agent no processo rodando (nao mata o jogo)
+                updateStatus("Retry with alt path...");
+                rootExec("am set-debug-app --persistent " + GAME_PACKAGE);
+                rootExec("setprop wrap." + GAME_PACKAGE + " /data/local/tmp/wrap_hook2.sh");
+                rootExec("am force-stop " + GAME_PACKAGE);
+                Thread.sleep(1500);
+                if (launcherAct != null && launcherAct.length() > 1) {
+                    rootExec("am start -n " + GAME_PACKAGE + "/" + launcherAct);
+                } else {
+                    rootExec("monkey -p " + GAME_PACKAGE + " -c android.intent.category.LAUNCHER 1");
+                }
+
+                for (int r = 0; r < 20; r++) {
+                    Thread.sleep(1000);
+                    String hookLog2 = rootExec("cat /data/local/tmp/.hook_log 2>/dev/null");
+                    if (hookLog2 == null || hookLog2.trim().isEmpty()) {
+                        hookLog2 = rootExec("cat " + gameDir + "/.hook_log 2>/dev/null");
+                    }
+                    if (hookLog2 != null && (hookLog2.contains("HOOK ATIVO") || hookLog2.contains("HOOK CARREGADO"))) {
+                        hookOk = true;
+                        break;
+                    }
+                    String pidR = rootExec("pidof " + GAME_PACKAGE);
+                    if (pidR != null && !pidR.trim().isEmpty()) {
+                        String m = rootExec("grep -c libHook.so /proc/" + pidR.trim().split("\\s+")[0] + "/maps 2>/dev/null");
+                        if (m != null && !"0".equals(m.trim()) && m.trim().length() > 0) {
+                            hookOk = true;
+                            break;
+                        }
+                    }
+                    final int sec2 = r + 1;
+                    updateStatus("Retry alt... (" + sec2 + "s)");
+                }
+                rootExec("setprop wrap." + GAME_PACKAGE + " \"\"");
+            }
+
+            // 10. Se ainda falhou, tentar attach-agent no processo rodando
+            if (!hookOk) {
                 String pidResult = rootExec("pidof " + GAME_PACKAGE);
                 if (pidResult != null && !pidResult.trim().isEmpty()) {
                     final String gamePid = pidResult.trim().split("\\s+")[0];
-                    updateStatus("Retrying injection...");
+                    updateStatus("Attach-agent injection...");
 
-                    // Limpar hook log do game dir
+                    // Limpar hook log
                     rootExec("echo '' > " + gameDir + "/.hook_log 2>/dev/null");
-                    rootExec("chmod 666 " + gameDir + "/.hook_log 2>/dev/null");
+                    rootExec("echo '' > /data/local/tmp/.hook_log 2>/dev/null");
 
-                    // attach-agent injeta via dlopen (Android 9+)
-                    rootExec("cmd activity attach-agent " + gamePid + " " + gameDir + "/libHook.so");
+                    // Tentar attach com ambos os paths
+                    rootExec("cmd activity attach-agent " + gamePid + " " + hookDst);
+                    if ("0".equals(rootExec("grep -c libHook.so /proc/" + gamePid + "/maps 2>/dev/null"))) {
+                        rootExec("cmd activity attach-agent " + gamePid + " " + gameDir + "/libHook.so");
+                    }
 
                     for (int j = 0; j < 15; j++) {
                         Thread.sleep(1000);
-                        String hookLog2 = rootExec("cat " + gameDir + "/.hook_log 2>/dev/null");
-                        if (hookLog2 == null || hookLog2.trim().isEmpty()) {
-                            hookLog2 = rootExec("cat /data/local/tmp/.hook_log 2>/dev/null");
+                        String hookLog3 = rootExec("cat /data/local/tmp/.hook_log 2>/dev/null");
+                        if (hookLog3 == null || hookLog3.trim().isEmpty()) {
+                            hookLog3 = rootExec("cat " + gameDir + "/.hook_log 2>/dev/null");
                         }
-                        if (hookLog2 != null && (hookLog2.contains("HOOK ATIVO") || hookLog2.contains("HOOK CARREGADO"))) {
+                        if (hookLog3 != null && (hookLog3.contains("HOOK ATIVO") || hookLog3.contains("HOOK CARREGADO"))) {
                             hookOk = true;
                             break;
                         }
@@ -344,8 +401,8 @@ public class MainActivity extends Activity {
                             hookOk = true;
                             break;
                         }
-                        final int sec = j + 1;
-                        updateStatus("Retrying... (" + sec + "s)");
+                        final int sec3 = j + 1;
+                        updateStatus("Attach... (" + sec3 + "s)");
                     }
                 }
             }
