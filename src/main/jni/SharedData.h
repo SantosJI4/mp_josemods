@@ -91,7 +91,7 @@ static const char* shmActivePath = nullptr;
 // Game data dir — hardcode o package pois /proc/self/cmdline nao e confiavel
 // (no constructor ainda e 'app_process64' do zygote)
 #ifndef HOOK_GAME_PACKAGE
-#define HOOK_GAME_PACKAGE "com.fungames.sniper3d"
+#define HOOK_GAME_PACKAGE "com.dts.freefireth"
 #endif
 
 static char g_gameDataDir[256] = {0};

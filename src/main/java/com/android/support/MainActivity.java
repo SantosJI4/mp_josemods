@@ -25,7 +25,7 @@ public class MainActivity extends Activity {
     // ══════════════════════════════════════
     // MUDE AQUI: Package name do jogo
     // ══════════════════════════════════════
-    private static final String GAME_PACKAGE = "com.fungames.sniper3d";
+    private static final String GAME_PACKAGE = "com.dts.freefireth";
 
     private TextView tvStatus;
     private ProgressBar progressInject;

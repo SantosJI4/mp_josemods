@@ -63,7 +63,7 @@ static std::atomic<bool> shmConnected{false};
 static uint32_t lastWriteSeq = 0;
 
 // Game package — para encontrar SHM no data dir do jogo
-#define GAME_PACKAGE "com.fungames.sniper3d"
+#define GAME_PACKAGE "com.dts.freefireth"
 
 // ============================================================
 // SharedMemory Reader — Conecta ao arquivo criado pelo hook

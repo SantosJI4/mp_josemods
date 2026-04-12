@@ -45,7 +45,7 @@
 #include "ByNameModding/Il2Cpp.h"
 
 #define HOOK_TAG "GameHook"
-#define HOOK_BUILD_VER "v7-fixed-abi"
+#define HOOK_BUILD_VER "v8-freefire"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, HOOK_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, HOOK_TAG, __VA_ARGS__)
 
@@ -94,11 +94,11 @@ static void hookLogWrite(const char* fmt, ...) {
 // Se os nomes estão obfuscados no seu jogo, troque aqui
 // ============================================================
 #define ASSEMBLY_CS   "Assembly-CSharp.dll"
-#define ASSEMBLY_UE   "UnityEngine.dll"
+#define ASSEMBLY_UE   "UnityEngine.CoreModule.dll"
 
-#define NS_PLAYER     ""                    // namespace do PersonTarget
-#define CLS_PLAYER    "PersonTarget"        // nome da classe
-#define MTD_ONUPDATE  "Update"              // método hookado
+#define NS_PLAYER     "COW.GamePlay"        // namespace do Player
+#define CLS_PLAYER    "Player"              // nome da classe
+#define MTD_ONUPDATE  "LateUpdate"          // método hookado
 
 #define NS_CAMERA     "UnityEngine"
 #define CLS_CAMERA    "Camera"
