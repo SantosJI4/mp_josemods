@@ -119,21 +119,10 @@ static const char* getGameLogPath() {
 }
 
 // Cria/abre shared memory (hook no jogo — roda como UID do app)
-// Tenta: 1) data dir do jogo, 2) /data/local/tmp/, 3) /sdcard/
+// Tenta: 1) /data/local/tmp/ (PROVADO funcionar), 2) data dir do jogo, 3) /sdcard/
 static int shm_create_file() {
-    // PRIMARIO: diretorio de dados do jogo (sempre acessivel pelo app)
-    const char* gamePath = getGameShmPath();
-    if (gamePath[0]) {
-        int fd = open(gamePath, O_RDWR);
-        if (fd < 0) fd = open(gamePath, O_CREAT | O_RDWR, 0666);
-        if (fd >= 0) {
-            ftruncate(fd, SHARED_MEM_SIZE);
-            shmActivePath = gamePath;
-            return fd;
-        }
-    }
-
-    // Fallback 1: pre-criado pelo app
+    // PRIMARIO: /data/local/tmp/ — pre-criado pelo overlay com chmod 666
+    // Este e o path que o hook COMPROVOU funcionar (fd=196 no logcat)
     int fd = open(SHM_PATH_1, O_RDWR);
     if (fd >= 0) {
         ftruncate(fd, SHARED_MEM_SIZE);
@@ -145,6 +134,18 @@ static int shm_create_file() {
         ftruncate(fd, SHARED_MEM_SIZE);
         shmActivePath = SHM_PATH_1;
         return fd;
+    }
+
+    // Fallback 1: diretorio de dados do jogo
+    const char* gamePath = getGameShmPath();
+    if (gamePath[0]) {
+        fd = open(gamePath, O_RDWR);
+        if (fd < 0) fd = open(gamePath, O_CREAT | O_RDWR, 0666);
+        if (fd >= 0) {
+            ftruncate(fd, SHARED_MEM_SIZE);
+            shmActivePath = gamePath;
+            return fd;
+        }
     }
 
     // Fallback 2: /sdcard/

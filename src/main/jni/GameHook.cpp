@@ -445,26 +445,15 @@ static void* hack_thread(void*) {
          fn_WorldToScreenPoint, fn_get_transform, fn_get_position);
 
     // ── Criar shared memory ──
-    const char* gameDir = getGameDataDir();
-    const char* gameShmPath = getGameShmPath();
-    hookLogWrite("Game data dir: %s", gameDir[0] ? gameDir : "N/A");
+    // IMPORTANTE: usar /data/local/tmp/ como PRIMARIO
+    // O overlay tambem tenta /data/local/tmp/ PRIMEIRO
+    // O game dir falha quando /proc/self/cmdline retorna zygote
     hookLogWrite("Tentando shm... uid=%d gid=%d", getuid(), getgid());
-    hookLogWrite("Game SHM path: %s", gameShmPath[0] ? gameShmPath : "N/A");
-    hookLogWrite("Fallback paths: %s, %s", SHM_PATH_1, SHM_PATH_2);
+    hookLogWrite("Paths: %s, /data/data/%s/%s, %s", SHM_PATH_1, HOOK_GAME_PACKAGE, SHM_FILENAME, SHM_PATH_2);
 
-    // Testar acesso ao dir do jogo
-    if (gameShmPath[0]) {
-        int testFd = open(gameShmPath, O_RDWR);
-        if (testFd < 0) testFd = open(gameShmPath, O_CREAT | O_RDWR, 0666);
-        hookLogWrite("open(gameDir) = %d (errno=%d: %s)", testFd, errno, strerror(errno));
-        if (testFd >= 0) close(testFd);
-    }
-
-    LOGI("Tentando criar shared memory... uid=%d gameDir=%s", getuid(), gameDir);
     shmFd = shm_create_file();
     if (shmFd < 0) {
         LOGE("Falha ao criar shared memory: errno=%d (%s)", errno, strerror(errno));
-        LOGE("uid=%d gid=%d", getuid(), getgid());
         hookLogWrite("FALHA shm_create_file: errno=%d (%s) uid=%d", errno, strerror(errno), getuid());
         return nullptr;
     }

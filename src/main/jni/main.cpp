@@ -76,10 +76,11 @@ static char shmStatus[256] = "Iniciando...";
 void* shmReaderLoop(void*) {
     int attempt = 0;
 
-    // Paths para tentar (game dir primeiro)
+    // Paths para tentar: /data/local/tmp/ PRIMEIRO (o hook comprovou que funciona la)
+    // game dir como fallback (pode falhar por SELinux/namespace)
     char gameShmPath[512];
     snprintf(gameShmPath, sizeof(gameShmPath), "/data/data/%s/%s", GAME_PACKAGE, SHM_FILENAME);
-    const char* paths[] = { gameShmPath, SHM_PATH_1, SHM_PATH_2 };
+    const char* paths[] = { SHM_PATH_1, gameShmPath, SHM_PATH_2 };
     const int numPaths = 3;
 
     while (readerRunning.load()) {
@@ -254,9 +255,10 @@ static void readHookLog() {
     if (now - hookLogLastRead < 2) return;
     hookLogLastRead = now;
 
+    // Paths: /data/local/tmp/ PRIMEIRO (onde o hook escreve)
     char gameLogPath[512];
     snprintf(gameLogPath, sizeof(gameLogPath), "/data/data/%s/%s", GAME_PACKAGE, HOOKLOG_FILENAME);
-    const char* paths[] = { gameLogPath, HOOK_LOG_PATH_1, HOOK_LOG_PATH_2 };
+    const char* paths[] = { HOOK_LOG_PATH_1, gameLogPath, HOOK_LOG_PATH_2 };
     for (int i = 0; i < 3; i++) {
         int fd = open(paths[i], O_RDONLY);
         if (fd >= 0) {
