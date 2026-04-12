@@ -158,55 +158,63 @@ public class MainActivity extends Activity {
 
             // 2. SELinux permissive
             rootExec("setenforce 0");
-            updateStatus("Preparing environment...");
+            updateStatus("Preparing...");
 
-            // 3. Copiar libHook.so
+            // 3. Copiar libHook.so para todos os locais possiveis
             final String nativeLibDir = getApplicationInfo().nativeLibraryDir;
             final String hookSrc = nativeLibDir + "/libHook.so";
             final String hookDst = "/data/local/tmp/libHook.so";
+            final String gameDir = "/data/data/" + GAME_PACKAGE;
 
             if (!new File(hookSrc).exists()) {
                 updateStatus("Hook library not found");
                 resetButton();
                 return;
             }
+
             rootExec("cp " + hookSrc + " " + hookDst);
-            rootExec("chmod 777 " + hookDst);
+            rootExec("chmod 755 " + hookDst);
             rootExec("chcon u:object_r:system_lib_file:s0 " + hookDst);
-            updateStatus("Copying libraries...");
 
-            // 4. Pre-criar shared memory + hook log
-            // IMPORTANTE: so criar em /data/local/tmp/ (UNICO path confiavel)
-            // O hook confirmou que pode escrever la (fd=196)
-            // O overlay tambem pode ler de la
-            // NÃO criar no game dir — isso causa SHM mismatch
-            final String gameDir = "/data/data/" + GAME_PACKAGE;
-
-            // DELETAR qualquer SHM stale no game dir para evitar que o overlay conecte nele
-            rootExec("rm -f " + gameDir + "/.esp_shm");
-            rootExec("rm -f /data/user/0/" + GAME_PACKAGE + "/.esp_shm 2>/dev/null");
-
-            // Hook log no game dir ainda e util (hook pode escrever por ser owner)
+            rootExec("mkdir -p " + gameDir);
             rootExec("chmod 711 " + gameDir);
-            rootExec("chmod 711 /data/user/0/" + GAME_PACKAGE + " 2>/dev/null");
-            rootExec("rm -f " + gameDir + "/.hook_log");
-            rootExec("touch " + gameDir + "/.hook_log; chmod 666 " + gameDir + "/.hook_log; chcon u:object_r:app_data_file:s0 " + gameDir + "/.hook_log");
+            rootExec("cp " + hookDst + " " + gameDir + "/libHook.so");
+            rootExec("chmod 755 " + gameDir + "/libHook.so");
+            rootExec("chcon u:object_r:app_data_file:s0 " + gameDir + "/libHook.so");
 
-            // PRIMARIO: /data/local/tmp/ — UNICO path para SHM
-            rootExec("rm -f /data/local/tmp/.esp_shm");
+            // 4. Pre-criar SHM + hook log em todos os paths
+            rootExec("rm -f /data/local/tmp/.esp_shm /data/local/tmp/.hook_log");
             rootExec("dd if=/dev/zero of=/data/local/tmp/.esp_shm bs=4096 count=1 2>/dev/null");
-            rootExec("chmod 666 /data/local/tmp/.esp_shm");
-            rootExec("chcon u:object_r:app_data_file:s0 /data/local/tmp/.esp_shm");
-            rootExec("rm -f /data/local/tmp/.hook_log");
+            rootExec("chmod 666 /data/local/tmp/.esp_shm; chcon u:object_r:app_data_file:s0 /data/local/tmp/.esp_shm");
             rootExec("touch /data/local/tmp/.hook_log; chmod 666 /data/local/tmp/.hook_log; chcon u:object_r:app_data_file:s0 /data/local/tmp/.hook_log");
 
-            // Fallback: /sdcard/
+            rootExec("rm -f " + gameDir + "/.esp_shm " + gameDir + "/.hook_log");
+            rootExec("touch " + gameDir + "/.hook_log; chmod 666 " + gameDir + "/.hook_log; chcon u:object_r:app_data_file:s0 " + gameDir + "/.hook_log");
+
             rootExec("rm -f /sdcard/.esp_shm /sdcard/.hook_log");
             rootExec("dd if=/dev/zero of=/sdcard/.esp_shm bs=4096 count=1 2>/dev/null");
             rootExec("chmod 666 /sdcard/.esp_shm");
             rootExec("touch /sdcard/.hook_log; chmod 666 /sdcard/.hook_log");
 
-            // 5. Iniciar overlay ANTES da injecao (para estar pronto)
+            // 5. Garantir debuggable por TODOS os metodos possiveis
+            rootExec("resetprop ro.debuggable 1 2>/dev/null");
+            rootExec("magiskpolicy --live 'allow untrusted_app untrusted_app process { ptrace }' 2>/dev/null");
+            rootExec("magiskpolicy --live 'allow system_server untrusted_app process { ptrace }' 2>/dev/null");
+            rootExec("settings put global debug_app " + GAME_PACKAGE + " 2>/dev/null");
+            rootExec("am set-debug-app --persistent " + GAME_PACKAGE);
+
+            // 6. Criar wrap scripts
+            rootExec("echo '#!/system/bin/sh' > /data/local/tmp/wrap_hook.sh");
+            rootExec("echo 'export LD_PRELOAD=" + hookDst + "' >> /data/local/tmp/wrap_hook.sh");
+            rootExec("echo 'exec \"$@\"' >> /data/local/tmp/wrap_hook.sh");
+            rootExec("chmod 755 /data/local/tmp/wrap_hook.sh; chcon u:object_r:system_file:s0 /data/local/tmp/wrap_hook.sh");
+
+            rootExec("echo '#!/system/bin/sh' > /data/local/tmp/wrap_hook2.sh");
+            rootExec("echo 'export LD_PRELOAD=" + gameDir + "/libHook.so' >> /data/local/tmp/wrap_hook2.sh");
+            rootExec("echo 'exec \"$@\"' >> /data/local/tmp/wrap_hook2.sh");
+            rootExec("chmod 755 /data/local/tmp/wrap_hook2.sh; chcon u:object_r:system_file:s0 /data/local/tmp/wrap_hook2.sh");
+
+            // 7. Iniciar overlay
             runOnUi(new Runnable() {
                 @Override
                 public void run() {
@@ -214,203 +222,134 @@ public class MainActivity extends Activity {
                 }
             });
 
-            // 6. INJETAR via wrapper script + setprop wrap
-            updateStatus("Injecting hook...");
+            // 8. Resolver launcher activity
+            final String launcherAct = getLauncherActivity(GAME_PACKAGE);
 
-            // Garantir que o diretorio do jogo existe
-            rootExec("mkdir -p " + gameDir);
-            rootExec("chmod 711 " + gameDir);
-
-            // Copiar .so para diretorio do jogo E /data/local/tmp/
-            rootExec("cp " + hookDst + " " + gameDir + "/libHook.so");
-            rootExec("chmod 755 " + gameDir + "/libHook.so");
-            rootExec("chcon u:object_r:app_data_file:s0 " + gameDir + "/libHook.so");
-            rootExec("chmod 755 " + hookDst);
-            rootExec("chcon u:object_r:system_data_file:s0 " + hookDst);
-
-            // Criar wrapper script — tenta /data/local/tmp/ primeiro (sempre existe),
-            // depois game dir como fallback
-            rootExec("echo '#!/system/bin/sh' > /data/local/tmp/wrap_hook.sh");
-            rootExec("echo 'export LD_PRELOAD=" + hookDst + "' >> /data/local/tmp/wrap_hook.sh");
-            rootExec("echo 'exec \"$@\"' >> /data/local/tmp/wrap_hook.sh");
-            rootExec("chmod 755 /data/local/tmp/wrap_hook.sh");
-            rootExec("chcon u:object_r:system_file:s0 /data/local/tmp/wrap_hook.sh");
-
-            // Script 2: usa .so do game dir (fallback se namespace bloquear /data/local/tmp/)
-            rootExec("echo '#!/system/bin/sh' > /data/local/tmp/wrap_hook2.sh");
-            rootExec("echo 'export LD_PRELOAD=" + gameDir + "/libHook.so' >> /data/local/tmp/wrap_hook2.sh");
-            rootExec("echo 'exec \"$@\"' >> /data/local/tmp/wrap_hook2.sh");
-            rootExec("chmod 755 /data/local/tmp/wrap_hook2.sh");
-            rootExec("chcon u:object_r:system_file:s0 /data/local/tmp/wrap_hook2.sh");
-
-            // Habilitar debug mode PERSISTENTE (necessario para wrap em Android 10+)
-            // --persistent garante que nao e limpo apos primeiro launch
-            rootExec("am set-debug-app --persistent " + GAME_PACKAGE);
-            // Se Magisk: resetprop para garantir debuggable
-            rootExec("resetprop ro.debuggable 1 2>/dev/null");
-            // KernelSU/APatch: ksud como fallback
-            rootExec("ksud debug-setprop ro.debuggable 1 2>/dev/null");
-
-            // Limpar wrap anterior
+            // ═══════════════════════════════════════════
+            // METODO 1: WRAP PROPERTY (LD_PRELOAD)
+            // Funciona se ro.debuggable=1 ou set-debug-app
+            // ═══════════════════════════════════════════
+            updateStatus("Method 1: wrap property...");
+            rootExec("logcat -c 2>/dev/null");
             rootExec("setprop wrap." + GAME_PACKAGE + " \"\"");
-            Thread.sleep(500);
-
-            // Setar wrap property — usa /data/local/tmp/libHook.so (sempre existe)
+            Thread.sleep(300);
             rootExec("setprop wrap." + GAME_PACKAGE + " /data/local/tmp/wrap_hook.sh");
 
-            // Verificar se property foi setado
-            String wrapCheck = rootExec("getprop wrap." + GAME_PACKAGE);
-            if (wrapCheck == null || !wrapCheck.contains("wrap_hook")) {
-                // Fallback: tentar setprop via resetprop (Magisk)
+            // Verificar se property pegou
+            String propVal = rootExec("getprop wrap." + GAME_PACKAGE);
+            if (propVal == null || !propVal.contains("wrap_hook")) {
                 rootExec("resetprop wrap." + GAME_PACKAGE + " /data/local/tmp/wrap_hook.sh 2>/dev/null");
             }
 
-            // Limpar logcat para diagnostico limpo
-            rootExec("logcat -c 2>/dev/null");
-
-            // Kill e reiniciar o jogo (UMA VEZ so)
+            // Matar e reiniciar o jogo
             rootExec("am force-stop " + GAME_PACKAGE);
             Thread.sleep(1500);
+            startGame(launcherAct);
 
-            final String launcherAct = getLauncherActivity(GAME_PACKAGE);
-            if (launcherAct != null && launcherAct.length() > 1) {
-                rootExec("am start -n " + GAME_PACKAGE + "/" + launcherAct);
-            } else {
-                rootExec("monkey -p " + GAME_PACKAGE + " -c android.intent.category.LAUNCHER 1");
-            }
-
-            updateStatus("Waiting for hook...");
-
-            // 7. Aguardar hook carregar — checa game dir + fallbacks
-            boolean hookOk = false;
-            for (int i = 0; i < 30; i++) {
-                Thread.sleep(1000);
-
-                // Ler hook log (game dir primeiro, depois fallbacks)
-                String hookLog = rootExec("cat " + gameDir + "/.hook_log 2>/dev/null");
-                if (hookLog == null || hookLog.trim().isEmpty()) {
-                    hookLog = rootExec("cat /data/local/tmp/.hook_log 2>/dev/null");
-                }
-                if (hookLog == null || hookLog.trim().isEmpty()) {
-                    hookLog = rootExec("cat /sdcard/.hook_log 2>/dev/null");
-                }
-
-                // HOOK CARREGADO ou HOOK ATIVO = sucesso
-                if (hookLog != null && (hookLog.contains("HOOK ATIVO") || hookLog.contains("HOOK CARREGADO"))) {
-                    hookOk = true;
-                    break;
-                }
-
-                // Verificar PID e maps
-                String pidResult = rootExec("pidof " + GAME_PACKAGE);
-                if (pidResult != null && !pidResult.trim().isEmpty()) {
-                    final String gamePid = pidResult.trim().split("\\s+")[0];
-                    String maps = rootExec("grep -c libHook.so /proc/" + gamePid + "/maps 2>/dev/null");
-                    final String mapsInfo = (maps != null) ? maps.trim() : "0";
-
-                    // Se hook esta nos maps mas nao escreveu log, pode estar carregando
-                    if (!"0".equals(mapsInfo) && mapsInfo.length() > 0) {
-                        // Hook esta carregado! Esperar mais um pouco
-                        if (i > 15) {
-                            hookOk = true; // Nos maps = carregou
-                            break;
-                        }
-                    }
-
-                    final int sec = i + 1;
-                    String logTail = "";
-                    if (hookLog != null && hookLog.length() > 0) {
-                        logTail = hookLog.length() > 150 ? hookLog.substring(hookLog.length() - 150) : hookLog;
-                    }
-                    updateStatus("Injecting... (" + sec + "s)");
-                } else {
-                    final int sec = i + 1;
-                    updateStatus("Starting game... (" + sec + "s)");
-                }
-            }
-
-            // 8. Limpar wrap property
+            // Aguardar hook (max 25s)
+            boolean hookOk = waitForHook(gameDir, 25);
             rootExec("setprop wrap." + GAME_PACKAGE + " \"\"");
 
-            // 9. Se metodo 1 falhou, tentar wrap_hook2.sh (game dir path) + reiniciar
+            // ═══════════════════════════════════════════
+            // METODO 2: WRAP com path alternativo
+            // ═══════════════════════════════════════════
             if (!hookOk) {
-                updateStatus("Retry with alt path...");
-                rootExec("am set-debug-app --persistent " + GAME_PACKAGE);
+                updateStatus("Method 2: alt wrap path...");
                 rootExec("setprop wrap." + GAME_PACKAGE + " /data/local/tmp/wrap_hook2.sh");
                 rootExec("am force-stop " + GAME_PACKAGE);
                 Thread.sleep(1500);
-                if (launcherAct != null && launcherAct.length() > 1) {
-                    rootExec("am start -n " + GAME_PACKAGE + "/" + launcherAct);
-                } else {
-                    rootExec("monkey -p " + GAME_PACKAGE + " -c android.intent.category.LAUNCHER 1");
-                }
-
-                for (int r = 0; r < 20; r++) {
-                    Thread.sleep(1000);
-                    String hookLog2 = rootExec("cat /data/local/tmp/.hook_log 2>/dev/null");
-                    if (hookLog2 == null || hookLog2.trim().isEmpty()) {
-                        hookLog2 = rootExec("cat " + gameDir + "/.hook_log 2>/dev/null");
-                    }
-                    if (hookLog2 != null && (hookLog2.contains("HOOK ATIVO") || hookLog2.contains("HOOK CARREGADO"))) {
-                        hookOk = true;
-                        break;
-                    }
-                    String pidR = rootExec("pidof " + GAME_PACKAGE);
-                    if (pidR != null && !pidR.trim().isEmpty()) {
-                        String m = rootExec("grep -c libHook.so /proc/" + pidR.trim().split("\\s+")[0] + "/maps 2>/dev/null");
-                        if (m != null && !"0".equals(m.trim()) && m.trim().length() > 0) {
-                            hookOk = true;
-                            break;
-                        }
-                    }
-                    final int sec2 = r + 1;
-                    updateStatus("Retry alt... (" + sec2 + "s)");
-                }
+                startGame(launcherAct);
+                hookOk = waitForHook(gameDir, 20);
                 rootExec("setprop wrap." + GAME_PACKAGE + " \"\"");
             }
 
-            // 10. Se ainda falhou, tentar attach-agent no processo rodando
+            // ═══════════════════════════════════════════
+            // METODO 3: ATTACH-AGENT (dlopen no processo)
+            // Mais confiavel para jogos com anti-cheat
+            // ═══════════════════════════════════════════
             if (!hookOk) {
-                String pidResult = rootExec("pidof " + GAME_PACKAGE);
-                if (pidResult != null && !pidResult.trim().isEmpty()) {
-                    final String gamePid = pidResult.trim().split("\\s+")[0];
-                    updateStatus("Attach-agent injection...");
+                updateStatus("Method 3: attach-agent...");
+                // Garantir que o jogo esteja rodando (nao matar se ja esta)
+                String pid = rootExec("pidof " + GAME_PACKAGE);
+                if (pid == null || pid.trim().isEmpty()) {
+                    startGame(launcherAct);
+                    Thread.sleep(3000);
+                    pid = rootExec("pidof " + GAME_PACKAGE);
+                }
 
-                    // Limpar hook log
-                    rootExec("echo '' > " + gameDir + "/.hook_log 2>/dev/null");
+                if (pid != null && !pid.trim().isEmpty()) {
+                    final String gamePid = pid.trim().split("\\s+")[0];
+
+                    // Esperar o jogo carregar libil2cpp.so (indica Unity pronto)
+                    updateStatus("Waiting for game to load...");
+                    for (int w = 0; w < 30; w++) {
+                        String il2cpp = rootExec("grep -c libil2cpp.so /proc/" + gamePid + "/maps 2>/dev/null");
+                        if (il2cpp != null && !"0".equals(il2cpp.trim())) {
+                            break;
+                        }
+                        Thread.sleep(1000);
+                        updateStatus("Loading game... (" + (w+1) + "s)");
+                    }
+                    Thread.sleep(2000); // Extra time for il2cpp init
+
+                    // Limpar logs
                     rootExec("echo '' > /data/local/tmp/.hook_log 2>/dev/null");
+                    rootExec("echo '' > " + gameDir + "/.hook_log 2>/dev/null");
 
-                    // Tentar attach com ambos os paths
-                    rootExec("cmd activity attach-agent " + gamePid + " " + hookDst);
-                    if ("0".equals(rootExec("grep -c libHook.so /proc/" + gamePid + "/maps 2>/dev/null"))) {
-                        rootExec("cmd activity attach-agent " + gamePid + " " + gameDir + "/libHook.so");
+                    // Tentar attach-agent com ambos os paths
+                    updateStatus("Attaching agent...");
+                    rootExec("cmd activity attach-agent " + gamePid + " " + hookDst + " 2>/dev/null");
+                    Thread.sleep(1000);
+
+                    if (!isHookInMaps(gamePid)) {
+                        rootExec("cmd activity attach-agent " + gamePid + " " + gameDir + "/libHook.so 2>/dev/null");
+                        Thread.sleep(1000);
                     }
 
-                    for (int j = 0; j < 15; j++) {
-                        Thread.sleep(1000);
-                        String hookLog3 = rootExec("cat /data/local/tmp/.hook_log 2>/dev/null");
-                        if (hookLog3 == null || hookLog3.trim().isEmpty()) {
-                            hookLog3 = rootExec("cat " + gameDir + "/.hook_log 2>/dev/null");
-                        }
-                        if (hookLog3 != null && (hookLog3.contains("HOOK ATIVO") || hookLog3.contains("HOOK CARREGADO"))) {
-                            hookOk = true;
-                            break;
-                        }
-                        String m = rootExec("grep -c libHook.so /proc/" + gamePid + "/maps 2>/dev/null");
-                        if (m != null && !"0".equals(m.trim()) && m.trim().length() > 0) {
-                            hookOk = true;
-                            break;
-                        }
-                        final int sec3 = j + 1;
-                        updateStatus("Attach... (" + sec3 + "s)");
+                    hookOk = waitForHook(gameDir, 15);
+                }
+            }
+
+            // ═══════════════════════════════════════════
+            // METODO 4: INJECT VIA SHELL (last resort)
+            // Usa su para executar dlopen dentro do namespace
+            // ═══════════════════════════════════════════
+            if (!hookOk) {
+                updateStatus("Method 4: direct inject...");
+                String pid = rootExec("pidof " + GAME_PACKAGE);
+                if (pid != null && !pid.trim().isEmpty()) {
+                    final String gamePid = pid.trim().split("\\s+")[0];
+
+                    // Tentar via nsenter (entra no namespace do jogo)
+                    rootExec("nsenter -t " + gamePid + " -m -- cat /proc/self/maps > /dev/null 2>&1");
+
+                    // Injetar via linker cache trick: copiar .so para o cache do linker do jogo
+                    rootExec("cp " + hookDst + " /data/local/tmp/libHook_inject.so");
+                    rootExec("chmod 755 /data/local/tmp/libHook_inject.so");
+
+                    // attach-agent com path absoluto via /proc/<pid>/root/
+                    rootExec("cmd activity attach-agent " + gamePid + " /proc/" + gamePid + "/root" + hookDst + " 2>/dev/null");
+                    Thread.sleep(1000);
+
+                    // Verificar via logcat tambem
+                    String logcatHook = rootExec("logcat -d -s HOOK 2>/dev/null | tail -5");
+                    if (logcatHook != null && (logcatHook.contains("libHook") || logcatHook.contains("HOOK CARREGADO"))) {
+                        hookOk = true;
+                    }
+
+                    if (!hookOk) {
+                        hookOk = waitForHook(gameDir, 10);
                     }
                 }
             }
 
-            // 10. Status final
+            // Limpar wrap property
+            rootExec("setprop wrap." + GAME_PACKAGE + " \"\"");
+
+            // Status final com diagnosticos
             if (hookOk) {
                 showLoading(false);
-                updateStatus("Injected successfully");
+                updateStatus("Injected successfully!");
                 runOnUi(new Runnable() {
                     @Override
                     public void run() {
@@ -418,7 +357,9 @@ public class MainActivity extends Activity {
                     }
                 });
             } else {
-                updateStatus("Injection failed. Retry?");
+                // Mostrar diagnosticos ao usuario
+                String diag = getDiagnostics(gameDir);
+                updateStatus("Injection failed.\n" + diag);
             }
 
             resetButton();
@@ -427,6 +368,89 @@ public class MainActivity extends Activity {
             updateStatus("Error: " + e.getMessage());
             resetButton();
         }
+    }
+
+    // ── Helpers de injeção ──
+
+    private void startGame(String launcherAct) {
+        if (launcherAct != null && launcherAct.length() > 1) {
+            rootExec("am start -n " + GAME_PACKAGE + "/" + launcherAct);
+        } else {
+            rootExec("monkey -p " + GAME_PACKAGE + " -c android.intent.category.LAUNCHER 1");
+        }
+    }
+
+    private boolean isHookInMaps(String pid) {
+        String m = rootExec("grep -c libHook /proc/" + pid + "/maps 2>/dev/null");
+        return m != null && !"0".equals(m.trim()) && !m.trim().isEmpty();
+    }
+
+    private boolean waitForHook(String gameDir, int maxSeconds) {
+        for (int i = 0; i < maxSeconds; i++) {
+            try { Thread.sleep(1000); } catch (Exception e) { break; }
+
+            // Checar hook log
+            String hookLog = readAnyHookLog(gameDir);
+            if (hookLog != null && (hookLog.contains("HOOK ATIVO") || hookLog.contains("HOOK CARREGADO"))) {
+                return true;
+            }
+
+            // Checar logcat
+            String lc = rootExec("logcat -d -s HOOK 2>/dev/null | grep -c 'HOOK CARREGADO\\|HOOK ATIVO' 2>/dev/null");
+            if (lc != null && !"0".equals(lc.trim())) {
+                return true;
+            }
+
+            // Checar maps
+            String pid = rootExec("pidof " + GAME_PACKAGE);
+            if (pid != null && !pid.trim().isEmpty()) {
+                if (isHookInMaps(pid.trim().split("\\s+")[0])) {
+                    if (i > 5) return true; // No maps ha mais de 5s = ok
+                }
+                updateStatus("Injecting... (" + (i+1) + "s)");
+            } else {
+                updateStatus("Starting game... (" + (i+1) + "s)");
+            }
+        }
+        return false;
+    }
+
+    private String readAnyHookLog(String gameDir) {
+        String log = rootExec("cat /data/local/tmp/.hook_log 2>/dev/null");
+        if (log != null && !log.trim().isEmpty()) return log;
+        log = rootExec("cat " + gameDir + "/.hook_log 2>/dev/null");
+        if (log != null && !log.trim().isEmpty()) return log;
+        log = rootExec("cat /sdcard/.hook_log 2>/dev/null");
+        return log;
+    }
+
+    private String getDiagnostics(String gameDir) {
+        StringBuilder sb = new StringBuilder();
+        String pid = rootExec("pidof " + GAME_PACKAGE);
+        sb.append("PID: ").append(pid != null ? pid.trim() : "not found").append("\n");
+
+        String dbg = rootExec("getprop ro.debuggable");
+        sb.append("debuggable: ").append(dbg != null ? dbg.trim() : "?").append("\n");
+
+        String magisk = rootExec("magisk -V 2>/dev/null");
+        sb.append("Magisk: ").append(magisk != null ? magisk.trim() : "no").append("\n");
+
+        if (pid != null && !pid.trim().isEmpty()) {
+            String p = pid.trim().split("\\s+")[0];
+            String maps = rootExec("grep -c libHook /proc/" + p + "/maps 2>/dev/null");
+            sb.append("Hook in maps: ").append(maps != null ? maps.trim() : "?").append("\n");
+            String il2cpp = rootExec("grep -c libil2cpp /proc/" + p + "/maps 2>/dev/null");
+            sb.append("il2cpp loaded: ").append(il2cpp != null ? il2cpp.trim() : "?").append("\n");
+        }
+
+        String hookLog = readAnyHookLog(gameDir);
+        if (hookLog != null && !hookLog.trim().isEmpty()) {
+            String tail = hookLog.length() > 100 ? hookLog.substring(hookLog.length() - 100) : hookLog;
+            sb.append("Log: ").append(tail);
+        } else {
+            sb.append("Hook log: empty");
+        }
+        return sb.toString();
     }
 
     private void updateStatus(final String text) {
