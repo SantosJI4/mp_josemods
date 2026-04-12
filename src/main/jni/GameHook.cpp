@@ -512,3 +512,17 @@ void lib_main() {
     pthread_create(&t, nullptr, hack_thread, nullptr);
     pthread_detach(t);
 }
+
+// ============================================================
+// Agent_OnAttach — Suporte para am attach-agent (Android 9+)
+// ART VM chama esta funcao quando .so e carregado via attach-agent
+// O constructor (lib_main) ja roda via dlopen, mas Agent_OnAttach
+// e necessario para que o attach-agent nao reporte erro.
+// ============================================================
+extern "C" JNIEXPORT jint JNICALL
+Agent_OnAttach(JavaVM* vm, char* options, void* reserved) {
+    LOGI("Agent_OnAttach chamado (options=%s)", options ? options : "null");
+    hookLogWrite("Agent_OnAttach chamado");
+    // lib_main() ja executou via dlopen constructor
+    return 0;
+}
