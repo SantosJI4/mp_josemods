@@ -87,10 +87,14 @@ public:
 
     void handleTouch(int action, float x, float y) {
         std::lock_guard<std::mutex> lock(touchMtx);
-        touchAction = action;
         touchX = x;
         touchY = y;
-        touchUpdated = true;
+        if (action == 0) { // ACTION_DOWN
+            pendingDown = true;
+        } else if (action == 1 || action == 3) { // ACTION_UP / CANCEL
+            pendingUp = true;
+        }
+        // ACTION_MOVE: só atualiza posição
     }
 
     int getScreenW() const { return screenW; }
@@ -192,32 +196,33 @@ private:
 
     void processTouch() {
         std::lock_guard<std::mutex> lock(touchMtx);
-        if (!touchUpdated) return;
 
         ImGuiIO& io = ImGui::GetIO();
 
-        // action: 0=DOWN, 1=UP, 2=MOVE, 3=CANCEL
-        switch (touchAction) {
-            case 0: // ACTION_DOWN
-                io.MousePos = ImVec2(touchX, touchY);
-                io.MouseDown[0] = true;
-                break;
-            case 1: // ACTION_UP
-            case 3: // ACTION_CANCEL
-                io.MouseDown[0] = false;
-                clearMousePosNextFrame = true;
-                break;
-            case 2: // ACTION_MOVE
-                io.MousePos = ImVec2(touchX, touchY);
-                break;
+        // Sempre atualizar posição do mouse
+        if (touchX >= 0.0f && touchY >= 0.0f) {
+            io.MousePos = ImVec2(touchX, touchY);
         }
 
-        touchUpdated = false;
+        // DOWN tem prioridade: segura por 1 frame antes de processar UP
+        if (pendingDown) {
+            io.MouseDown[0] = true;
+            pendingDown = false;
+            // Não processar UP este frame — garante que ImGui vê o click
+            return;
+        }
+
+        if (pendingUp) {
+            io.MouseDown[0] = false;
+            pendingUp = false;
+            clearMousePosNextFrame = true;
+        }
     }
 
     void renderFrame() {
         ImGuiIO& io = ImGui::GetIO();
         io.DisplaySize = ImVec2((float)screenW, (float)screenH);
+        io.DeltaTime = 1.0f / 60.0f;
 
         processTouch();
 
@@ -239,7 +244,6 @@ private:
 
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-        ImGui::EndFrame();
 
         eglSwapBuffers(eglDisplay, eglSurface);
 
@@ -284,8 +288,8 @@ private:
 
     // Touch
     std::mutex touchMtx;
-    int touchAction = -1;
     float touchX = -1.0f;
     float touchY = -1.0f;
-    bool touchUpdated = false;
+    bool pendingDown = false;
+    bool pendingUp = false;
 };
