@@ -3,7 +3,6 @@
 #define _USE_MATH_DEFINES
 #include <math.h>
 #include <string.h>
-#include <stdio.h>
 
 
 struct Vector3 {
@@ -80,8 +79,6 @@ struct Vector3 {
      */
     static inline float Distance(Vector3 a, Vector3 b);
 
-    static inline char ToChar(Vector3 a);
-    static inline const char* ToString(Vector3 a);
     /**
      * Returns the dot product of two vectors.
      * @param lhs: The left side of the multiplication.
@@ -560,26 +557,6 @@ struct Vector3& Vector3::operator-=(const Vector3 rhs)
     y -= rhs.y;
     z -= rhs.z;
     return *this;
-}
-
-char Vector3::ToChar(Vector3 a) {
-    const char* x = (const char*)(int)a.x;
-    const char* y = (const char*)(int)a.y;
-    const char* z = (const char*)(int)a.z;
-    char buffer[25];
-    strncpy(buffer, x, sizeof(buffer));
-    strncpy(buffer, ", ", sizeof(buffer));
-    strncpy(buffer, y, sizeof(buffer));
-    strncpy(buffer, ", ", sizeof(buffer));
-    strncpy(buffer, z, sizeof(buffer));
-    strncpy(buffer, ", ", sizeof(buffer));
-    return buffer[24];
-}
-
-const char* Vector3::ToString(Vector3 a) {
-    static char buf[128];
-    snprintf(buf, sizeof(buf), "Vector3(%f, %f, %f)", a.x, a.y, a.z);
-    return buf;
 }
 
 Vector3 operator-(Vector3 rhs) { return rhs * -1; }
