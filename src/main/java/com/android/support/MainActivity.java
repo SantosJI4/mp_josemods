@@ -308,7 +308,9 @@ public class MainActivity extends Activity {
             resetButton();
 
         } catch (final Exception e) {
-            updateStatus("Error: " + e.getMessage());
+            final String err = "Fatal error: " + e.getClass().getSimpleName() + ": " + e.getMessage();
+            runOnUi(() -> Toast.makeText(this, err, Toast.LENGTH_LONG).show());
+            updateStatus(err);
             resetButton();
         }
     }
@@ -364,11 +366,20 @@ public class MainActivity extends Activity {
             while ((line = reader.readLine()) != null) {
                 sb.append(line).append("\n");
             }
-            su.waitFor();
+            int exitCode = su.waitFor();
             reader.close();
             os.close();
-            return sb.toString().trim();
+            String result = sb.toString().trim();
+            if (exitCode != 0) {
+                final String err = "rootExec failed: " + cmd + "\nexit=" + exitCode;
+                runOnUi(() -> Toast.makeText(this, err, Toast.LENGTH_LONG).show());
+                updateStatus(err);
+            }
+            return result;
         } catch (Exception e) {
+            final String err = "rootExec exception: " + e.getClass().getSimpleName() + ": " + e.getMessage() + "\ncmd: " + cmd;
+            runOnUi(() -> Toast.makeText(this, err, Toast.LENGTH_LONG).show());
+            updateStatus(err);
             return null;
         }
     }
