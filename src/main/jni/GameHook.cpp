@@ -45,7 +45,7 @@
 #include "ByNameModding/Il2Cpp.h"
 
 #define HOOK_TAG "GameHook"
-#define HOOK_BUILD_VER "v8-freefire"
+#define HOOK_BUILD_VER "v9-zygisk"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, HOOK_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, HOOK_TAG, __VA_ARGS__)
 
@@ -528,11 +528,81 @@ static void* hack_thread(void*) {
 }
 
 // ============================================================
-// ENTRY POINT — Carregado quando o .so é injetado no jogo
+// ENTRY POINT 1: ZYGISK (primary — anti-cheat safe)
+// Carregado pelo Magisk antes do anti-cheat inicializar
+// Zero comandos detectaveis em runtime
+// ============================================================
+#include "zygisk.hpp"
+
+static bool g_hookStarted = false;
+
+class JawModsModule : public zygisk::ModuleBase {
+public:
+    void onLoad(zygisk::Api *api, JNIEnv *env) override {
+        this->api = api;
+        this->env = env;
+    }
+
+    void preAppSpecialize(zygisk::AppSpecializeArgs *args) override {
+        const char *name = env->GetStringUTFChars(args->nice_name, nullptr);
+
+        // Checa se e o jogo alvo
+        shouldHook = (strstr(name, "freefireth") != nullptr ||
+                      strstr(name, "freefire") != nullptr ||
+                      strstr(name, "sniper3d") != nullptr);
+
+        env->ReleaseStringUTFChars(args->nice_name, name);
+
+        if (!shouldHook) {
+            // Nao e o jogo — descarrega o modulo da memoria
+            api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);
+        }
+    }
+
+    void postAppSpecialize(const zygisk::AppSpecializeArgs *args) override {
+        if (shouldHook && !g_hookStarted) {
+            g_hookStarted = true;
+            LOGI("Zygisk: hooking game [%s] pid=%d", HOOK_BUILD_VER, getpid());
+            hookLogWrite("=== HOOK CARREGADO (Zygisk) [%s] === pid=%d uid=%d",
+                         HOOK_BUILD_VER, getpid(), getuid());
+            pthread_t t;
+            pthread_create(&t, nullptr, hack_thread, nullptr);
+            pthread_detach(t);
+        }
+    }
+
+private:
+    zygisk::Api *api = nullptr;
+    JNIEnv *env = nullptr;
+    bool shouldHook = false;
+};
+
+REGISTER_ZYGISK_MODULE(JawModsModule)
+
+// ============================================================
+// ENTRY POINT 2: CONSTRUCTOR (fallback — para LD_PRELOAD)
+// Usado apenas em jogos sem anti-cheat (ex: Sniper 3D)
+// Quando carregado via Zygisk, o cmdline ainda e "zygote" aqui
+// então o check abaixo impede dupla inicializacao
 // ============================================================
 __attribute__((constructor))
 void lib_main() {
-    LOGI("libHook.so carregada [%s] pid=%d", HOOK_BUILD_VER, getpid());
+    // Verificar se estamos no processo do jogo (nao zygote)
+    char cmdline[256] = {0};
+    FILE *f = fopen("/proc/self/cmdline", "r");
+    if (f) { fread(cmdline, 1, 255, f); fclose(f); }
+
+    // Se cmdline nao bate com o jogo, pular (Zygisk cuida via postAppSpecialize)
+    if (strstr(cmdline, "freefireth") == nullptr &&
+        strstr(cmdline, "freefire") == nullptr &&
+        strstr(cmdline, "sniper3d") == nullptr) {
+        return;
+    }
+
+    if (g_hookStarted) return; // Zygisk ja iniciou
+    g_hookStarted = true;
+
+    LOGI("libHook.so carregada (LD_PRELOAD) [%s] pid=%d", HOOK_BUILD_VER, getpid());
     hookLogWrite("=== HOOK CARREGADO [%s] === pid=%d uid=%d", HOOK_BUILD_VER, getpid(), getuid());
     pthread_t t;
     pthread_create(&t, nullptr, hack_thread, nullptr);
@@ -541,14 +611,18 @@ void lib_main() {
 
 // ============================================================
 // Agent_OnAttach — Suporte para am attach-agent (Android 9+)
-// ART VM chama esta funcao quando .so e carregado via attach-agent
-// O constructor (lib_main) ja roda via dlopen, mas Agent_OnAttach
-// e necessario para que o attach-agent nao reporte erro.
+// Mantido como fallback extra (nao recomendado para AC games)
 // ============================================================
 extern "C" JNIEXPORT jint JNICALL
 Agent_OnAttach(JavaVM* vm, char* options, void* reserved) {
-    LOGI("Agent_OnAttach chamado (options=%s)", options ? options : "null");
-    hookLogWrite("Agent_OnAttach chamado");
-    // lib_main() ja executou via dlopen constructor
+    if (g_hookStarted) return 0;
+    g_hookStarted = true;
+
+    LOGI("Agent_OnAttach [%s] pid=%d", HOOK_BUILD_VER, getpid());
+    hookLogWrite("=== HOOK CARREGADO (Agent) [%s] === pid=%d uid=%d",
+                 HOOK_BUILD_VER, getpid(), getuid());
+    pthread_t t;
+    pthread_create(&t, nullptr, hack_thread, nullptr);
+    pthread_detach(t);
     return 0;
 }

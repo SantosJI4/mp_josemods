@@ -127,23 +127,26 @@ public class MainActivity extends Activity {
                     @Override
                     public void run() {
                         stopService(new Intent(MainActivity.this, OverlayService.class));
-                        setStatus("Stopped");
+                        setStatus("Overlay stopped.\nHook stays active until game restarts.");
                         btnStop.setVisibility(View.GONE);
                         btnStart.setVisibility(View.VISIBLE);
                         btnStart.setEnabled(true);
                     }
                 });
-                rootExec("rm -f /data/local/tmp/.esp_shm");
-                rootExec("rm -f /data/local/tmp/.hook_log /sdcard/.hook_log");
-                rootExec("rm -f /data/data/" + GAME_PACKAGE + "/.esp_shm /data/data/" + GAME_PACKAGE + "/.hook_log");
-                rootExec("setprop wrap." + GAME_PACKAGE + " \"\"");
-                rootExec("am clear-debug-app");
             }
         }).start();
     }
 
     // ══════════════════════════════════════
-    // LOGICA DE INJECAO — roda em background
+    // LOGICA — INSTALA MODULO ZYGISK + INICIA OVERLAY
+    // ZERO comandos detectaveis em runtime:
+    //   - SEM setenforce 0
+    //   - SEM set-debug-app
+    //   - SEM attach-agent
+    //   - SEM resetprop ro.debuggable
+    //   - SEM wrap property / LD_PRELOAD
+    //   - SEM force-stop do jogo
+    // O hook carrega via Zygisk antes do anti-cheat
     // ══════════════════════════════════════
     private void doInjectAndStart() {
         try {
@@ -156,65 +159,105 @@ public class MainActivity extends Activity {
                 return;
             }
 
-            // 2. SELinux permissive
-            rootExec("setenforce 0");
-            updateStatus("Preparing...");
-
-            // 3. Copiar libHook.so para todos os locais possiveis
-            final String nativeLibDir = getApplicationInfo().nativeLibraryDir;
-            final String hookSrc = nativeLibDir + "/libHook.so";
-            final String hookDst = "/data/local/tmp/libHook.so";
-            final String gameDir = "/data/data/" + GAME_PACKAGE;
-
-            if (!new File(hookSrc).exists()) {
-                updateStatus("Hook library not found");
+            // 2. Verificar Magisk + Zygisk
+            updateStatus("Checking Magisk...");
+            String magiskVer = rootExec("magisk -V 2>/dev/null");
+            if (magiskVer == null || magiskVer.trim().isEmpty()) {
+                updateStatus("Magisk not found.\nInstall Magisk v24+ with Zygisk enabled.");
                 resetButton();
                 return;
             }
 
-            rootExec("cp " + hookSrc + " " + hookDst);
-            rootExec("chmod 755 " + hookDst);
-            rootExec("chcon u:object_r:system_lib_file:s0 " + hookDst);
+            // 3. Verificar se Zygisk esta habilitado
+            String zygiskCheck = rootExec("magisk --sqlite \"SELECT value FROM settings WHERE key='zygisk'\" 2>/dev/null");
+            // Tambem checar se o diretorio de modulos zygisk existe
+            String zygiskDir = rootExec("ls /data/adb/modules/.zygisk 2>/dev/null; ls /data/adb/zygisk 2>/dev/null");
 
-            rootExec("mkdir -p " + gameDir);
-            rootExec("chmod 711 " + gameDir);
-            rootExec("cp " + hookDst + " " + gameDir + "/libHook.so");
-            rootExec("chmod 755 " + gameDir + "/libHook.so");
-            rootExec("chcon u:object_r:app_data_file:s0 " + gameDir + "/libHook.so");
+            // 4. Instalar modulo Zygisk
+            updateStatus("Installing Zygisk module...");
+            final String hookSrc = getApplicationInfo().nativeLibraryDir + "/libHook.so";
+            final String moduleDir = "/data/adb/modules/jawmods";
+            final String gameDir = "/data/data/" + GAME_PACKAGE;
 
-            // 4. Pre-criar SHM + hook log em todos os paths
+            if (!new File(hookSrc).exists()) {
+                updateStatus("Hook library not found.\nDid you do a clean build?");
+                resetButton();
+                return;
+            }
+
+            // Criar estrutura do modulo Magisk
+            rootExec("mkdir -p " + moduleDir + "/zygisk");
+
+            // Copiar .so como modulo Zygisk (nome = ABI)
+            rootExec("cp " + hookSrc + " " + moduleDir + "/zygisk/arm64-v8a.so");
+            rootExec("chmod 644 " + moduleDir + "/zygisk/arm64-v8a.so");
+
+            // Criar module.prop
+            rootExec("echo 'id=jawmods' > " + moduleDir + "/module.prop");
+            rootExec("echo 'name=JawMods ESP Hook' >> " + moduleDir + "/module.prop");
+            rootExec("echo 'version=v9' >> " + moduleDir + "/module.prop");
+            rootExec("echo 'versionCode=9' >> " + moduleDir + "/module.prop");
+            rootExec("echo 'author=JawMods' >> " + moduleDir + "/module.prop");
+            rootExec("echo 'description=ESP hook via Zygisk for Unity games' >> " + moduleDir + "/module.prop");
+
+            // Verificar que o modulo foi instalado
+            String checkModule = rootExec("cat " + moduleDir + "/module.prop 2>/dev/null");
+            if (checkModule == null || !checkModule.contains("jawmods")) {
+                updateStatus("Failed to install module.\nCheck Magisk and root access.");
+                resetButton();
+                return;
+            }
+
+            // 5. Pre-criar SHM e hook log com permissoes
             rootExec("rm -f /data/local/tmp/.esp_shm /data/local/tmp/.hook_log");
             rootExec("dd if=/dev/zero of=/data/local/tmp/.esp_shm bs=4096 count=1 2>/dev/null");
-            rootExec("chmod 666 /data/local/tmp/.esp_shm; chcon u:object_r:app_data_file:s0 /data/local/tmp/.esp_shm");
-            rootExec("touch /data/local/tmp/.hook_log; chmod 666 /data/local/tmp/.hook_log; chcon u:object_r:app_data_file:s0 /data/local/tmp/.hook_log");
+            rootExec("chmod 666 /data/local/tmp/.esp_shm");
+            rootExec("touch /data/local/tmp/.hook_log; chmod 666 /data/local/tmp/.hook_log");
 
-            rootExec("rm -f " + gameDir + "/.esp_shm " + gameDir + "/.hook_log");
-            rootExec("touch " + gameDir + "/.hook_log; chmod 666 " + gameDir + "/.hook_log; chcon u:object_r:app_data_file:s0 " + gameDir + "/.hook_log");
+            // Game dir permissoes para overlay ler SHM
+            rootExec("mkdir -p " + gameDir);
+            rootExec("chmod 711 " + gameDir);
+            rootExec("touch " + gameDir + "/.hook_log; chmod 666 " + gameDir + "/.hook_log");
 
-            rootExec("rm -f /sdcard/.esp_shm /sdcard/.hook_log");
-            rootExec("dd if=/dev/zero of=/sdcard/.esp_shm bs=4096 count=1 2>/dev/null");
-            rootExec("chmod 666 /sdcard/.esp_shm");
-            rootExec("touch /sdcard/.hook_log; chmod 666 /sdcard/.hook_log");
+            // 6. Verificar se precisa reboot
+            String hookInModule = rootExec("ls -la " + moduleDir + "/zygisk/arm64-v8a.so 2>/dev/null");
+            boolean moduleInstalled = (hookInModule != null && hookInModule.contains("arm64-v8a.so"));
 
-            // 5. Garantir debuggable por TODOS os metodos possiveis
-            rootExec("resetprop ro.debuggable 1 2>/dev/null");
-            rootExec("magiskpolicy --live 'allow untrusted_app untrusted_app process { ptrace }' 2>/dev/null");
-            rootExec("magiskpolicy --live 'allow system_server untrusted_app process { ptrace }' 2>/dev/null");
-            rootExec("settings put global debug_app " + GAME_PACKAGE + " 2>/dev/null");
-            rootExec("am set-debug-app --persistent " + GAME_PACKAGE);
+            // Checar se o modulo ja esta ativo (nao precisa reboot se ja existia)
+            boolean needReboot = true;
+            String gamePid = rootExec("pidof " + GAME_PACKAGE);
+            if (gamePid != null && !gamePid.trim().isEmpty()) {
+                String maps = rootExec("grep -c 'jawmods\\|libHook' /proc/" + gamePid.trim().split("\\s+")[0] + "/maps 2>/dev/null");
+                if (maps != null && !"0".equals(maps.trim())) {
+                    needReboot = false; // Hook ja esta carregado!
+                }
+            }
 
-            // 6. Criar wrap scripts
-            rootExec("echo '#!/system/bin/sh' > /data/local/tmp/wrap_hook.sh");
-            rootExec("echo 'export LD_PRELOAD=" + hookDst + "' >> /data/local/tmp/wrap_hook.sh");
-            rootExec("echo 'exec \"$@\"' >> /data/local/tmp/wrap_hook.sh");
-            rootExec("chmod 755 /data/local/tmp/wrap_hook.sh; chcon u:object_r:system_file:s0 /data/local/tmp/wrap_hook.sh");
+            // Tambem verificar se o Zygisk ja carregou o modulo em algum processo
+            String zygiskLoaded = rootExec("ls /data/adb/modules/jawmods/zygisk/arm64-v8a.so 2>/dev/null");
+            String moduleDisabled = rootExec("ls /data/adb/modules/jawmods/disable 2>/dev/null");
+            if (moduleDisabled != null && !moduleDisabled.trim().isEmpty()) {
+                // Modulo esta desabilitado — remover flag
+                rootExec("rm -f " + moduleDir + "/disable");
+                needReboot = true;
+            }
 
-            rootExec("echo '#!/system/bin/sh' > /data/local/tmp/wrap_hook2.sh");
-            rootExec("echo 'export LD_PRELOAD=" + gameDir + "/libHook.so' >> /data/local/tmp/wrap_hook2.sh");
-            rootExec("echo 'exec \"$@\"' >> /data/local/tmp/wrap_hook2.sh");
-            rootExec("chmod 755 /data/local/tmp/wrap_hook2.sh; chcon u:object_r:system_file:s0 /data/local/tmp/wrap_hook2.sh");
+            if (needReboot && moduleInstalled) {
+                // 7A. Modulo instalado mas precisa reboot
+                showLoading(false);
+                updateStatus("Module installed!\n\n" +
+                    "Now you need to:\n" +
+                    "1. Enable Zygisk in Magisk settings\n" +
+                    "2. Reboot your phone\n" +
+                    "3. Open Free Fire normally\n" +
+                    "4. Open JawMods and click Start\n\n" +
+                    "Magisk v" + magiskVer.trim());
+                resetButton();
+                return;
+            }
 
-            // 7. Iniciar overlay
+            // 7B. Hook ja esta ativo — iniciar overlay
+            updateStatus("Starting overlay...");
             runOnUi(new Runnable() {
                 @Override
                 public void run() {
@@ -222,130 +265,36 @@ public class MainActivity extends Activity {
                 }
             });
 
-            // 8. Resolver launcher activity
-            final String launcherAct = getLauncherActivity(GAME_PACKAGE);
+            // 8. Aguardar conexao com hook (verificar SHM)
+            boolean connected = false;
+            for (int i = 0; i < 15; i++) {
+                Thread.sleep(1000);
 
-            // ═══════════════════════════════════════════
-            // METODO 1 (PRINCIPAL): ATTACH-AGENT
-            // Mais confiavel — funciona mesmo com anti-cheat
-            // Requer: jogo rodando + debuggable
-            // ═══════════════════════════════════════════
-            updateStatus("Starting game...");
-            rootExec("logcat -c 2>/dev/null");
+                // Checar hook log
+                String hookLog = readAnyHookLog(gameDir);
+                if (hookLog != null && (hookLog.contains("HOOK ATIVO") || hookLog.contains("HOOK CARREGADO"))) {
+                    connected = true;
+                    break;
+                }
 
-            // Iniciar o jogo se nao estiver rodando
-            String pid = rootExec("pidof " + GAME_PACKAGE);
-            if (pid == null || pid.trim().isEmpty()) {
-                rootExec("am force-stop " + GAME_PACKAGE);
-                Thread.sleep(500);
-                startGame(launcherAct);
-                Thread.sleep(3000);
-                pid = rootExec("pidof " + GAME_PACKAGE);
-            }
-
-            boolean hookOk = false;
-
-            if (pid != null && !pid.trim().isEmpty()) {
-                final String gamePid = pid.trim().split("\\s+")[0];
-
-                // Esperar libil2cpp.so carregar (game Unity pronto)
-                updateStatus("Waiting for Unity engine...");
-                boolean il2cppReady = false;
-                for (int w = 0; w < 60; w++) {
-                    // PID pode mudar se o jogo reiniciar
-                    String curPid = rootExec("pidof " + GAME_PACKAGE);
-                    if (curPid == null || curPid.trim().isEmpty()) {
-                        Thread.sleep(1000);
-                        updateStatus("Game starting... (" + (w+1) + "s)");
-                        continue;
-                    }
-                    String activePid = curPid.trim().split("\\s+")[0];
-                    String il2cpp = rootExec("grep -c libil2cpp.so /proc/" + activePid + "/maps 2>/dev/null");
-                    if (il2cpp != null && !"0".equals(il2cpp.trim())) {
-                        il2cppReady = true;
-                        pid = curPid; // Atualizar PID
+                // Checar se o jogo esta rodando com hook
+                String pid2 = rootExec("pidof " + GAME_PACKAGE);
+                if (pid2 != null && !pid2.trim().isEmpty()) {
+                    String p = pid2.trim().split("\\s+")[0];
+                    String hookMaps = rootExec("grep -c 'jawmods\\|libHook' /proc/" + p + "/maps 2>/dev/null");
+                    if (hookMaps != null && !"0".equals(hookMaps.trim())) {
+                        connected = true;
                         break;
                     }
-                    Thread.sleep(1000);
-                    updateStatus("Loading engine... (" + (w+1) + "s)");
-                }
-
-                if (!il2cppReady) {
-                    updateStatus("il2cpp not detected. Is this a Unity game?");
-                    resetButton();
-                    return;
-                }
-
-                // Atualizar PID (pode ter mudado)
-                final String finalPid = pid.trim().split("\\s+")[0];
-
-                // Esperar mais 3s para il2cpp inicializar assemblies
-                updateStatus("Initializing il2cpp...");
-                Thread.sleep(3000);
-
-                // Limpar logs antes de injetar
-                rootExec("echo '' > /data/local/tmp/.hook_log 2>/dev/null");
-                rootExec("echo '' > " + gameDir + "/.hook_log 2>/dev/null");
-
-                // attach-agent: tenta com /data/local/tmp/ primeiro
-                updateStatus("Injecting (attach-agent)...");
-                rootExec("cmd activity attach-agent " + finalPid + " " + hookDst + " 2>/dev/null");
-                Thread.sleep(2000);
-
-                hookOk = waitForHook(gameDir, 10);
-
-                // Fallback: tenta com path do game dir
-                if (!hookOk && !isHookInMaps(finalPid)) {
-                    updateStatus("Retry: game dir path...");
-                    rootExec("cmd activity attach-agent " + finalPid + " " + gameDir + "/libHook.so 2>/dev/null");
-                    Thread.sleep(2000);
-                    hookOk = waitForHook(gameDir, 10);
+                    updateStatus("Waiting for hook... (" + (i+1) + "s)");
+                } else {
+                    updateStatus("Open Free Fire to connect (" + (i+1) + "s)");
                 }
             }
 
-            // ═══════════════════════════════════════════
-            // METODO 2 (FALLBACK): WRAP + LD_PRELOAD
-            // So tenta se attach-agent falhou
-            // ═══════════════════════════════════════════
-            if (!hookOk) {
-                updateStatus("Fallback: wrap + restart...");
-
-                rootExec("setprop wrap." + GAME_PACKAGE + " \"\"");
-                Thread.sleep(300);
-                rootExec("setprop wrap." + GAME_PACKAGE + " /data/local/tmp/wrap_hook.sh");
-
-                String propVal = rootExec("getprop wrap." + GAME_PACKAGE);
-                if (propVal == null || !propVal.contains("wrap_hook")) {
-                    rootExec("resetprop wrap." + GAME_PACKAGE + " /data/local/tmp/wrap_hook.sh 2>/dev/null");
-                }
-
-                rootExec("am force-stop " + GAME_PACKAGE);
-                Thread.sleep(1500);
-                startGame(launcherAct);
-                hookOk = waitForHook(gameDir, 25);
-                rootExec("setprop wrap." + GAME_PACKAGE + " \"\"");
-            }
-
-            // ═══════════════════════════════════════════
-            // METODO 3: WRAP com .so do game dir
-            // ═══════════════════════════════════════════
-            if (!hookOk) {
-                updateStatus("Fallback: alt wrap path...");
-                rootExec("setprop wrap." + GAME_PACKAGE + " /data/local/tmp/wrap_hook2.sh");
-                rootExec("am force-stop " + GAME_PACKAGE);
-                Thread.sleep(1500);
-                startGame(launcherAct);
-                hookOk = waitForHook(gameDir, 20);
-                rootExec("setprop wrap." + GAME_PACKAGE + " \"\"");
-            }
-
-            // Limpar wrap
-            rootExec("setprop wrap." + GAME_PACKAGE + " \"\"");
-
-            // Status final com diagnosticos
-            if (hookOk) {
-                showLoading(false);
-                updateStatus("Injected successfully!");
+            showLoading(false);
+            if (connected) {
+                updateStatus("Connected! ESP active.");
                 runOnUi(new Runnable() {
                     @Override
                     public void run() {
@@ -353,9 +302,15 @@ public class MainActivity extends Activity {
                     }
                 });
             } else {
-                // Mostrar diagnosticos ao usuario
-                String diag = getDiagnostics(gameDir);
-                updateStatus("Injection failed.\n" + diag);
+                // Overlay ja esta rodando — vai conectar quando o jogo abrir
+                updateStatus("Overlay active.\nOpen Free Fire — hook loads automatically.\n" +
+                    "(If first time, reboot first)");
+                runOnUi(new Runnable() {
+                    @Override
+                    public void run() {
+                        btnStop.setVisibility(View.VISIBLE);
+                    }
+                });
             }
 
             resetButton();
@@ -366,50 +321,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    // ── Helpers de injeção ──
-
-    private void startGame(String launcherAct) {
-        if (launcherAct != null && launcherAct.length() > 1) {
-            rootExec("am start -n " + GAME_PACKAGE + "/" + launcherAct);
-        } else {
-            rootExec("monkey -p " + GAME_PACKAGE + " -c android.intent.category.LAUNCHER 1");
-        }
-    }
-
-    private boolean isHookInMaps(String pid) {
-        String m = rootExec("grep -c libHook /proc/" + pid + "/maps 2>/dev/null");
-        return m != null && !"0".equals(m.trim()) && !m.trim().isEmpty();
-    }
-
-    private boolean waitForHook(String gameDir, int maxSeconds) {
-        for (int i = 0; i < maxSeconds; i++) {
-            try { Thread.sleep(1000); } catch (Exception e) { break; }
-
-            // Checar hook log
-            String hookLog = readAnyHookLog(gameDir);
-            if (hookLog != null && (hookLog.contains("HOOK ATIVO") || hookLog.contains("HOOK CARREGADO"))) {
-                return true;
-            }
-
-            // Checar logcat
-            String lc = rootExec("logcat -d -s HOOK 2>/dev/null | grep -c 'HOOK CARREGADO\\|HOOK ATIVO' 2>/dev/null");
-            if (lc != null && !"0".equals(lc.trim())) {
-                return true;
-            }
-
-            // Checar maps
-            String pid = rootExec("pidof " + GAME_PACKAGE);
-            if (pid != null && !pid.trim().isEmpty()) {
-                if (isHookInMaps(pid.trim().split("\\s+")[0])) {
-                    if (i > 5) return true; // No maps ha mais de 5s = ok
-                }
-                updateStatus("Injecting... (" + (i+1) + "s)");
-            } else {
-                updateStatus("Starting game... (" + (i+1) + "s)");
-            }
-        }
-        return false;
-    }
+    // ── Helpers ──
 
     private String readAnyHookLog(String gameDir) {
         String log = rootExec("cat /data/local/tmp/.hook_log 2>/dev/null");
@@ -418,35 +330,6 @@ public class MainActivity extends Activity {
         if (log != null && !log.trim().isEmpty()) return log;
         log = rootExec("cat /sdcard/.hook_log 2>/dev/null");
         return log;
-    }
-
-    private String getDiagnostics(String gameDir) {
-        StringBuilder sb = new StringBuilder();
-        String pid = rootExec("pidof " + GAME_PACKAGE);
-        sb.append("PID: ").append(pid != null ? pid.trim() : "not found").append("\n");
-
-        String dbg = rootExec("getprop ro.debuggable");
-        sb.append("debuggable: ").append(dbg != null ? dbg.trim() : "?").append("\n");
-
-        String magisk = rootExec("magisk -V 2>/dev/null");
-        sb.append("Magisk: ").append(magisk != null ? magisk.trim() : "no").append("\n");
-
-        if (pid != null && !pid.trim().isEmpty()) {
-            String p = pid.trim().split("\\s+")[0];
-            String maps = rootExec("grep -c libHook /proc/" + p + "/maps 2>/dev/null");
-            sb.append("Hook in maps: ").append(maps != null ? maps.trim() : "?").append("\n");
-            String il2cpp = rootExec("grep -c libil2cpp /proc/" + p + "/maps 2>/dev/null");
-            sb.append("il2cpp loaded: ").append(il2cpp != null ? il2cpp.trim() : "?").append("\n");
-        }
-
-        String hookLog = readAnyHookLog(gameDir);
-        if (hookLog != null && !hookLog.trim().isEmpty()) {
-            String tail = hookLog.length() > 100 ? hookLog.substring(hookLog.length() - 100) : hookLog;
-            sb.append("Log: ").append(tail);
-        } else {
-            sb.append("Hook log: empty");
-        }
-        return sb.toString();
     }
 
     private void updateStatus(final String text) {
