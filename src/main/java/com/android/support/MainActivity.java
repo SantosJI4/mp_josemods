@@ -173,8 +173,7 @@ public class MainActivity extends Activity {
             // Tambem checar se o diretorio de modulos zygisk existe
             String zygiskDir = rootExec("ls /data/adb/modules/.zygisk 2>/dev/null; ls /data/adb/zygisk 2>/dev/null");
 
-            // 4. Instalar modulo Zygisk
-            updateStatus("Installing Zygisk module...");
+            // 4. Verificar se modulo JA existia (antes de instalar)
             final String hookSrc = getApplicationInfo().nativeLibraryDir + "/libHook.so";
             final String moduleDir = "/data/adb/modules/jawmods";
             final String gameDir = "/data/data/" + GAME_PACKAGE;
@@ -185,18 +184,33 @@ public class MainActivity extends Activity {
                 return;
             }
 
-            // Criar estrutura do modulo Magisk
-            rootExec("mkdir -p " + moduleDir + "/zygisk");
+            // Checar se o modulo ja existia ANTES de copiar
+            boolean moduleAlreadyExisted = false;
+            String existingProp = rootExec("cat " + moduleDir + "/module.prop 2>/dev/null");
+            String existingSo = rootExec("ls " + moduleDir + "/zygisk/arm64-v8a.so 2>/dev/null");
+            if (existingProp != null && existingProp.contains("jawmods")
+                && existingSo != null && existingSo.contains("arm64-v8a.so")) {
+                moduleAlreadyExisted = true;
+            }
 
-            // Copiar .so como modulo Zygisk (nome = ABI)
+            // Checar se esta desabilitado
+            String moduleDisabled = rootExec("ls " + moduleDir + "/disable 2>/dev/null");
+            if (moduleDisabled != null && !moduleDisabled.trim().isEmpty()) {
+                rootExec("rm -f " + moduleDir + "/disable");
+                moduleAlreadyExisted = false; // Tava desabilitado, precisa reboot
+            }
+
+            // 5. Instalar/atualizar modulo Zygisk
+            updateStatus("Installing Zygisk module...");
+            rootExec("mkdir -p " + moduleDir + "/zygisk");
             rootExec("cp " + hookSrc + " " + moduleDir + "/zygisk/arm64-v8a.so");
             rootExec("chmod 644 " + moduleDir + "/zygisk/arm64-v8a.so");
 
             // Criar module.prop
             rootExec("echo 'id=jawmods' > " + moduleDir + "/module.prop");
             rootExec("echo 'name=JawMods ESP Hook' >> " + moduleDir + "/module.prop");
-            rootExec("echo 'version=v9' >> " + moduleDir + "/module.prop");
-            rootExec("echo 'versionCode=9' >> " + moduleDir + "/module.prop");
+            rootExec("echo 'version=v10' >> " + moduleDir + "/module.prop");
+            rootExec("echo 'versionCode=10' >> " + moduleDir + "/module.prop");
             rootExec("echo 'author=JawMods' >> " + moduleDir + "/module.prop");
             rootExec("echo 'description=ESP hook via Zygisk for Unity games' >> " + moduleDir + "/module.prop");
 
@@ -208,7 +222,7 @@ public class MainActivity extends Activity {
                 return;
             }
 
-            // 5. Pre-criar SHM e hook log com permissoes
+            // 6. Pre-criar SHM e hook log com permissoes
             rootExec("rm -f /data/local/tmp/.esp_shm /data/local/tmp/.hook_log");
             rootExec("dd if=/dev/zero of=/data/local/tmp/.esp_shm bs=4096 count=1 2>/dev/null");
             rootExec("chmod 666 /data/local/tmp/.esp_shm");
@@ -219,31 +233,9 @@ public class MainActivity extends Activity {
             rootExec("chmod 711 " + gameDir);
             rootExec("touch " + gameDir + "/.hook_log; chmod 666 " + gameDir + "/.hook_log");
 
-            // 6. Verificar se precisa reboot
-            String hookInModule = rootExec("ls -la " + moduleDir + "/zygisk/arm64-v8a.so 2>/dev/null");
-            boolean moduleInstalled = (hookInModule != null && hookInModule.contains("arm64-v8a.so"));
-
-            // Checar se o modulo ja esta ativo (nao precisa reboot se ja existia)
-            boolean needReboot = true;
-            String gamePid = rootExec("pidof " + GAME_PACKAGE);
-            if (gamePid != null && !gamePid.trim().isEmpty()) {
-                String maps = rootExec("grep -c 'jawmods\\|libHook' /proc/" + gamePid.trim().split("\\s+")[0] + "/maps 2>/dev/null");
-                if (maps != null && !"0".equals(maps.trim())) {
-                    needReboot = false; // Hook ja esta carregado!
-                }
-            }
-
-            // Tambem verificar se o Zygisk ja carregou o modulo em algum processo
-            String zygiskLoaded = rootExec("ls /data/adb/modules/jawmods/zygisk/arm64-v8a.so 2>/dev/null");
-            String moduleDisabled = rootExec("ls /data/adb/modules/jawmods/disable 2>/dev/null");
-            if (moduleDisabled != null && !moduleDisabled.trim().isEmpty()) {
-                // Modulo esta desabilitado — remover flag
-                rootExec("rm -f " + moduleDir + "/disable");
-                needReboot = true;
-            }
-
-            if (needReboot && moduleInstalled) {
-                // 7A. Modulo instalado mas precisa reboot
+            // 7. Decisao: reboot ou iniciar overlay
+            if (!moduleAlreadyExisted) {
+                // PRIMEIRO INSTALL — precisa reboot para Zygisk ativar
                 showLoading(false);
                 updateStatus("Module installed!\n\n" +
                     "Now you need to:\n" +
@@ -256,7 +248,7 @@ public class MainActivity extends Activity {
                 return;
             }
 
-            // 7B. Hook ja esta ativo — iniciar overlay
+            // Modulo ja existia — Zygisk ja esta ativo, iniciar overlay
             updateStatus("Starting overlay...");
             runOnUi(new Runnable() {
                 @Override
