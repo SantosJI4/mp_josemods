@@ -225,11 +225,29 @@ public class MainActivity extends Activity {
                 return;
             }
 
-            // 6. Pre-criar SHM e hook log com permissoes (batched: 2 chamadas su)
-            rootExec("rm -f /data/local/tmp/.esp_shm /data/local/tmp/.hook_log"
-                    + " ; dd if=/dev/zero of=/data/local/tmp/.esp_shm bs=4096 count=1 2>/dev/null"
-                    + " ; chmod 666 /data/local/tmp/.esp_shm"
-                    + " ; touch /data/local/tmp/.hook_log ; chmod 666 /data/local/tmp/.hook_log");
+            // 6. Pre-criar SHM e hook log com permissoes
+            // CRITICO: se o jogo ja esta rodando, o hook JA tem o SHM aberto com mmap.
+            // Deletar o arquivo quebra a conexao (hook escreve no inode antigo,
+            // overlay abre novo arquivo zerado => magic=0 => "Waiting for hook...").
+            // Solucao: so recriar o SHM se o jogo NAO esta rodando.
+            String gameRunningPid = rootExec("pidof " + GAME_PACKAGE + " 2>/dev/null");
+            boolean gameAlreadyRunning = gameRunningPid != null && !gameRunningPid.trim().isEmpty();
+
+            if (!gameAlreadyRunning) {
+                // Jogo fechado: recriar SHM zerado para proxima sessao
+                rootExec("rm -f /data/local/tmp/.esp_shm /data/local/tmp/.hook_log"
+                        + " ; dd if=/dev/zero of=/data/local/tmp/.esp_shm bs=4096 count=1 2>/dev/null"
+                        + " ; chmod 666 /data/local/tmp/.esp_shm"
+                        + " ; touch /data/local/tmp/.hook_log ; chmod 666 /data/local/tmp/.hook_log");
+            } else {
+                // Jogo rodando: hook pode ja ter o SHM mapeado — NAO deletar!
+                // Apenas garantir que o arquivo existe e tem permissoes corretas
+                rootExec("[ -f /data/local/tmp/.esp_shm ] ||"
+                        + " dd if=/dev/zero of=/data/local/tmp/.esp_shm bs=4096 count=1 2>/dev/null"
+                        + " ; chmod 666 /data/local/tmp/.esp_shm 2>/dev/null"
+                        + " ; touch /data/local/tmp/.hook_log ; chmod 666 /data/local/tmp/.hook_log 2>/dev/null");
+            }
+
             rootExec("mkdir -p " + gameDir
                     + " ; chmod 711 " + gameDir
                     + " ; touch " + gameDir + "/.hook_log ; chmod 666 " + gameDir + "/.hook_log");
