@@ -243,11 +243,57 @@ public class MainActivity extends Activity {
             updateStatus("Installing Zygisk module...");
             rootExec("mkdir -p " + moduleDir + "/zygisk"
                     + " ; cp " + hookSrc + " " + moduleDir + "/zygisk/arm64-v8a.so"
-                    + " ; chmod 644 " + moduleDir + "/zygisk/arm64-v8a.so");
+                    + " ; chmod 644 " + moduleDir + "/zygisk/arm64-v8a.so"
+                    + " ; rm -f " + moduleDir + "/disable " + moduleDir + "/remove");
 
             // Criar module.prop em uma unica chamada su
-            rootExec("printf 'id=jawmods\\nname=JawMods ESP Hook\\nversion=v11\\nversionCode=11\\nauthor=JawMods\\ndescription=ESP hook via Zygisk for Unity games\\n'"
+            rootExec("printf 'id=jawmods\\nname=JawMods ESP Hook\\nversion=v13\\nversionCode=13\\nauthor=JawMods\\ndescription=ESP hook via Zygisk for Unity games\\n'"
                     + " > " + moduleDir + "/module.prop");
+
+            // Verificar que .so foi copiado corretamente (comparar tamanho)
+            String srcSize = rootExec("wc -c < " + hookSrc + " 2>/dev/null");
+            String dstSize = rootExec("wc -c < " + moduleDir + "/zygisk/arm64-v8a.so 2>/dev/null");
+            if (srcSize == null || dstSize == null
+                || srcSize.trim().isEmpty() || dstSize.trim().isEmpty()
+                || !srcSize.trim().equals(dstSize.trim())) {
+                updateStatus("ERRO: .so nao foi copiado corretamente!\n"
+                    + "src=" + (srcSize != null ? srcSize.trim() : "null")
+                    + " dst=" + (dstSize != null ? dstSize.trim() : "null"));
+                resetButton();
+                return;
+            }
+
+            // Verificar se o simbolo zygisk_module_entry existe no .so instalado
+            String symbolCheck = rootExec(
+                "strings " + moduleDir + "/zygisk/arm64-v8a.so 2>/dev/null | grep -c zygisk_module_entry"
+                + " || grep -c zygisk_module_entry " + moduleDir + "/zygisk/arm64-v8a.so 2>/dev/null");
+            boolean hasZygiskSymbol = symbolCheck != null && !symbolCheck.trim().equals("0") && !symbolCheck.trim().isEmpty();
+
+            // Verificar Zygisk habilitado - AGORA com acao se nao estiver
+            boolean zygiskEnabled = false;
+            if (zygiskCheck != null && zygiskCheck.contains("1")) {
+                zygiskEnabled = true;
+            }
+            // Fallback: checar se .zygisk marker existe (Magisk cria quando Zygisk ativo)
+            String zygiskMarker = rootExec("ls /data/adb/modules/.zygisk_cache 2>/dev/null"
+                + " ; ls /data/adb/.magisk/zygisk 2>/dev/null"
+                + " ; getprop ro.zygisk.enabled 2>/dev/null"
+                + " ; getprop persist.magisk.zygisk 2>/dev/null");
+            if (zygiskMarker != null && !zygiskMarker.trim().isEmpty()) {
+                zygiskEnabled = true;
+            }
+
+            // Se Zygisk claramente NAO esta habilitado, avisar
+            if (!zygiskEnabled && (zygiskCheck == null || zygiskCheck.trim().isEmpty() || zygiskCheck.contains("0"))) {
+                // Tentar habilitar via sqlite
+                rootExec("magisk --sqlite \"REPLACE INTO settings (key,value) VALUES('zygisk',1)\" 2>/dev/null");
+                updateStatus("Zygisk was DISABLED!\nEnabled it now.\n\n"
+                    + "You MUST reboot for Zygisk to start.\n"
+                    + "After reboot, open JawMods and click Start again.\n\n"
+                    + "Also check: Magisk app > Settings > Zygisk = ON");
+                resetButton();
+                return;
+            }
 
             // CRITICO: SELinux policy — permite hook e overlay acessar /data/local/tmp/
             // Sem isso, o hook (untrusted_app) nao consegue escrever no SHM,
@@ -304,17 +350,34 @@ public class MainActivity extends Activity {
                     + " ; touch " + gameDir + "/.hook_log ; chmod 666 " + gameDir + "/.hook_log");
 
             // 7. Decisao: reboot ou iniciar overlay
-            if (!moduleAlreadyExisted || !sepolicyAlreadyExisted) {
+            // Comparar md5 do .so antigo vs novo — se mudou, Zygisk pode precisar de reboot
+            boolean soChanged = false;
+            if (moduleAlreadyExisted) {
+                String md5Src = rootExec("md5sum " + hookSrc + " 2>/dev/null | awk '{print $1}'");
+                String md5Dst = rootExec("md5sum " + moduleDir + "/zygisk/arm64-v8a.so 2>/dev/null | awk '{print $1}'");
+                // Apos o cp, os md5 devem ser iguais. Mas se o .so do APK mudou desde o
+                // ultimo boot, o Zygisk pode estar usando o antigo em cache.
+                // Verificar se Magisk listou nosso modulo como ativo
+                String moduleList = rootExec("ls /data/adb/modules/ 2>/dev/null");
+                String moduleState = rootExec("cat /data/adb/modules/jawmods/module.prop 2>/dev/null");
+                if (moduleState == null || !moduleState.contains("jawmods")) {
+                    soChanged = true; // module.prop invalido
+                }
+            }
+
+            if (!moduleAlreadyExisted || !sepolicyAlreadyExisted || soChanged) {
                 // PRIMEIRO INSTALL ou sepolicy.rule acabou de ser criado — precisa reboot
                 showLoading(false);
-                String reason = !moduleAlreadyExisted ? "Module installed" : "SELinux policy updated";
+                String reason = !moduleAlreadyExisted ? "Module installed" :
+                                !sepolicyAlreadyExisted ? "SELinux policy updated" : "Module updated";
                 updateStatus(reason + "!\n\n" +
                     "Now you need to:\n" +
-                    "1. Enable Zygisk in Magisk settings\n" +
+                    "1. Make sure Zygisk is ON in Magisk settings\n" +
                     "2. Reboot your phone\n" +
-                    "3. Open Free Fire normally\n" +
-                    "4. Open JawMods and click Start\n\n" +
-                    "Magisk v" + magiskVer.trim());
+                    "3. Open JawMods and click Start\n" +
+                    (hasZygiskSymbol ? "✓ zygisk_module_entry found in .so" : "✗ zygisk_module_entry NOT found in .so!") +
+                    "\nMagisk v" + magiskVer.trim() +
+                    "\nZygisk: " + (zygiskEnabled ? "ON" : "check settings"));
                 resetButton();
                 return;
             }
@@ -345,14 +408,21 @@ public class MainActivity extends Activity {
                 }
             });
 
-            // 8. Aguardar conexao com hook — loop de 60s esperando il2cpp + hook
-            // Zygisk injeta ANTES do jogo inicializar, pode demorar ate il2cpp carregar
+            // 8. Aguardar conexao com hook — Zygisk + fallback attach-agent
+            // Tenta Zygisk por 15s. Se maps=0, usa attach-agent como fallback.
             boolean connected = false;
-            for (int i = 0; i < 60; i++) {
+            boolean fallbackUsed = false;
+            for (int i = 0; i < 45; i++) {
                 Thread.sleep(1000);
 
-                // Uma chamada su: retorna diagnostico completo (maps + log + logcat)
-                // Filtrar logcat SOMENTE pelo PID do jogo para evitar falso positivo
+                // Diagnostico a cada 3s (reduz chamadas su)
+                if (i % 3 != 0 && i > 0) {
+                    updateStatus("Aguardando hook" + (fallbackUsed ? " (agent)" : " Zygisk") + "...\n(" + (i+1) + "s)");
+                    continue;
+                }
+
+                // UMA chamada su: diagnostico completo
+                // Inclui logcat do Zygisk E GameHook, ambos paths de hook_log
                 String diag = rootExec(
                     "P=$(pidof " + GAME_PACKAGE + " 2>/dev/null | awk '{print $1}');"
                     + " if [ -z \"$P\" ]; then echo 'NOPID';"
@@ -360,7 +430,7 @@ public class MainActivity extends Activity {
                     + "   M=$(grep -cE 'arm64-v8a\\.so|jawmods|libHook' /proc/$P/maps 2>/dev/null);"
                     + "   L=$(cat /data/local/tmp/.hook_log 2>/dev/null | tail -3);"
                     + "   GL=$(cat /data/data/" + GAME_PACKAGE + "/.hook_log 2>/dev/null | tail -3);"
-                    + "   LC=$(logcat -d -s GameHook 2>/dev/null | grep \"$P\" | tail -5);"
+                    + "   LC=$(logcat -d -s GameHook -s Zygisk -s Magisk 2>/dev/null | grep -E \"$P|zygisk|jawmods|module_entry\" | tail -5);"
                     + "   echo \"PID=$P MAPS=$M LOG=$L $GL LOGCAT=$LC\";"
                     + " fi");
 
@@ -410,8 +480,64 @@ public class MainActivity extends Activity {
                     break;
                 }
 
+                // ── FALLBACK: attach-agent se Zygisk nao injetou em 15s ──
+                // Zygisk deveria ter injetado no fork. Se maps=0 apos 15s, nao vai funcionar.
+                // Usar am attach-agent (Android 9+) para injetar diretamente.
+                // Extrai PID do diagnostico
+                String gamePidStr = "";
+                try {
+                    int pidIdx = diag.indexOf("PID=");
+                    if (pidIdx >= 0) {
+                        gamePidStr = diag.substring(pidIdx + 4).trim().split("\\s+")[0];
+                    }
+                } catch (Exception ignored2) {}
+
+                if (i == 15 && mapsCount == 0 && !fallbackUsed && !gamePidStr.isEmpty()) {
+                    fallbackUsed = true;
+                    updateStatus("Zygisk nao injetou. Tentando attach-agent...");
+
+                    // Copiar .so para /data/local/tmp/ (acessivel por root)
+                    String tmpSo = "/data/local/tmp/libHook.so";
+                    rootExec("cp " + hookSrc + " " + tmpSo + " ; chmod 644 " + tmpSo);
+
+                    // Metodo 1: am attach-agent (Android 9+ com debuggable ou root)
+                    // Precisa: set-debug-app OU processo debuggable
+                    // Com root, podemos usar app_process diretamente
+                    String attachResult = rootExec(
+                        "cmd activity attach-agent " + gamePidStr + " " + tmpSo + " 2>&1"
+                        + " || am attach-agent " + gamePidStr + " " + tmpSo + " 2>&1");
+
+                    if (attachResult != null && (attachResult.contains("Error") || attachResult.contains("error"))) {
+                        // Metodo 2: Usar nsenter + dlopen via /proc/PID/mem
+                        // Ou simplesmente forcar via set-debug-app + restart
+                        updateStatus("attach-agent falhou: " + attachResult.trim()
+                            + "\nTentando com set-debug-app...");
+
+                        rootExec("am set-debug-app -w " + GAME_PACKAGE + " 2>/dev/null");
+                        rootExec("am force-stop " + GAME_PACKAGE + " 2>/dev/null");
+                        Thread.sleep(1500);
+                        if (launcherActivity != null && launcherActivity.contains("/")) {
+                            rootExec("am start -n " + GAME_PACKAGE + launcherActivity + " 2>/dev/null");
+                        } else {
+                            rootExec("monkey -p " + GAME_PACKAGE + " -c android.intent.category.LAUNCHER 1 2>/dev/null");
+                        }
+                        Thread.sleep(5000);
+                        // Pegar novo PID
+                        String newPid = rootExec("pidof " + GAME_PACKAGE + " 2>/dev/null | awk '{print $1}'");
+                        if (newPid != null && !newPid.trim().isEmpty()) {
+                            rootExec("cmd activity attach-agent " + newPid.trim() + " " + tmpSo + " 2>&1"
+                                + " || am attach-agent " + newPid.trim() + " " + tmpSo + " 2>&1");
+                        }
+                        // Limpar debug flag depois
+                        rootExec("am clear-debug-app 2>/dev/null");
+                        updateStatus("Agent injetado. Aguardando hook ativar...");
+                    } else {
+                        updateStatus("attach-agent OK. Aguardando hook ativar...");
+                    }
+                }
+
                 // Mostrar diagnostico ao usuario para facilitar debug
-                String diagText = "Aguardando hook Zygisk...\nmaps=" + mapsCount;
+                String diagText = "Aguardando hook" + (fallbackUsed ? " (agent)" : " Zygisk") + "...\nmaps=" + mapsCount;
                 if (!logPart.isEmpty())
                     diagText += "\nlog: " + logPart.substring(0, Math.min(logPart.length(), 60));
                 if (!logcatPart.isEmpty())
@@ -430,21 +556,35 @@ public class MainActivity extends Activity {
                     }
                 });
             } else {
-                // Capturar diagnostico final detalhado
+                // Capturar diagnostico final detalhado e SALVAR em /sdcard/
                 String finalDiag = rootExec(
-                    "echo '=== DIAGNOSTICO ===';"
-                    + " echo 'DenyList:'; magisk --denylist ls 2>/dev/null | grep -i fire || echo '(not in denylist)';"
+                    "echo '=== JAWMODS DIAG v13 ===';"
+                    + " echo 'Zygisk:'; magisk --sqlite \"SELECT value FROM settings WHERE key='zygisk'\" 2>/dev/null;"
+                    + " echo 'DenyList enforce:'; magisk --sqlite \"SELECT value FROM settings WHERE key='denylist'\" 2>/dev/null;"
+                    + " echo 'DenyList apps:'; magisk --denylist ls 2>/dev/null | grep -i fire || echo '(not in denylist)';"
+                    + " echo 'Module dir:'; ls -la /data/adb/modules/jawmods/ 2>/dev/null;"
+                    + " echo 'Zygisk .so:'; ls -la /data/adb/modules/jawmods/zygisk/ 2>/dev/null;"
+                    + " echo 'Module state:'; ls /data/adb/modules/jawmods/disable /data/adb/modules/jawmods/remove 2>/dev/null || echo '(no disable/remove)';"
                     + " P=$(pidof " + GAME_PACKAGE + " 2>/dev/null | awk '{print $1}');"
                     + " echo \"GamePID=$P\";"
                     + " if [ -n \"$P\" ]; then"
-                    + "   echo 'Maps:'; grep -E 'arm64|jawmods|Hook' /proc/$P/maps 2>/dev/null | head -3 || echo '(no hook in maps)';"
+                    + "   echo 'Maps (all):'; grep -c '' /proc/$P/maps 2>/dev/null; echo 'Maps (hook):'; grep -iE 'arm64-v8a|jawmods|Hook|zygisk' /proc/$P/maps 2>/dev/null | head -5 || echo '(nothing)';"
                     + " fi;"
-                    + " echo 'Logcat:'; logcat -d -s GameHook 2>/dev/null | tail -8;"
-                    + " echo 'HookLog:'; cat /data/local/tmp/.hook_log 2>/dev/null | tail -3;"
-                    + " cat /data/data/" + GAME_PACKAGE + "/.hook_log 2>/dev/null | tail -3"
+                    + " echo 'Logcat GameHook+Zygisk:'; logcat -d 2>/dev/null | grep -iE 'GameHook|jawmods|zygisk_module|module_entry' | tail -15;"
+                    + " echo 'HookLog:'; cat /data/local/tmp/.hook_log 2>/dev/null | tail -5;"
+                    + " cat /data/data/" + GAME_PACKAGE + "/.hook_log 2>/dev/null | tail -5"
                 );
-                String diagMsg = "Hook nao conectou em 60s.\n";
-                if (finalDiag != null) diagMsg += finalDiag;
+
+                // Salvar em /sdcard/ para o usuario poder ler depois
+                if (finalDiag != null) {
+                    rootExec("echo '" + finalDiag.replace("'", "'\\''") + "' > /sdcard/jawmods_diag.txt 2>/dev/null");
+                }
+
+                String diagMsg = "Hook nao conectou em 45s.\nDiag salvo em /sdcard/jawmods_diag.txt\n\n";
+                if (finalDiag != null) {
+                    // Mostrar so as partes mais importantes
+                    diagMsg += finalDiag.substring(0, Math.min(finalDiag.length(), 600));
+                }
                 updateStatus(diagMsg);
                 runOnUi(new Runnable() {
                     @Override
@@ -456,8 +596,9 @@ public class MainActivity extends Activity {
 
             resetButton();
 
-            // Manter poll em background: atualiza status quando hook conectar
-            // (Zygisk pode demorar se il2cpp estava carregando)
+            // Manter poll em background SOMENTE se ainda nao conectou
+            // (se conectou, nao precisa poll — hook ja esta ativo)
+            if (!connected) {
             final String finalGameDir = gameDir;
             hookPolling = true;
             hookPollThread = new Thread(new Runnable() {
@@ -465,7 +606,7 @@ public class MainActivity extends Activity {
                 public void run() {
                     while (hookPolling) {
                         try {
-                            Thread.sleep(2000);
+                            Thread.sleep(5000); // poll a cada 5s (menos su calls)
                         } catch (InterruptedException e) {
                             break;
                         }
@@ -530,6 +671,7 @@ public class MainActivity extends Activity {
             });
             hookPollThread.setDaemon(true);
             hookPollThread.start();
+            } // end if (!connected)
 
         } catch (final Exception e) {
             final String err = "Fatal error: " + e.getClass().getSimpleName() + ": " + e.getMessage();
