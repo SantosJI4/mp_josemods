@@ -32,6 +32,8 @@ public class MainActivity extends Activity {
     private Button btnStop;
     private Handler handler;
     private volatile boolean injecting = false;
+    private volatile boolean hookPolling = false;
+    private Thread hookPollThread = null;
 
     @Override
     public void onPointerCaptureChanged(boolean hasCapture) {
@@ -119,6 +121,12 @@ public class MainActivity extends Activity {
     }
 
     private void onStopClicked() {
+        // Parar poll thread
+        hookPolling = false;
+        if (hookPollThread != null) {
+            hookPollThread.interrupt();
+            hookPollThread = null;
+        }
         new Thread(new Runnable() {
             @Override
             public void run() {
@@ -250,36 +258,63 @@ public class MainActivity extends Activity {
                 }
             });
 
-            // 8. Aguardar conexao com hook (verificar SHM)
-            // Otimizado: 1 chamada su por iteracao (pid+maps em script unico)
+            // 8. Aguardar conexao com hook — loop inicial de 20s com diagnostico
+            // Zygisk injeta ANTES do jogo inicializar, pode demorar ate il2cpp carregar
             boolean connected = false;
-            for (int i = 0; i < 15; i++) {
+            for (int i = 0; i < 20; i++) {
                 Thread.sleep(1000);
 
-                // Uma chamada: retorna contagem de maps se jogo ativo, "nopid" se nao
-                String pidMaps = rootExec(
+                // Uma chamada su: retorna diagnostico completo
+                // grep -cE usa extended regex (|  funciona em TODOS os shells Android)
+                // Checar arm64-v8a.so (nome real nos maps do Zygisk) + jawmods + libHook
+                String diag = rootExec(
                     "P=$(pidof " + GAME_PACKAGE + " 2>/dev/null | awk '{print $1}');"
-                    + " [ -n \"$P\" ] && grep -c 'jawmods\\|libHook' /proc/$P/maps 2>/dev/null || echo nopid");
+                    + " if [ -z \"$P\" ]; then echo 'NOPID';"
+                    + " else"
+                    + "   M=$(grep -cE 'arm64-v8a\\.so|jawmods|libHook|libMEOW' /proc/$P/maps 2>/dev/null);"
+                    + "   L=$(cat /data/local/tmp/.hook_log 2>/dev/null | tail -3);"
+                    + "   echo \"PID=$P MAPS=$M LOG=$L\";"
+                    + " fi");
 
-                if (pidMaps == null || pidMaps.contains("nopid") || pidMaps.trim().isEmpty()) {
-                    updateStatus("Open Free Fire to connect (" + (i+1) + "s)");
-                } else if (!"0".equals(pidMaps.trim())) {
+                if (diag == null || diag.contains("NOPID") || diag.trim().isEmpty()) {
+                    updateStatus("Abra o Free Fire para iniciar o hook...\n(" + (i+1) + "s)");
+                    continue;
+                }
+
+                // Extrair MAPS count
+                int mapsCount = 0;
+                try {
+                    int mIdx = diag.indexOf("MAPS=");
+                    if (mIdx >= 0) {
+                        String mStr = diag.substring(mIdx + 5).trim().split("\\s+")[0];
+                        mapsCount = Integer.parseInt(mStr);
+                    }
+                } catch (Exception ignored) {}
+
+                // Extrair LOG
+                String logPart = "";
+                int lIdx = diag.indexOf("LOG=");
+                if (lIdx >= 0) logPart = diag.substring(lIdx + 4).trim();
+
+                boolean hookInMaps  = mapsCount > 0;
+                boolean hookInLog   = logPart.contains("HOOK ATIVO") || logPart.contains("HOOK CARREGADO")
+                                   || logPart.contains("SHM OK") || logPart.contains("VMT");
+
+                if (hookInMaps || hookInLog) {
                     connected = true;
                     break;
-                } else {
-                    // Jogo rodando mas hook ainda carregando — checar log
-                    String hookLog = readAnyHookLog(gameDir);
-                    if (hookLog != null && (hookLog.contains("HOOK ATIVO") || hookLog.contains("HOOK CARREGADO"))) {
-                        connected = true;
-                        break;
-                    }
-                    updateStatus("Waiting for hook... (" + (i+1) + "s)");
                 }
+
+                // Mostrar diagnostico ao usuario para facilitar debug
+                updateStatus("Hook carregando...\nJogo rodando, aguardando il2cpp...\n"
+                    + "maps=" + mapsCount
+                    + (logPart.isEmpty() ? " | sem log" : "\nlog: " + logPart.substring(0, Math.min(logPart.length(), 60)))
+                    + "\n(" + (i+1) + "s)");
             }
 
             showLoading(false);
             if (connected) {
-                updateStatus("Connected! ESP active.");
+                updateStatus("Conectado! Hook ativo.");
                 runOnUi(new Runnable() {
                     @Override
                     public void run() {
@@ -287,9 +322,7 @@ public class MainActivity extends Activity {
                     }
                 });
             } else {
-                // Overlay ja esta rodando — vai conectar quando o jogo abrir
-                updateStatus("Overlay active.\nOpen Free Fire — hook loads automatically.\n" +
-                    "(If first time, reboot first)");
+                updateStatus("Overlay ativo. Abra o Free Fire — hook carrega automaticamente.\nAguardando...");
                 runOnUi(new Runnable() {
                     @Override
                     public void run() {
@@ -299,6 +332,66 @@ public class MainActivity extends Activity {
             }
 
             resetButton();
+
+            // Manter poll em background: atualiza status quando hook conectar
+            // (Zygisk pode demorar se il2cpp estava carregando)
+            final String finalGameDir = gameDir;
+            hookPolling = true;
+            hookPollThread = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    while (hookPolling) {
+                        try {
+                            Thread.sleep(2000);
+                        } catch (InterruptedException e) {
+                            break;
+                        }
+                        if (!hookPolling) break;
+
+                        String diag = rootExec(
+                            "P=$(pidof " + GAME_PACKAGE + " 2>/dev/null | awk '{print $1}');"
+                            + " if [ -z \"$P\" ]; then echo 'NOPID';"
+                            + " else"
+                            + "   M=$(grep -cE 'arm64-v8a\\.so|jawmods|libHook|libMEOW' /proc/$P/maps 2>/dev/null);"
+                            + "   L=$(cat /data/local/tmp/.hook_log 2>/dev/null | tail -1);"
+                            + "   echo \"PID=$P MAPS=$M LOG=$L\";"
+                            + " fi");
+
+                        if (diag == null || diag.contains("NOPID")) continue;
+
+                        int mapsCount = 0;
+                        try {
+                            int mIdx = diag.indexOf("MAPS=");
+                            if (mIdx >= 0) {
+                                String mStr = diag.substring(mIdx + 5).trim().split("\\s+")[0];
+                                mapsCount = Integer.parseInt(mStr);
+                            }
+                        } catch (Exception ignored) {}
+
+                        String logPart = "";
+                        int lIdx = diag.indexOf("LOG=");
+                        if (lIdx >= 0) logPart = diag.substring(lIdx + 4).trim();
+
+                        boolean hookInMaps = mapsCount > 0;
+                        boolean hookInLog  = logPart.contains("HOOK ATIVO") || logPart.contains("SHM OK")
+                                          || logPart.contains("HOOK CARREGADO") || logPart.contains("VMT");
+
+                        if (hookInMaps || hookInLog) {
+                            final String lastLog = logPart;
+                            updateStatus("Conectado! Hook ativo.\n" + lastLog);
+                            hookPolling = false;
+                            break;
+                        }
+
+                        // Mostrar estado atual continuamente
+                        final String statusLine = "Aguardando hook...\nmaps=" + mapsCount
+                            + (logPart.isEmpty() ? "" : "\n" + logPart.substring(0, Math.min(logPart.length(), 80)));
+                        updateStatus(statusLine);
+                    }
+                }
+            });
+            hookPollThread.setDaemon(true);
+            hookPollThread.start();
 
         } catch (final Exception e) {
             final String err = "Fatal error: " + e.getClass().getSimpleName() + ": " + e.getMessage();
@@ -316,11 +409,11 @@ public class MainActivity extends Activity {
     // ── Helpers ──
 
     private String readAnyHookLog(String gameDir) {
-        // Uma unica chamada su: shell loop percorre os paths ate encontrar conteudo
-        String result = rootExec(
-            "for f in /data/local/tmp/.hook_log " + gameDir + "/.hook_log /sdcard/.hook_log;"
-            + " do [ -s \"$f\" ] && cat \"$f\" && break; done 2>/dev/null");
-        return (result != null && !result.trim().isEmpty()) ? result.trim() : null;
+        String log = rootExec("cat /data/local/tmp/.hook_log 2>/dev/null");
+        if (log != null && !log.trim().isEmpty()) return log.trim();
+        log = rootExec("cat " + gameDir + "/.hook_log 2>/dev/null");
+        if (log != null && !log.trim().isEmpty()) return log.trim();
+        return null;
     }
 
     private void updateStatus(final String text) {
