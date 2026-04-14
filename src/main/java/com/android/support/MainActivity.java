@@ -393,19 +393,8 @@ public class MainActivity extends Activity {
             }
             reader.close();
 
-            int exitCode = su.waitFor();
-            String result = sb.toString().trim();
-            if (exitCode != 0) {
-                final String err = "rootExec failed: " + cmd + "\nexit=" + exitCode;
-                runOnUi(new Runnable() {
-                    @Override
-                    public void run() {
-                        Toast.makeText(MainActivity.this, err, Toast.LENGTH_LONG).show();
-                    }
-                });
-                updateStatus(err);
-            }
-            return result;
+            su.waitFor();
+            return sb.toString().trim();
         } catch (Exception e) {
             final String err = "rootExec exception: " + e.getClass().getSimpleName() + ": " + e.getMessage() + "\ncmd: " + cmd;
             runOnUi(new Runnable() {
