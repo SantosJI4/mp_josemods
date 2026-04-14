@@ -61,3 +61,21 @@ HOOK_FILES += $(LOCAL_PATH)/include/Utils/Unity/ByNameModding/fake_dlfcn.cpp
 LOCAL_SRC_FILES := $(HOOK_FILES:$(LOCAL_PATH)/%=%)
 
 include $(BUILD_SHARED_LIBRARY)
+
+# ============================================================
+# MODULE 3: injector — PTRACE INJECTOR (executável ARM64)
+# Binário nativo que injeta libHook.so no jogo via ptrace+dlopen
+# Executado via root pelo app Java
+# ============================================================
+
+include $(CLEAR_VARS)
+LOCAL_MODULE := injector
+
+LOCAL_CFLAGS := -w -fvisibility=hidden -O2 -DNDEBUG
+LOCAL_LDFLAGS += -Wl,--gc-sections,--strip-all
+LOCAL_LDLIBS := -llog -ldl
+LOCAL_ARM_MODE := arm
+
+LOCAL_SRC_FILES := injector.c
+
+include $(BUILD_EXECUTABLE)

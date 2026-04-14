@@ -45,7 +45,7 @@
 #include "ByNameModding/Il2Cpp.h"
 
 #define HOOK_TAG "GameHook"
-#define HOOK_BUILD_VER "v13-fallback"
+#define HOOK_BUILD_VER "v15-ptrace"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, HOOK_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, HOOK_TAG, __VA_ARGS__)
 
@@ -528,101 +528,24 @@ static void* hack_thread(void*) {
 }
 
 // ============================================================
-// ENTRY POINT 1: ZYGISK (primary — anti-cheat safe)
-// Carregado pelo Magisk antes do anti-cheat inicializar
-// Zero comandos detectaveis em runtime
+// ENTRY POINT: CONSTRUCTOR (ptrace + dlopen)
+// Quando o injector faz dlopen() no processo do jogo,
+// esta funcao roda automaticamente via __attribute__((constructor))
 // ============================================================
-#include "zygisk.hpp"
 
 static bool g_hookStarted = false;
 
-class JawModsModule : public zygisk::ModuleBase {
-public:
-    void onLoad(zygisk::Api *api, JNIEnv *env) override {
-        this->api = api;
-        this->env = env;
-        LOGI("Zygisk onLoad() called [%s] pid=%d", HOOK_BUILD_VER, getpid());
-    }
-
-    void preAppSpecialize(zygisk::AppSpecializeArgs *args) override {
-        LOGI("Zygisk preAppSpecialize() ENTERED pid=%d uid=%d", getpid(), getuid());
-
-        // nice_name pode ser null para processos do sistema
-        if (!args || !args->nice_name) {
-            LOGI("Zygisk preAppSpecialize() args or nice_name is NULL — skipping");
-            api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);
-            return;
-        }
-
-        const char *name = env->GetStringUTFChars(args->nice_name, nullptr);
-        if (!name) {
-            LOGI("Zygisk preAppSpecialize() GetStringUTFChars returned NULL");
-            api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);
-            return;
-        }
-        LOGI("Zygisk preAppSpecialize() nice_name=[%s] pid=%d", name, getpid());
-
-        // Checa se e o jogo alvo
-        shouldHook = (strstr(name, "freefireth") != nullptr ||
-                      strstr(name, "freefire") != nullptr ||
-                      strstr(name, "sniper3d") != nullptr);
-
-        LOGI("Zygisk preAppSpecialize() shouldHook=%d", shouldHook);
-        env->ReleaseStringUTFChars(args->nice_name, name);
-
-        if (!shouldHook) {
-            // Nao e o jogo — descarrega o modulo da memoria
-            api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);
-        }
-    }
-
-    void postAppSpecialize(const zygisk::AppSpecializeArgs *args) override {
-        LOGI("Zygisk postAppSpecialize() shouldHook=%d g_hookStarted=%d pid=%d uid=%d",
-             shouldHook, g_hookStarted, getpid(), getuid());
-        if (shouldHook && !g_hookStarted) {
-            g_hookStarted = true;
-            LOGI("Zygisk: starting hack_thread [%s] pid=%d", HOOK_BUILD_VER, getpid());
-            hookLogWrite("=== HOOK CARREGADO (Zygisk) [%s] === pid=%d uid=%d",
-                         HOOK_BUILD_VER, getpid(), getuid());
-            pthread_t t;
-            pthread_create(&t, nullptr, hack_thread, nullptr);
-            pthread_detach(t);
-        }
-    }
-
-    // Log para processos de servidor (system_server) — confirma que Zygisk chama callbacks
-    void preServerSpecialize(zygisk::ServerSpecializeArgs *args) override {
-        LOGI("Zygisk preServerSpecialize() pid=%d uid=%d (system_server) — skipping", getpid(), getuid());
-        api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);
-    }
-
-private:
-    zygisk::Api *api = nullptr;
-    JNIEnv *env = nullptr;
-    bool shouldHook = false;
-};
-
-REGISTER_ZYGISK_MODULE(JawModsModule)
-
-// ============================================================
-// ENTRY POINT 2: CONSTRUCTOR (fallback — para LD_PRELOAD)
-// Usado apenas em jogos sem anti-cheat (ex: Sniper 3D)
-// Quando carregado via Zygisk, o cmdline ainda e "zygote" aqui
-// então o check abaixo impede dupla inicializacao
-// ============================================================
 __attribute__((constructor))
 void lib_main() {
-    // Log ANTES de qualquer check — prova que o .so foi carregado
     LOGI("lib_main() LOADED [%s] pid=%d uid=%d", HOOK_BUILD_VER, getpid(), getuid());
 
-    // Verificar se estamos no processo do jogo (nao zygote)
+    // Verificar se estamos no processo do jogo
     char cmdline[256] = {0};
     FILE *f = fopen("/proc/self/cmdline", "r");
     if (f) { fread(cmdline, 1, 255, f); fclose(f); }
 
     LOGI("lib_main() cmdline=[%s]", cmdline);
 
-    // Se cmdline nao bate com o jogo, pular (Zygisk cuida via postAppSpecialize)
     if (strstr(cmdline, "freefireth") == nullptr &&
         strstr(cmdline, "freefire") == nullptr &&
         strstr(cmdline, "sniper3d") == nullptr) {
@@ -630,19 +553,18 @@ void lib_main() {
         return;
     }
 
-    if (g_hookStarted) return; // Zygisk ja iniciou
+    if (g_hookStarted) return;
     g_hookStarted = true;
 
-    LOGI("libHook.so carregada (LD_PRELOAD) [%s] pid=%d", HOOK_BUILD_VER, getpid());
-    hookLogWrite("=== HOOK CARREGADO [%s] === pid=%d uid=%d", HOOK_BUILD_VER, getpid(), getuid());
+    LOGI("libHook.so loaded (ptrace) [%s] pid=%d", HOOK_BUILD_VER, getpid());
+    hookLogWrite("=== HOOK CARREGADO (ptrace) [%s] === pid=%d uid=%d", HOOK_BUILD_VER, getpid(), getuid());
     pthread_t t;
     pthread_create(&t, nullptr, hack_thread, nullptr);
     pthread_detach(t);
 }
 
 // ============================================================
-// Agent_OnAttach — Suporte para am attach-agent (Android 9+)
-// Mantido como fallback extra (nao recomendado para AC games)
+// Agent_OnAttach — Fallback (mantido por compatibilidade)
 // ============================================================
 extern "C" JNIEXPORT jint JNICALL
 Agent_OnAttach(JavaVM* vm, char* options, void* reserved) {
