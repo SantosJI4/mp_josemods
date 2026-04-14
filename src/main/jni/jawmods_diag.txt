@@ -1,0 +1,42 @@
+=== JAWMODS DIAG v13 ===
+Zygisk:
+value=1
+DenyList enforce:
+DenyList apps:
+(not in denylist)
+Module dir:
+total 17
+drwxr-xr-x 3 root root 3452 2026-04-14 18:50 .
+drwxr-xr-x 8 root root 3452 2026-04-13 19:32 ..
+-rw-r--r-- 1 root root  123 2026-04-14 19:30 module.prop
+-rw-r--r-- 1 root root  309 2026-04-14 19:30 sepolicy.rule
+drwxr-xr-x 2 root root 3452 2026-04-13 19:32 zygisk
+Zygisk .so:
+total 910
+drwxr-xr-x 2 root root   3452 2026-04-13 19:32 .
+drwxr-xr-x 3 root root   3452 2026-04-14 18:50 ..
+-rw-r--r-- 1 root root 924024 2026-04-14 19:30 arm64-v8a.so
+Module state:
+(no disable/remove)
+GamePID=9902
+Maps (all):
+3204
+Maps (hook):
+78afe7b000-78afe9b000 r--s 00000000 00:0f 8139                           /dev/__properties__/u:object_r:vendor_socket_hook_prop:s0
+Logcat GameHook+Zygisk:
+04-14 19:30:42.517  5543  5543 D teemoat:: JawMods foi permitido o acesso de SuperUsuário
+04-14 19:30:47.598  5543  5543 D teemoat:: JawMods foi permitido o acesso de SuperUsuário
+04-14 19:30:47.599  5543  5543 D teemoat:: JawMods foi permitido o acesso de SuperUsuário
+04-14 19:30:59.261  2387  6479 W NotificationService: Package leb.f.zyfrj is above allowed toast quota, the following toast was blocked and discarded: TextToastRecord{c953d0e 9343:leb.f.zyfrj/u0a332 isSystemToast=false token=android.os.BinderProxy@af9732f text=JawMods foi permitido o acesso de SuperUsuário duration=0}
+04-14 19:31:04.281  5543  5543 D teemoat:: JawMods foi permitido o acesso de SuperUsuário
+04-14 19:31:04.282  5543  5543 D teemoat:: JawMods foi permitido o acesso de SuperUsuário
+04-14 19:31:15.010  2387  6479 W NotificationService: Package leb.f.zyfrj is above allowed toast quota, the following toast was blocked and discarded: TextToastRecord{29089d6 9343:leb.f.zyfrj/u0a332 isSystemToast=false token=android.os.BinderProxy@30e1457 text=JawMods foi permitido o acesso de SuperUsuário duration=0}
+04-14 19:31:20.650  2387  6488 W NotificationService: Package leb.f.zyfrj is above allowed toast quota, the following toast was blocked and discarded: TextToastRecord{c245d 9343:leb.f.zyfrj/u0a332 isSystemToast=false token=android.os.BinderProxy@52e01d2 text=JawMods foi permitido o acesso de SuperUsuário duration=0}
+04-14 19:31:25.906  2387  6556 W NotificationService: Package leb.f.zyfrj is above allowed toast quota, the following toast was blocked and discarded: TextToastRecord{f462a1 9343:leb.f.zyfrj/u0a332 isSystemToast=false token=android.os.BinderProxy@7a13cc6 text=JawMods foi permitido o acesso de SuperUsuário duration=0}
+04-14 19:31:31.610  5543  5543 D teemoat:: JawMods foi permitido o acesso de SuperUsuário
+04-14 19:31:31.610  5543  5543 D teemoat:: JawMods foi permitido o acesso de SuperUsuário
+04-14 19:31:42.279  5543  5543 D teemoat:: JawMods foi permitido o acesso de SuperUsuário
+04-14 19:31:42.280  5543  5543 D teemoat:: JawMods foi permitido o acesso de SuperUsuário
+04-14 19:31:46.628  5543  5543 D teemoat:: JawMods foi permitido o acesso de SuperUsuário
+04-14 19:31:46.628  5543  5543 D teemoat:: JawMods foi permitido o acesso de SuperUsuário
+HookLog:
