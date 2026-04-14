@@ -309,7 +309,12 @@ public class MainActivity extends Activity {
 
         } catch (final Exception e) {
             final String err = "Fatal error: " + e.getClass().getSimpleName() + ": " + e.getMessage();
-            runOnUi(() -> Toast.makeText(this, err, Toast.LENGTH_LONG).show());
+            runOnUi(new Runnable() {
+                @Override
+                public void run() {
+                    Toast.makeText(MainActivity.this, err, Toast.LENGTH_LONG).show();
+                }
+            });
             updateStatus(err);
             resetButton();
         }
@@ -392,13 +397,23 @@ public class MainActivity extends Activity {
             String result = sb.toString().trim();
             if (exitCode != 0) {
                 final String err = "rootExec failed: " + cmd + "\nexit=" + exitCode;
-                runOnUi(() -> Toast.makeText(this, err, Toast.LENGTH_LONG).show());
+                runOnUi(new Runnable() {
+                    @Override
+                    public void run() {
+                        Toast.makeText(MainActivity.this, err, Toast.LENGTH_LONG).show();
+                    }
+                });
                 updateStatus(err);
             }
             return result;
         } catch (Exception e) {
             final String err = "rootExec exception: " + e.getClass().getSimpleName() + ": " + e.getMessage() + "\ncmd: " + cmd;
-            runOnUi(() -> Toast.makeText(this, err, Toast.LENGTH_LONG).show());
+            runOnUi(new Runnable() {
+                @Override
+                public void run() {
+                    Toast.makeText(MainActivity.this, err, Toast.LENGTH_LONG).show();
+                }
+            });
             updateStatus(err);
             return null;
         } finally {
