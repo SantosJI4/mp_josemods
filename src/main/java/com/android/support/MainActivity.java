@@ -352,13 +352,33 @@ public class MainActivity extends Activity {
     // ══════════════════════════════════════
 
     private String rootExec(String cmd) {
+        Process su = null;
         try {
-            Process su = Runtime.getRuntime().exec("su");
+            su = Runtime.getRuntime().exec("su");
+
+            // Enviar comando e fechar stdin para sinalizar fim da entrada
             DataOutputStream os = new DataOutputStream(su.getOutputStream());
             os.writeBytes(cmd + "\n");
             os.writeBytes("exit\n");
             os.flush();
+            os.close();
 
+            // CRÍTICO: consumir stderr em thread separada para evitar deadlock no pipe
+            // Sem isso, comandos que escrevem em stderr travam o processo indefinidamente
+            final Process proc = su;
+            Thread stderrDrainer = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        byte[] buf = new byte[4096];
+                        while (proc.getErrorStream().read(buf) != -1) { /* descarta */ }
+                    } catch (Exception ignored) {}
+                }
+            });
+            stderrDrainer.setDaemon(true);
+            stderrDrainer.start();
+
+            // Ler stdout
             BufferedReader reader = new BufferedReader(
                     new InputStreamReader(su.getInputStream()));
             StringBuilder sb = new StringBuilder();
@@ -366,9 +386,9 @@ public class MainActivity extends Activity {
             while ((line = reader.readLine()) != null) {
                 sb.append(line).append("\n");
             }
-            int exitCode = su.waitFor();
             reader.close();
-            os.close();
+
+            int exitCode = su.waitFor();
             String result = sb.toString().trim();
             if (exitCode != 0) {
                 final String err = "rootExec failed: " + cmd + "\nexit=" + exitCode;
@@ -381,6 +401,11 @@ public class MainActivity extends Activity {
             runOnUi(() -> Toast.makeText(this, err, Toast.LENGTH_LONG).show());
             updateStatus(err);
             return null;
+        } finally {
+            // Garantir que o processo é sempre destruído ao sair (evita resource leak)
+            if (su != null) {
+                su.destroy();
+            }
         }
     }
 
