@@ -15,7 +15,6 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.BufferedReader;
-import java.io.DataOutputStream;
 import java.io.File;
 import java.io.InputStreamReader;
 
@@ -200,19 +199,15 @@ public class MainActivity extends Activity {
                 moduleAlreadyExisted = false; // Tava desabilitado, precisa reboot
             }
 
-            // 5. Instalar/atualizar modulo Zygisk
+            // 5. Instalar/atualizar modulo Zygisk (batched: 2 chamadas su)
             updateStatus("Installing Zygisk module...");
-            rootExec("mkdir -p " + moduleDir + "/zygisk");
-            rootExec("cp " + hookSrc + " " + moduleDir + "/zygisk/arm64-v8a.so");
-            rootExec("chmod 644 " + moduleDir + "/zygisk/arm64-v8a.so");
+            rootExec("mkdir -p " + moduleDir + "/zygisk"
+                    + " ; cp " + hookSrc + " " + moduleDir + "/zygisk/arm64-v8a.so"
+                    + " ; chmod 644 " + moduleDir + "/zygisk/arm64-v8a.so");
 
-            // Criar module.prop
-            rootExec("echo 'id=jawmods' > " + moduleDir + "/module.prop");
-            rootExec("echo 'name=JawMods ESP Hook' >> " + moduleDir + "/module.prop");
-            rootExec("echo 'version=v10' >> " + moduleDir + "/module.prop");
-            rootExec("echo 'versionCode=10' >> " + moduleDir + "/module.prop");
-            rootExec("echo 'author=JawMods' >> " + moduleDir + "/module.prop");
-            rootExec("echo 'description=ESP hook via Zygisk for Unity games' >> " + moduleDir + "/module.prop");
+            // Criar module.prop em uma unica chamada su
+            rootExec("printf 'id=jawmods\\nname=JawMods ESP Hook\\nversion=v10\\nversionCode=10\\nauthor=JawMods\\ndescription=ESP hook via Zygisk for Unity games\\n'"
+                    + " > " + moduleDir + "/module.prop");
 
             // Verificar que o modulo foi instalado
             String checkModule = rootExec("cat " + moduleDir + "/module.prop 2>/dev/null");
@@ -222,16 +217,14 @@ public class MainActivity extends Activity {
                 return;
             }
 
-            // 6. Pre-criar SHM e hook log com permissoes
-            rootExec("rm -f /data/local/tmp/.esp_shm /data/local/tmp/.hook_log");
-            rootExec("dd if=/dev/zero of=/data/local/tmp/.esp_shm bs=4096 count=1 2>/dev/null");
-            rootExec("chmod 666 /data/local/tmp/.esp_shm");
-            rootExec("touch /data/local/tmp/.hook_log; chmod 666 /data/local/tmp/.hook_log");
-
-            // Game dir permissoes para overlay ler SHM
-            rootExec("mkdir -p " + gameDir);
-            rootExec("chmod 711 " + gameDir);
-            rootExec("touch " + gameDir + "/.hook_log; chmod 666 " + gameDir + "/.hook_log");
+            // 6. Pre-criar SHM e hook log com permissoes (batched: 2 chamadas su)
+            rootExec("rm -f /data/local/tmp/.esp_shm /data/local/tmp/.hook_log"
+                    + " ; dd if=/dev/zero of=/data/local/tmp/.esp_shm bs=4096 count=1 2>/dev/null"
+                    + " ; chmod 666 /data/local/tmp/.esp_shm"
+                    + " ; touch /data/local/tmp/.hook_log ; chmod 666 /data/local/tmp/.hook_log");
+            rootExec("mkdir -p " + gameDir
+                    + " ; chmod 711 " + gameDir
+                    + " ; touch " + gameDir + "/.hook_log ; chmod 666 " + gameDir + "/.hook_log");
 
             // 7. Decisao: reboot ou iniciar overlay
             if (!moduleAlreadyExisted) {
@@ -258,29 +251,29 @@ public class MainActivity extends Activity {
             });
 
             // 8. Aguardar conexao com hook (verificar SHM)
+            // Otimizado: 1 chamada su por iteracao (pid+maps em script unico)
             boolean connected = false;
             for (int i = 0; i < 15; i++) {
                 Thread.sleep(1000);
 
-                // Checar hook log
-                String hookLog = readAnyHookLog(gameDir);
-                if (hookLog != null && (hookLog.contains("HOOK ATIVO") || hookLog.contains("HOOK CARREGADO"))) {
+                // Uma chamada: retorna contagem de maps se jogo ativo, "nopid" se nao
+                String pidMaps = rootExec(
+                    "P=$(pidof " + GAME_PACKAGE + " 2>/dev/null | awk '{print $1}');"
+                    + " [ -n \"$P\" ] && grep -c 'jawmods\\|libHook' /proc/$P/maps 2>/dev/null || echo nopid");
+
+                if (pidMaps == null || pidMaps.contains("nopid") || pidMaps.trim().isEmpty()) {
+                    updateStatus("Open Free Fire to connect (" + (i+1) + "s)");
+                } else if (!"0".equals(pidMaps.trim())) {
                     connected = true;
                     break;
-                }
-
-                // Checar se o jogo esta rodando com hook
-                String pid2 = rootExec("pidof " + GAME_PACKAGE);
-                if (pid2 != null && !pid2.trim().isEmpty()) {
-                    String p = pid2.trim().split("\\s+")[0];
-                    String hookMaps = rootExec("grep -c 'jawmods\\|libHook' /proc/" + p + "/maps 2>/dev/null");
-                    if (hookMaps != null && !"0".equals(hookMaps.trim())) {
+                } else {
+                    // Jogo rodando mas hook ainda carregando — checar log
+                    String hookLog = readAnyHookLog(gameDir);
+                    if (hookLog != null && (hookLog.contains("HOOK ATIVO") || hookLog.contains("HOOK CARREGADO"))) {
                         connected = true;
                         break;
                     }
                     updateStatus("Waiting for hook... (" + (i+1) + "s)");
-                } else {
-                    updateStatus("Open Free Fire to connect (" + (i+1) + "s)");
                 }
             }
 
@@ -323,12 +316,11 @@ public class MainActivity extends Activity {
     // ── Helpers ──
 
     private String readAnyHookLog(String gameDir) {
-        String log = rootExec("cat /data/local/tmp/.hook_log 2>/dev/null");
-        if (log != null && !log.trim().isEmpty()) return log;
-        log = rootExec("cat " + gameDir + "/.hook_log 2>/dev/null");
-        if (log != null && !log.trim().isEmpty()) return log;
-        log = rootExec("cat /sdcard/.hook_log 2>/dev/null");
-        return log;
+        // Uma unica chamada su: shell loop percorre os paths ate encontrar conteudo
+        String result = rootExec(
+            "for f in /data/local/tmp/.hook_log " + gameDir + "/.hook_log /sdcard/.hook_log;"
+            + " do [ -s \"$f\" ] && cat \"$f\" && break; done 2>/dev/null");
+        return (result != null && !result.trim().isEmpty()) ? result.trim() : null;
     }
 
     private void updateStatus(final String text) {
@@ -359,17 +351,11 @@ public class MainActivity extends Activity {
     private String rootExec(String cmd) {
         Process su = null;
         try {
-            su = Runtime.getRuntime().exec("su");
+            // su -c "cmd" é mais robusto que piping via stdin em dispositivos Android
+            // Evita confusao do su ao spawnar muitos processos rapidamente
+            su = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd});
 
-            // Enviar comando e fechar stdin para sinalizar fim da entrada
-            DataOutputStream os = new DataOutputStream(su.getOutputStream());
-            os.writeBytes(cmd + "\n");
-            os.writeBytes("exit\n");
-            os.flush();
-            os.close();
-
-            // CRÍTICO: consumir stderr em thread separada para evitar deadlock no pipe
-            // Sem isso, comandos que escrevem em stderr travam o processo indefinidamente
+            // Consumir stderr em thread separada para evitar deadlock no pipe
             final Process proc = su;
             Thread stderrDrainer = new Thread(new Runnable() {
                 @Override
@@ -383,7 +369,6 @@ public class MainActivity extends Activity {
             stderrDrainer.setDaemon(true);
             stderrDrainer.start();
 
-            // Ler stdout
             BufferedReader reader = new BufferedReader(
                     new InputStreamReader(su.getInputStream()));
             StringBuilder sb = new StringBuilder();
@@ -392,21 +377,11 @@ public class MainActivity extends Activity {
                 sb.append(line).append("\n");
             }
             reader.close();
-
             su.waitFor();
             return sb.toString().trim();
         } catch (Exception e) {
-            final String err = "rootExec exception: " + e.getClass().getSimpleName() + ": " + e.getMessage() + "\ncmd: " + cmd;
-            runOnUi(new Runnable() {
-                @Override
-                public void run() {
-                    Toast.makeText(MainActivity.this, err, Toast.LENGTH_LONG).show();
-                }
-            });
-            updateStatus(err);
             return null;
         } finally {
-            // Garantir que o processo é sempre destruído ao sair (evita resource leak)
             if (su != null) {
                 su.destroy();
             }
