@@ -45,7 +45,7 @@
 #include "ByNameModding/Il2Cpp.h"
 
 #define HOOK_TAG "GameHook"
-#define HOOK_BUILD_VER "v11-sepolicy"
+#define HOOK_BUILD_VER "v12-denylist"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, HOOK_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, HOOK_TAG, __VA_ARGS__)
 
@@ -545,7 +545,21 @@ public:
     }
 
     void preAppSpecialize(zygisk::AppSpecializeArgs *args) override {
+        LOGI("Zygisk preAppSpecialize() ENTERED pid=%d uid=%d", getpid(), getuid());
+
+        // nice_name pode ser null para processos do sistema
+        if (!args || !args->nice_name) {
+            LOGI("Zygisk preAppSpecialize() args or nice_name is NULL — skipping");
+            api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);
+            return;
+        }
+
         const char *name = env->GetStringUTFChars(args->nice_name, nullptr);
+        if (!name) {
+            LOGI("Zygisk preAppSpecialize() GetStringUTFChars returned NULL");
+            api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);
+            return;
+        }
         LOGI("Zygisk preAppSpecialize() nice_name=[%s] pid=%d", name, getpid());
 
         // Checa se e o jogo alvo
@@ -574,6 +588,12 @@ public:
             pthread_create(&t, nullptr, hack_thread, nullptr);
             pthread_detach(t);
         }
+    }
+
+    // Log para processos de servidor (system_server) — confirma que Zygisk chama callbacks
+    void preServerSpecialize(zygisk::ServerSpecializeArgs *args) override {
+        LOGI("Zygisk preServerSpecialize() pid=%d uid=%d (system_server) — skipping", getpid(), getuid());
+        api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);
     }
 
 private:

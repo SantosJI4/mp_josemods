@@ -180,6 +180,36 @@ public class MainActivity extends Activity {
             // Tambem checar se o diretorio de modulos zygisk existe
             String zygiskDir = rootExec("ls /data/adb/modules/.zygisk 2>/dev/null; ls /data/adb/zygisk 2>/dev/null");
 
+            // 3b. CRITICO: Verificar e remover DenyList para o jogo
+            // Se Free Fire esta no DenyList, Zygisk NAO carrega modulo nele!
+            // O usuario pode ter adicionado para esconder root, mas isso bloqueia nosso hook.
+            updateStatus("Checking DenyList...");
+            String denyList = rootExec("magisk --denylist ls 2>/dev/null");
+            if (denyList != null && denyList.contains(GAME_PACKAGE)) {
+                updateStatus("Removing " + GAME_PACKAGE + " from DenyList...");
+                rootExec("magisk --denylist rm " + GAME_PACKAGE + " 2>/dev/null");
+                // Verificar se removeu
+                String denyCheck = rootExec("magisk --denylist ls 2>/dev/null");
+                if (denyCheck != null && denyCheck.contains(GAME_PACKAGE)) {
+                    updateStatus("WARNING: Could not remove game from DenyList.\n"
+                        + "Go to Magisk > Settings > DenyList > remove " + GAME_PACKAGE + " manually.\n"
+                        + "DenyList blocks Zygisk from loading our hook!");
+                    resetButton();
+                    return;
+                }
+                updateStatus("DenyList: game removed successfully.");
+            }
+
+            // 3c. Verificar Enforce DenyList — se ativo, desabilita
+            // Com Enforce DenyList ON + game na lista = Zygisk nao carrega
+            String enforceDeny = rootExec("magisk --sqlite \"SELECT value FROM settings WHERE key='denylist'\" 2>/dev/null");
+            if (enforceDeny != null && enforceDeny.contains("1")) {
+                // DenyList enforce esta ativo. Para garantia, desabilitar
+                // (so afeta o enforce, nao remove apps da lista)
+                rootExec("magisk --sqlite \"REPLACE INTO settings (key,value) VALUES('denylist',0)\" 2>/dev/null");
+                updateStatus("Enforce DenyList disabled for Zygisk compatibility.");
+            }
+
             // 4. Verificar se modulo JA existia (antes de instalar)
             final String hookSrc = getApplicationInfo().nativeLibraryDir + "/libHook.so";
             final String moduleDir = "/data/adb/modules/jawmods";
@@ -322,14 +352,16 @@ public class MainActivity extends Activity {
                 Thread.sleep(1000);
 
                 // Uma chamada su: retorna diagnostico completo (maps + log + logcat)
+                // Filtrar logcat SOMENTE pelo PID do jogo para evitar falso positivo
                 String diag = rootExec(
                     "P=$(pidof " + GAME_PACKAGE + " 2>/dev/null | awk '{print $1}');"
                     + " if [ -z \"$P\" ]; then echo 'NOPID';"
                     + " else"
                     + "   M=$(grep -cE 'arm64-v8a\\.so|jawmods|libHook' /proc/$P/maps 2>/dev/null);"
                     + "   L=$(cat /data/local/tmp/.hook_log 2>/dev/null | tail -3);"
-                    + "   LC=$(logcat -d -s GameHook 2>/dev/null | tail -5);"
-                    + "   echo \"PID=$P MAPS=$M LOG=$L LOGCAT=$LC\";"
+                    + "   GL=$(cat /data/data/" + GAME_PACKAGE + "/.hook_log 2>/dev/null | tail -3);"
+                    + "   LC=$(logcat -d -s GameHook 2>/dev/null | grep \"$P\" | tail -5);"
+                    + "   echo \"PID=$P MAPS=$M LOG=$L $GL LOGCAT=$LC\";"
                     + " fi");
 
                 if (diag == null || diag.contains("NOPID") || diag.trim().isEmpty()) {
@@ -368,8 +400,10 @@ public class MainActivity extends Activity {
                 boolean hookInLog   = logPart.contains("HOOK ATIVO") || logPart.contains("HOOK CARREGADO")
                                    || logPart.contains("SHM OK") || logPart.contains("VMT");
                 boolean hookInLogcat = logcatPart.contains("HOOK ATIVO") || logcatPart.contains("HOOK CARREGADO")
-                                    || logcatPart.contains("hack_thread") || logcatPart.contains("Zygisk")
+                                    || logcatPart.contains("hack_thread")
                                     || logcatPart.contains("postAppSpecialize");
+                // NAO usar contains("Zygisk") aqui! onLoad() roda para TODOS processos
+                // (system_server etc), nao so Free Fire. Causa falso positivo.
 
                 if (hookInMaps || hookInLog || hookInLogcat) {
                     connected = true;
@@ -396,7 +430,22 @@ public class MainActivity extends Activity {
                     }
                 });
             } else {
-                updateStatus("Overlay ativo. Abra o Free Fire — hook carrega automaticamente.\nAguardando...");
+                // Capturar diagnostico final detalhado
+                String finalDiag = rootExec(
+                    "echo '=== DIAGNOSTICO ===';"
+                    + " echo 'DenyList:'; magisk --denylist ls 2>/dev/null | grep -i fire || echo '(not in denylist)';"
+                    + " P=$(pidof " + GAME_PACKAGE + " 2>/dev/null | awk '{print $1}');"
+                    + " echo \"GamePID=$P\";"
+                    + " if [ -n \"$P\" ]; then"
+                    + "   echo 'Maps:'; grep -E 'arm64|jawmods|Hook' /proc/$P/maps 2>/dev/null | head -3 || echo '(no hook in maps)';"
+                    + " fi;"
+                    + " echo 'Logcat:'; logcat -d -s GameHook 2>/dev/null | tail -8;"
+                    + " echo 'HookLog:'; cat /data/local/tmp/.hook_log 2>/dev/null | tail -3;"
+                    + " cat /data/data/" + GAME_PACKAGE + "/.hook_log 2>/dev/null | tail -3"
+                );
+                String diagMsg = "Hook nao conectou em 60s.\n";
+                if (finalDiag != null) diagMsg += finalDiag;
+                updateStatus(diagMsg);
                 runOnUi(new Runnable() {
                     @Override
                     public void run() {
@@ -428,8 +477,9 @@ public class MainActivity extends Activity {
                             + " else"
                             + "   M=$(grep -cE 'arm64-v8a\\.so|jawmods|libHook' /proc/$P/maps 2>/dev/null);"
                             + "   L=$(cat /data/local/tmp/.hook_log 2>/dev/null | tail -1);"
-                            + "   LC=$(logcat -d -s GameHook 2>/dev/null | tail -3);"
-                            + "   echo \"PID=$P MAPS=$M LOG=$L LOGCAT=$LC\";"
+                            + "   GL=$(cat /data/data/" + GAME_PACKAGE + "/.hook_log 2>/dev/null | tail -1);"
+                            + "   LC=$(logcat -d -s GameHook 2>/dev/null | grep \"$P\" | tail -3);"
+                            + "   echo \"PID=$P MAPS=$M LOG=$L $GL LOGCAT=$LC\";"
                             + " fi");
 
                         if (diag == null || diag.contains("NOPID")) continue;
@@ -461,7 +511,7 @@ public class MainActivity extends Activity {
                         boolean hookInMaps = mapsCount > 0;
                         boolean hookInLog  = logPart.contains("HOOK ATIVO") || logPart.contains("SHM OK")
                                           || logPart.contains("HOOK CARREGADO") || logPart.contains("VMT");
-                        boolean hookInLogcat = logcatPart.contains("HOOK ATIVO") || logcatPart.contains("Zygisk")
+                        boolean hookInLogcat = logcatPart.contains("HOOK ATIVO") || logcatPart.contains("HOOK CARREGADO")
                                            || logcatPart.contains("hack_thread") || logcatPart.contains("postAppSpecialize");
 
                         if (hookInMaps || hookInLog || hookInLogcat) {
