@@ -165,7 +165,6 @@ public class MainActivity extends Activity {
             updateStatus("Preparing files...");
             final String nativeDir = getApplicationInfo().nativeLibraryDir;
             final String hookSrc = nativeDir + "/libHook.so";
-            final String injectorSrc = nativeDir + "/injector";
             final String tmpHook = "/data/local/tmp/libHook.so";
             final String tmpInjector = "/data/local/tmp/injector";
 
@@ -175,17 +174,21 @@ public class MainActivity extends Activity {
                 return;
             }
 
-            // Copiar injector (pode estar como lib no APK)
-            // AIDE compila executaveis com prefixo lib — checar ambos
-            String injSrc = injectorSrc;
+            // Injector fica como libinjector.so no APK
+            // (Android so extrai lib*.so para nativeLibraryDir)
+            String injSrc = nativeDir + "/libinjector.so";
             if (!new File(injSrc).exists()) {
-                // AIDE pode ter compilado como libinjector.so
-                injSrc = nativeDir + "/libinjector.so";
+                // Fallback: checar sem prefixo/sufixo
+                injSrc = nativeDir + "/injector";
+            }
+            if (!new File(injSrc).exists()) {
+                // Ultimo fallback: libinjector (sem .so)
+                injSrc = nativeDir + "/libinjector";
             }
             if (!new File(injSrc).exists()) {
                 updateStatus("Injector binary not found.\n"
-                    + "Checked: " + injectorSrc + "\n"
-                    + "and: " + nativeDir + "/libinjector.so\n"
+                    + "nativeDir: " + nativeDir + "\n"
+                    + "Tried: libinjector.so, injector, libinjector\n"
                     + "Rebuild the project.");
                 resetButton();
                 return;

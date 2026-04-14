@@ -1,42 +1,52 @@
-=== JAWMODS DIAG v13 ===
+=== JAWMODS DIAG v14 ===
 Zygisk:
 value=1
-DenyList enforce:
-DenyList apps:
-(not in denylist)
-Module dir:
-total 17
-drwxr-xr-x 3 root root 3452 2026-04-14 18:50 .
-drwxr-xr-x 8 root root 3452 2026-04-13 19:32 ..
--rw-r--r-- 1 root root  123 2026-04-14 19:30 module.prop
--rw-r--r-- 1 root root  309 2026-04-14 19:30 sepolicy.rule
-drwxr-xr-x 2 root root 3452 2026-04-13 19:32 zygisk
-Zygisk .so:
+DenyList:
+(clean)
+Module:
 total 910
 drwxr-xr-x 2 root root   3452 2026-04-13 19:32 .
 drwxr-xr-x 3 root root   3452 2026-04-14 18:50 ..
--rw-r--r-- 1 root root 924024 2026-04-14 19:30 arm64-v8a.so
-Module state:
-(no disable/remove)
-GamePID=9902
-Maps (all):
-3204
-Maps (hook):
-78afe7b000-78afe9b000 r--s 00000000 00:0f 8139                           /dev/__properties__/u:object_r:vendor_socket_hook_prop:s0
-Logcat GameHook+Zygisk:
-04-14 19:30:42.517  5543  5543 D teemoat:: JawMods foi permitido o acesso de SuperUsuário
-04-14 19:30:47.598  5543  5543 D teemoat:: JawMods foi permitido o acesso de SuperUsuário
-04-14 19:30:47.599  5543  5543 D teemoat:: JawMods foi permitido o acesso de SuperUsuário
-04-14 19:30:59.261  2387  6479 W NotificationService: Package leb.f.zyfrj is above allowed toast quota, the following toast was blocked and discarded: TextToastRecord{c953d0e 9343:leb.f.zyfrj/u0a332 isSystemToast=false token=android.os.BinderProxy@af9732f text=JawMods foi permitido o acesso de SuperUsuário duration=0}
-04-14 19:31:04.281  5543  5543 D teemoat:: JawMods foi permitido o acesso de SuperUsuário
-04-14 19:31:04.282  5543  5543 D teemoat:: JawMods foi permitido o acesso de SuperUsuário
-04-14 19:31:15.010  2387  6479 W NotificationService: Package leb.f.zyfrj is above allowed toast quota, the following toast was blocked and discarded: TextToastRecord{29089d6 9343:leb.f.zyfrj/u0a332 isSystemToast=false token=android.os.BinderProxy@30e1457 text=JawMods foi permitido o acesso de SuperUsuário duration=0}
-04-14 19:31:20.650  2387  6488 W NotificationService: Package leb.f.zyfrj is above allowed toast quota, the following toast was blocked and discarded: TextToastRecord{c245d 9343:leb.f.zyfrj/u0a332 isSystemToast=false token=android.os.BinderProxy@52e01d2 text=JawMods foi permitido o acesso de SuperUsuário duration=0}
-04-14 19:31:25.906  2387  6556 W NotificationService: Package leb.f.zyfrj is above allowed toast quota, the following toast was blocked and discarded: TextToastRecord{f462a1 9343:leb.f.zyfrj/u0a332 isSystemToast=false token=android.os.BinderProxy@7a13cc6 text=JawMods foi permitido o acesso de SuperUsuário duration=0}
-04-14 19:31:31.610  5543  5543 D teemoat:: JawMods foi permitido o acesso de SuperUsuário
-04-14 19:31:31.610  5543  5543 D teemoat:: JawMods foi permitido o acesso de SuperUsuário
-04-14 19:31:42.279  5543  5543 D teemoat:: JawMods foi permitido o acesso de SuperUsuário
-04-14 19:31:42.280  5543  5543 D teemoat:: JawMods foi permitido o acesso de SuperUsuário
-04-14 19:31:46.628  5543  5543 D teemoat:: JawMods foi permitido o acesso de SuperUsuário
-04-14 19:31:46.628  5543  5543 D teemoat:: JawMods foi permitido o acesso de SuperUsuário
+-rw-r--r-- 1 root root 924024 2026-04-14 19:44 arm64-v8a.so
+State:
+(active)
+PID=19930
+Maps hook:
+All Logcat GameHook:
+04-14 18:50:59.865   865   865 ? cust_nvram: chipId[0x6768], adieId[0x0000]
+04-14 18:51:00.421   861   861 ? cust_nvram: chipId[0x6768], adieId[0x0000]
+04-14 18:51:00.465  1116  1116 ? cust_nvram: chipId[0x6768], adieId[0x0000]
+04-14 18:51:01.286  1155  1155 ? cust_nvram: chipId[0x6768], adieId[0x0000]
+04-14 18:51:03.859  1677  1694 ? cust_nvram: chipId[0x6768], adieId[0x0000]
+04-14 18:51:03.870   840   840 ? cust_nvram: chipId[0x6768], adieId[0x0000]
+04-14 18:51:05.719  1764  1764 I GameHook: lib_main() LOADED [v11-sepolicy] pid=1764 uid=0
+04-14 18:51:05.719  1764  1764 I GameHook: lib_main() cmdline=[zygote64]
+04-14 18:51:05.719  1764  1764 I GameHook: lib_main() skipping (not game process)
+04-14 18:51:05.722  1764  1764 I GameHook: Zygisk onLoad() called [v11-sepolicy] pid=1764
+04-14 18:51:17.006  2007  2007 I GameHook: lib_main() LOADED [v11-sepolicy] pid=2007 uid=0
+04-14 18:51:17.006  2007  2007 I GameHook: lib_main() cmdline=[zygote64]
+04-14 18:51:17.006  2007  2007 I GameHook: lib_main() skipping (not game process)
+04-14 18:51:17.006  2007  2007 I GameHook: Zygisk onLoad() called [v11-sepolicy] pid=2007
+04-14 18:51:28.227  2217  2217 I GameHook: lib_main() LOADED [v11-sepolicy] pid=2217 uid=0
+04-14 18:51:28.227  2217  2217 I GameHook: lib_main() cmdline=[zygote64]
+04-14 18:51:28.227  2217  2217 I GameHook: lib_main() skipping (not game process)
+04-14 18:51:28.227  2217  2217 I GameHook: Zygisk onLoad() called [v11-sepolicy] pid=2217
+04-14 18:52:00.321   820   887 ? cust_nvram: chipId[0x6768], adieId[0x0000]
+04-14 18:52:11.200  7990  8125 ? cust_nvram: chipId[0x6768], adieId[0x0000]
 HookLog:
+Agent tried: true debug: true
+Last result: Exception occurred while executing attach-agent:
+java.lang.SecurityException: Process not debuggable: com.dts.freefireth
+	at com.android.server.am.ActivityManagerService.enforceDebuggable(ActivityManagerService.java:6201)
+	at com.android.server.am.ActivityManagerService.attachAgent(ActivityManagerService.java:18843)
+	at com.android.server.am.ActivityManagerShellCommand.runAttachAgent(ActivityManagerShellCommand.java:3071)
+	at com.android.server.am.ActivityManagerShellCommand.onCommand(ActivityManagerShellCommand.java:328)
+	at com.android.modules.utils.BasicShellCommandHandler.exec(BasicShellCommandHandler.java:97)
+	at android.os.ShellCommand.exec(ShellCommand.java:38)
+	at com.android.server.am.ActivityManagerService.onShellCommand(ActivityManagerService.java:9667)
+	at android.os.Binder.shellCommand(Binder.java:1054)
+	at android.os.Binder.onTransact(Binder.java:882)
+	at android.app.IActivityManager$Stub.onTransact(IActivityManager.java:5374)
+	at com.android.server.am.ActivityManagerService.onTransact(ActivityManagerService.java:2748)
+	at android.os.Binder.execTransactInternal(Binder.java:1290)
+	at android.os.Binder.execTransact(Binder.java:1249)

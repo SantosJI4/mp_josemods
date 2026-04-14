@@ -70,8 +70,9 @@ include $(BUILD_SHARED_LIBRARY)
 
 include $(CLEAR_VARS)
 LOCAL_MODULE := injector
+LOCAL_MODULE_FILENAME := libinjector
 
-LOCAL_CFLAGS := -w -fvisibility=hidden -O2 -DNDEBUG
+LOCAL_CFLAGS := -w -fvisibility=hidden -O2 -DNDEBUG -pie -fPIE
 LOCAL_LDFLAGS += -Wl,--gc-sections,--strip-all
 LOCAL_LDLIBS := -llog -ldl
 LOCAL_ARM_MODE := arm
