@@ -45,7 +45,7 @@
 #include "ByNameModding/Il2Cpp.h"
 
 #define HOOK_TAG "GameHook"
-#define HOOK_BUILD_VER "v10-zygisk-fix"
+#define HOOK_BUILD_VER "v11-sepolicy"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, HOOK_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, HOOK_TAG, __VA_ARGS__)
 
@@ -541,16 +541,19 @@ public:
     void onLoad(zygisk::Api *api, JNIEnv *env) override {
         this->api = api;
         this->env = env;
+        LOGI("Zygisk onLoad() called [%s] pid=%d", HOOK_BUILD_VER, getpid());
     }
 
     void preAppSpecialize(zygisk::AppSpecializeArgs *args) override {
         const char *name = env->GetStringUTFChars(args->nice_name, nullptr);
+        LOGI("Zygisk preAppSpecialize() nice_name=[%s] pid=%d", name, getpid());
 
         // Checa se e o jogo alvo
         shouldHook = (strstr(name, "freefireth") != nullptr ||
                       strstr(name, "freefire") != nullptr ||
                       strstr(name, "sniper3d") != nullptr);
 
+        LOGI("Zygisk preAppSpecialize() shouldHook=%d", shouldHook);
         env->ReleaseStringUTFChars(args->nice_name, name);
 
         if (!shouldHook) {
@@ -560,9 +563,11 @@ public:
     }
 
     void postAppSpecialize(const zygisk::AppSpecializeArgs *args) override {
+        LOGI("Zygisk postAppSpecialize() shouldHook=%d g_hookStarted=%d pid=%d uid=%d",
+             shouldHook, g_hookStarted, getpid(), getuid());
         if (shouldHook && !g_hookStarted) {
             g_hookStarted = true;
-            LOGI("Zygisk: hooking game [%s] pid=%d", HOOK_BUILD_VER, getpid());
+            LOGI("Zygisk: starting hack_thread [%s] pid=%d", HOOK_BUILD_VER, getpid());
             hookLogWrite("=== HOOK CARREGADO (Zygisk) [%s] === pid=%d uid=%d",
                          HOOK_BUILD_VER, getpid(), getuid());
             pthread_t t;
@@ -587,15 +592,21 @@ REGISTER_ZYGISK_MODULE(JawModsModule)
 // ============================================================
 __attribute__((constructor))
 void lib_main() {
+    // Log ANTES de qualquer check — prova que o .so foi carregado
+    LOGI("lib_main() LOADED [%s] pid=%d uid=%d", HOOK_BUILD_VER, getpid(), getuid());
+
     // Verificar se estamos no processo do jogo (nao zygote)
     char cmdline[256] = {0};
     FILE *f = fopen("/proc/self/cmdline", "r");
     if (f) { fread(cmdline, 1, 255, f); fclose(f); }
 
+    LOGI("lib_main() cmdline=[%s]", cmdline);
+
     // Se cmdline nao bate com o jogo, pular (Zygisk cuida via postAppSpecialize)
     if (strstr(cmdline, "freefireth") == nullptr &&
         strstr(cmdline, "freefire") == nullptr &&
         strstr(cmdline, "sniper3d") == nullptr) {
+        LOGI("lib_main() skipping (not game process)");
         return;
     }
 

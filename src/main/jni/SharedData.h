@@ -4,6 +4,7 @@
 #include <cstring>
 #include <atomic>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <linux/ashmem.h>
@@ -126,12 +127,14 @@ static int shm_create_file() {
     int fd = open(SHM_PATH_1, O_RDWR);
     if (fd >= 0) {
         ftruncate(fd, SHARED_MEM_SIZE);
+        fchmod(fd, 0666);
         shmActivePath = SHM_PATH_1;
         return fd;
     }
     fd = open(SHM_PATH_1, O_CREAT | O_RDWR, 0666);
     if (fd >= 0) {
         ftruncate(fd, SHARED_MEM_SIZE);
+        fchmod(fd, 0666);
         shmActivePath = SHM_PATH_1;
         return fd;
     }
@@ -143,6 +146,7 @@ static int shm_create_file() {
         if (fd < 0) fd = open(gamePath, O_CREAT | O_RDWR, 0666);
         if (fd >= 0) {
             ftruncate(fd, SHARED_MEM_SIZE);
+            fchmod(fd, 0666);
             shmActivePath = gamePath;
             return fd;
         }
@@ -152,6 +156,7 @@ static int shm_create_file() {
     fd = open(SHM_PATH_2, O_CREAT | O_RDWR, 0666);
     if (fd >= 0) {
         ftruncate(fd, SHARED_MEM_SIZE);
+        fchmod(fd, 0666);
         shmActivePath = SHM_PATH_2;
         return fd;
     }

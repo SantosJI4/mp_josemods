@@ -195,10 +195,12 @@ public class MainActivity extends Activity {
             boolean moduleAlreadyExisted = false;
             String existingProp = rootExec("cat " + moduleDir + "/module.prop 2>/dev/null");
             String existingSo = rootExec("ls " + moduleDir + "/zygisk/arm64-v8a.so 2>/dev/null");
+            String existingSepolicy = rootExec("cat " + moduleDir + "/sepolicy.rule 2>/dev/null");
             if (existingProp != null && existingProp.contains("jawmods")
                 && existingSo != null && existingSo.contains("arm64-v8a.so")) {
                 moduleAlreadyExisted = true;
             }
+            boolean sepolicyAlreadyExisted = (existingSepolicy != null && existingSepolicy.contains("shell_data_file"));
 
             // Checar se esta desabilitado
             String moduleDisabled = rootExec("ls " + moduleDir + "/disable 2>/dev/null");
@@ -214,8 +216,27 @@ public class MainActivity extends Activity {
                     + " ; chmod 644 " + moduleDir + "/zygisk/arm64-v8a.so");
 
             // Criar module.prop em uma unica chamada su
-            rootExec("printf 'id=jawmods\\nname=JawMods ESP Hook\\nversion=v10\\nversionCode=10\\nauthor=JawMods\\ndescription=ESP hook via Zygisk for Unity games\\n'"
+            rootExec("printf 'id=jawmods\\nname=JawMods ESP Hook\\nversion=v11\\nversionCode=11\\nauthor=JawMods\\ndescription=ESP hook via Zygisk for Unity games\\n'"
                     + " > " + moduleDir + "/module.prop");
+
+            // CRITICO: SELinux policy — permite hook e overlay acessar /data/local/tmp/
+            // Sem isso, o hook (untrusted_app) nao consegue escrever no SHM,
+            // e o overlay (outro untrusted_app) nao consegue ler.
+            // Magisk aplica no boot — invisible para anti-cheat.
+            rootExec("printf '"
+                    + "allow untrusted_app shell_data_file dir { search read write open create add_name getattr }\\n"
+                    + "allow untrusted_app shell_data_file file { read write open create getattr setattr }\\n"
+                    + "allow untrusted_app app_data_file dir { search read open getattr }\\n"
+                    + "allow untrusted_app app_data_file file { read write open getattr }\\n"
+                    + "' > " + moduleDir + "/sepolicy.rule");
+
+            // Verificar se sepolicy.rule foi criado
+            String checkSepolicy = rootExec("cat " + moduleDir + "/sepolicy.rule 2>/dev/null");
+            if (checkSepolicy == null || !checkSepolicy.contains("shell_data_file")) {
+                updateStatus("Failed to create sepolicy.rule.\nCheck Magisk and root access.");
+                resetButton();
+                return;
+            }
 
             // Verificar que o modulo foi instalado
             String checkModule = rootExec("cat " + moduleDir + "/module.prop 2>/dev/null");
@@ -253,10 +274,11 @@ public class MainActivity extends Activity {
                     + " ; touch " + gameDir + "/.hook_log ; chmod 666 " + gameDir + "/.hook_log");
 
             // 7. Decisao: reboot ou iniciar overlay
-            if (!moduleAlreadyExisted) {
-                // PRIMEIRO INSTALL — precisa reboot para Zygisk ativar
+            if (!moduleAlreadyExisted || !sepolicyAlreadyExisted) {
+                // PRIMEIRO INSTALL ou sepolicy.rule acabou de ser criado — precisa reboot
                 showLoading(false);
-                updateStatus("Module installed!\n\n" +
+                String reason = !moduleAlreadyExisted ? "Module installed" : "SELinux policy updated";
+                updateStatus(reason + "!\n\n" +
                     "Now you need to:\n" +
                     "1. Enable Zygisk in Magisk settings\n" +
                     "2. Reboot your phone\n" +
@@ -267,8 +289,25 @@ public class MainActivity extends Activity {
                 return;
             }
 
-            // Modulo ja existia — Zygisk ja esta ativo, iniciar overlay
-            updateStatus("Starting overlay...");
+            // Modulo ja existia — Zygisk ja esta ativo
+            // Zygisk so injeta quando o processo do jogo inicia do zero (fork do zygote)
+            // Precisamos derrubar o jogo e iniciar para o hook ser carregado
+            updateStatus("Reiniciando Free Fire com hook...");
+
+            // Fechar o jogo se estiver aberto
+            rootExec("am force-stop " + GAME_PACKAGE + " 2>/dev/null");
+            Thread.sleep(1500);
+
+            // Iniciar o jogo
+            String launcherActivity = getLauncherActivity(GAME_PACKAGE);
+            if (launcherActivity != null && launcherActivity.contains("/")) {
+                rootExec("am start -n " + GAME_PACKAGE + launcherActivity + " 2>/dev/null");
+            } else {
+                rootExec("monkey -p " + GAME_PACKAGE + " -c android.intent.category.LAUNCHER 1 2>/dev/null");
+            }
+            updateStatus("Free Fire iniciado.\nAguardando Zygisk injetar hook...");
+
+            // Iniciar overlay em background (vai conectar quando o hook estiver ativo)
             runOnUi(new Runnable() {
                 @Override
                 public void run() {
@@ -276,26 +315,25 @@ public class MainActivity extends Activity {
                 }
             });
 
-            // 8. Aguardar conexao com hook — loop inicial de 20s com diagnostico
+            // 8. Aguardar conexao com hook — loop de 60s esperando il2cpp + hook
             // Zygisk injeta ANTES do jogo inicializar, pode demorar ate il2cpp carregar
             boolean connected = false;
-            for (int i = 0; i < 20; i++) {
+            for (int i = 0; i < 60; i++) {
                 Thread.sleep(1000);
 
-                // Uma chamada su: retorna diagnostico completo
-                // grep -cE usa extended regex (|  funciona em TODOS os shells Android)
-                // Checar arm64-v8a.so (nome real nos maps do Zygisk) + jawmods + libHook
+                // Uma chamada su: retorna diagnostico completo (maps + log + logcat)
                 String diag = rootExec(
                     "P=$(pidof " + GAME_PACKAGE + " 2>/dev/null | awk '{print $1}');"
                     + " if [ -z \"$P\" ]; then echo 'NOPID';"
                     + " else"
-                    + "   M=$(grep -cE 'arm64-v8a\\.so|jawmods|libHook|libMEOW' /proc/$P/maps 2>/dev/null);"
+                    + "   M=$(grep -cE 'arm64-v8a\\.so|jawmods|libHook' /proc/$P/maps 2>/dev/null);"
                     + "   L=$(cat /data/local/tmp/.hook_log 2>/dev/null | tail -3);"
-                    + "   echo \"PID=$P MAPS=$M LOG=$L\";"
+                    + "   LC=$(logcat -d -s GameHook 2>/dev/null | tail -5);"
+                    + "   echo \"PID=$P MAPS=$M LOG=$L LOGCAT=$LC\";"
                     + " fi");
 
                 if (diag == null || diag.contains("NOPID") || diag.trim().isEmpty()) {
-                    updateStatus("Abra o Free Fire para iniciar o hook...\n(" + (i+1) + "s)");
+                    updateStatus("Inicializando Free Fire...\n(" + (i+1) + "s)");
                     continue;
                 }
 
@@ -312,22 +350,40 @@ public class MainActivity extends Activity {
                 // Extrair LOG
                 String logPart = "";
                 int lIdx = diag.indexOf("LOG=");
-                if (lIdx >= 0) logPart = diag.substring(lIdx + 4).trim();
+                if (lIdx >= 0) {
+                    int lcIdx = diag.indexOf("LOGCAT=");
+                    if (lcIdx > lIdx) {
+                        logPart = diag.substring(lIdx + 4, lcIdx).trim();
+                    } else {
+                        logPart = diag.substring(lIdx + 4).trim();
+                    }
+                }
+
+                // Extrair LOGCAT
+                String logcatPart = "";
+                int lcIdx2 = diag.indexOf("LOGCAT=");
+                if (lcIdx2 >= 0) logcatPart = diag.substring(lcIdx2 + 7).trim();
 
                 boolean hookInMaps  = mapsCount > 0;
                 boolean hookInLog   = logPart.contains("HOOK ATIVO") || logPart.contains("HOOK CARREGADO")
                                    || logPart.contains("SHM OK") || logPart.contains("VMT");
+                boolean hookInLogcat = logcatPart.contains("HOOK ATIVO") || logcatPart.contains("HOOK CARREGADO")
+                                    || logcatPart.contains("hack_thread") || logcatPart.contains("Zygisk")
+                                    || logcatPart.contains("postAppSpecialize");
 
-                if (hookInMaps || hookInLog) {
+                if (hookInMaps || hookInLog || hookInLogcat) {
                     connected = true;
                     break;
                 }
 
                 // Mostrar diagnostico ao usuario para facilitar debug
-                updateStatus("Hook carregando...\nJogo rodando, aguardando il2cpp...\n"
-                    + "maps=" + mapsCount
-                    + (logPart.isEmpty() ? " | sem log" : "\nlog: " + logPart.substring(0, Math.min(logPart.length(), 60)))
-                    + "\n(" + (i+1) + "s)");
+                String diagText = "Aguardando hook Zygisk...\nmaps=" + mapsCount;
+                if (!logPart.isEmpty())
+                    diagText += "\nlog: " + logPart.substring(0, Math.min(logPart.length(), 60));
+                if (!logcatPart.isEmpty())
+                    diagText += "\nlogcat: " + logcatPart.substring(0, Math.min(logcatPart.length(), 80));
+                diagText += "\n(" + (i+1) + "s)";
+                updateStatus(diagText);
             }
 
             showLoading(false);
@@ -370,9 +426,10 @@ public class MainActivity extends Activity {
                             "P=$(pidof " + GAME_PACKAGE + " 2>/dev/null | awk '{print $1}');"
                             + " if [ -z \"$P\" ]; then echo 'NOPID';"
                             + " else"
-                            + "   M=$(grep -cE 'arm64-v8a\\.so|jawmods|libHook|libMEOW' /proc/$P/maps 2>/dev/null);"
+                            + "   M=$(grep -cE 'arm64-v8a\\.so|jawmods|libHook' /proc/$P/maps 2>/dev/null);"
                             + "   L=$(cat /data/local/tmp/.hook_log 2>/dev/null | tail -1);"
-                            + "   echo \"PID=$P MAPS=$M LOG=$L\";"
+                            + "   LC=$(logcat -d -s GameHook 2>/dev/null | tail -3);"
+                            + "   echo \"PID=$P MAPS=$M LOG=$L LOGCAT=$LC\";"
                             + " fi");
 
                         if (diag == null || diag.contains("NOPID")) continue;
@@ -388,14 +445,27 @@ public class MainActivity extends Activity {
 
                         String logPart = "";
                         int lIdx = diag.indexOf("LOG=");
-                        if (lIdx >= 0) logPart = diag.substring(lIdx + 4).trim();
+                        if (lIdx >= 0) {
+                            int lcIdx = diag.indexOf("LOGCAT=");
+                            if (lcIdx > lIdx) {
+                                logPart = diag.substring(lIdx + 4, lcIdx).trim();
+                            } else {
+                                logPart = diag.substring(lIdx + 4).trim();
+                            }
+                        }
+
+                        String logcatPart = "";
+                        int lcIdx2 = diag.indexOf("LOGCAT=");
+                        if (lcIdx2 >= 0) logcatPart = diag.substring(lcIdx2 + 7).trim();
 
                         boolean hookInMaps = mapsCount > 0;
                         boolean hookInLog  = logPart.contains("HOOK ATIVO") || logPart.contains("SHM OK")
                                           || logPart.contains("HOOK CARREGADO") || logPart.contains("VMT");
+                        boolean hookInLogcat = logcatPart.contains("HOOK ATIVO") || logcatPart.contains("Zygisk")
+                                           || logcatPart.contains("hack_thread") || logcatPart.contains("postAppSpecialize");
 
-                        if (hookInMaps || hookInLog) {
-                            final String lastLog = logPart;
+                        if (hookInMaps || hookInLog || hookInLogcat) {
+                            final String lastLog = logPart.isEmpty() ? logcatPart : logPart;
                             updateStatus("Conectado! Hook ativo.\n" + lastLog);
                             hookPolling = false;
                             break;
