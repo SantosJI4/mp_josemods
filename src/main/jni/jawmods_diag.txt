@@ -1,9 +1,9 @@
 === JAWMODS DIAG v15 (ptrace) ===
-PID=24129
+PID=32701
 SELinux:
 Enforcing
 Maps hook:
 Logcat GameHook:
 Logcat injector:
 HookLog:
-Injector result: === JawMods ptrace injector v15 === Config: PID=24129 SO=/data/local/tmp/libHook.so [*] Target PID: 24129 [*] Library: /data/local/tmp/libHook.so [1] Attaching to process...   Attached to main thread 24129 [2] Saving registers... [3] Resolving dlopen...   Linker: /apex/com.android.runtime/bin/linker64   __loader_dlopen (ELF): remote=78b14981b0 (base=78b1461000 + offset=371b0) from /apex/com.android.runtime/bin/linker64   dlopen at: 0x78b14981b0 [4] Writing path to target stack...   Path written at: 0x7ff7a43be0 (27 bytes) [5] Setting up dlopen call (loader_variant=1)...   caller_addr (x2) = 0x7736757000 [6] Executing dlopen in target...   Process stopped by signal 11   after: x0=7ff7a43be0 pc=0 sp=7ff7a43bd0   dlopen handle: 0x7ff7a43be0 (SUCCESS — pc=0 trap) [7] Restoring original registers... [8] Detaching... [+] INJECTION SUCCESSFUL into PID 24129 [!] .so NOT found in maps after injection [+] INJECTION SUCCESSFUL
+Injector result: === JawMods ptrace injector v15 === Config: PID=32701 SO=/data/data/com.dts.freefireth/libHook.so [*] Target PID: 32701 [*] Library: /data/data/com.dts.freefireth/libHook.so [1] Attaching to process...   Attached to main thread 32701 [2] Saving registers... [3] Resolving dlopen...   Linker: /apex/com.android.runtime/bin/linker64   __loader_dlopen (ELF): remote=78b14981b0 (base=78b1461000 + offset=371b0) from /apex/com.android.runtime/bin/linker64   dlopen at: 0x78b14981b0 [4] Writing path to target stack...   Path written at: 0x7ff7a419c0 (41 bytes) [5] Setting up dlopen call (loader_variant=1)...   caller_addr (x2) = 0x77368bc000 [6] Executing dlopen in target...   Process stopped by signal 11   after: x0=7ff7a419c0 pc=0 sp=7ff7a419b0 ERROR:   dlopen FAILED: x0=path_addr (SELinux? file permissions?) ERROR:   The .so path may not be executable by the target process [7] Restoring original registers... [8] Detaching... ERROR: [-] INJECTION FAILED for PID 32701 [-] INJECTION FAILED

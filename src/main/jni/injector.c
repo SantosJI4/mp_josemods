@@ -418,6 +418,19 @@ static int do_inject(pid_t pid, const char *so_path) {
     }
     LOGI("  dlopen at: 0x%llx", remote_dlopen);
 
+    /* Diagnostic: read first 2 instructions at dlopen address.
+     * If it's a bare RET (0xd65f03c0), the symbol is a stub and
+     * x0 will be unchanged after call → false "x0=path_addr" failure. */
+    {
+        unsigned int instrs[2] = {0, 0};
+        if (read_mem(pid, remote_dlopen, instrs, 8) == 0) {
+            LOGI("  dlopen code: [0]=%08x [1]=%08x", instrs[0], instrs[1]);
+            if (instrs[0] == 0xd65f03c0) {
+                LOGE("  WARNING: dlopen is a bare RET stub! Address may be wrong.");
+            }
+        }
+    }
+
     /* 4. Write .so path to target's stack */
     LOGI("[4] Writing path to target stack...");
     {
@@ -553,8 +566,42 @@ detach:
 detach_only:
     if (ret == 0) {
         LOGI("[+] INJECTION SUCCESSFUL into PID %d", pid);
+        /* Verify: check if .so actually appears in /proc/PID/maps */
+        char maps_path[64];
+        snprintf(maps_path, sizeof(maps_path), "/proc/%d/maps", pid);
+        FILE *mf = fopen(maps_path, "r");
+        if (mf) {
+            char mline[512];
+            int found = 0;
+            while (fgets(mline, sizeof(mline), mf)) {
+                if (strstr(mline, "libHook") || strstr(mline, "Hook.so")) {
+                    LOGI("  Verified: %s", mline);
+                    found = 1;
+                }
+            }
+            fclose(mf);
+            if (!found) {
+                LOGE("  WARNING: .so NOT found in /proc/%d/maps after SUCCESS!", pid);
+                LOGE("  dlopen handle may be invalid or .so already unloaded");
+            }
+        }
     } else {
         LOGE("[-] INJECTION FAILED for PID %d", pid);
+        /* Diagnostic: dump relevant maps regions */
+        char maps_path[64];
+        snprintf(maps_path, sizeof(maps_path), "/proc/%d/maps", pid);
+        FILE *mf = fopen(maps_path, "r");
+        if (mf) {
+            char mline[512];
+            LOGI("  --- /proc/%d/maps (linker + hook entries) ---", pid);
+            while (fgets(mline, sizeof(mline), mf)) {
+                if (strstr(mline, "linker") || strstr(mline, "libHook")
+                    || strstr(mline, "Hook.so") || strstr(mline, "libdl")) {
+                    LOGI("  %s", mline);
+                }
+            }
+            fclose(mf);
+        }
     }
     return ret;
 }

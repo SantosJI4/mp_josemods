@@ -188,36 +188,76 @@ public class MainActivity extends Activity {
             rootExec("cp " + injSrc + " " + tmpInjector
                     + " ; chmod 755 " + tmpInjector);
 
-            // CRITICO: Copiar libHook.so para o diretorio de dados do JOGO
-            // /data/local/tmp/ tem contexto SELinux 'shell_data_file' que
-            // untrusted_app NAO pode executar (falta permissao 'execute'/'map').
-            // O diretorio do jogo tem contexto 'app_data_file' = permissao total.
-            final String gameDir = "/data/data/" + GAME_PACKAGE;
-            final String gameHookPath = gameDir + "/libHook.so";
+            // CRITICO: Copiar libHook.so para o nativeLibraryDir do JOGO
+            // O linker namespace do Android 7+ SÓ permite dlopen de paths
+            // dentro do nativeLibraryDir do app (e system/vendor).
+            // /data/data/ e /data/local/tmp/ NAO estao nos permitted_paths!
+            // Mesmo com setenforce 0, o linker rejeita paths fora do namespace.
+            String gameNativeDir = null;
 
-            // Obter UID do jogo para chown correto
-            String gameUid = rootExec("stat -c %u " + gameDir + " 2>/dev/null");
-            if (gameUid == null || gameUid.trim().isEmpty()) gameUid = "10000";
-            gameUid = gameUid.trim();
+            // Metodo 1: dumpsys package -> nativeLibraryDir
+            String dumpNative = rootExec(
+                "dumpsys package " + GAME_PACKAGE
+                + " | grep 'nativeLibraryDir=' | head -1 | sed 's/.*nativeLibraryDir=//' | tr -d ' \\n'");
+            if (dumpNative != null && dumpNative.trim().contains("/")) {
+                gameNativeDir = dumpNative.trim();
+            }
+
+            // Metodo 2: Derivar do APK path
+            if (gameNativeDir == null) {
+                String apkLine = rootExec("pm path " + GAME_PACKAGE + " | head -1");
+                if (apkLine != null && apkLine.contains(":")) {
+                    String apkPath = apkLine.substring(apkLine.indexOf(':') + 1).trim();
+                    if (apkPath.endsWith("/base.apk")) {
+                        String apkDir = apkPath.replace("/base.apk", "");
+                        // Checar arm64 ou arm64-v8a
+                        String libSub = rootExec(
+                            "ls -d " + apkDir + "/lib/arm64 " + apkDir + "/lib/arm64-v8a 2>/dev/null | head -1");
+                        if (libSub != null && !libSub.trim().isEmpty()) {
+                            gameNativeDir = libSub.trim();
+                        } else {
+                            gameNativeDir = apkDir + "/lib/arm64";
+                            rootExec("mkdir -p " + gameNativeDir);
+                        }
+                    }
+                }
+            }
+
+            // Metodo 3: fallback /data/data
+            if (gameNativeDir == null) {
+                gameNativeDir = "/data/data/" + GAME_PACKAGE;
+            }
+
+            final String gameHookPath = gameNativeDir + "/libHook.so";
+
+            // Obter UID e contexto SELinux corretos a partir de arquivo existente no dir
+            String refFile = rootExec("ls " + gameNativeDir + "/ 2>/dev/null | head -1");
+            String seCtx = "u:object_r:apk_data_file:s0"; // default para /data/app libs
+            if (refFile != null && !refFile.trim().isEmpty()) {
+                String ctx = rootExec("ls -Z " + gameNativeDir + "/" + refFile.trim()
+                    + " 2>/dev/null | awk '{print $1}'");
+                if (ctx != null && ctx.trim().contains(":")) seCtx = ctx.trim();
+            }
 
             rootExec("cp " + hookSrc + " " + gameHookPath
                     + " ; chmod 755 " + gameHookPath
-                    + " ; chown " + gameUid + ":" + gameUid + " " + gameHookPath
-                    + " ; chcon u:object_r:app_data_file:s0 " + gameHookPath);
+                    + " ; chcon " + seCtx + " " + gameHookPath);
 
             // Tambem manter copia em /data/local/tmp/ (para SHM e fallback)
             rootExec("cp " + hookSrc + " " + tmpHook + " ; chmod 755 " + tmpHook);
 
             // Validar copias
             String checkInj = rootExec("ls -la " + tmpInjector + " 2>/dev/null");
-            String checkHook = rootExec("ls -la " + gameHookPath + " 2>/dev/null");
+            String checkHook = rootExec("ls -laZ " + gameHookPath + " 2>/dev/null");
             if (checkInj == null || !checkInj.contains("libinjector")
                 || checkHook == null || !checkHook.contains("libHook")) {
-                updateStatus("Failed to copy files.\nCheck root access.");
+                updateStatus("Failed to copy files.\nCheck root access.\n"
+                    + "nativeDir: " + gameNativeDir + "\n"
+                    + "hook: " + (checkHook != null ? checkHook : "null"));
                 resetButton();
                 return;
             }
-            updateStatus("Files ready. Hook at: " + gameHookPath);
+            updateStatus("Files ready:\n" + checkHook.trim());
 
             // 3. Pre-criar SHM e SELinux (runtime — via supolicy se disponivel)
             updateStatus("Setting up SHM...");
@@ -338,14 +378,15 @@ public class MainActivity extends Activity {
             boolean inMaps = injectResult != null && injectResult.contains("Verified:");
 
             if (!injected || !inMaps) {
-                // Verificar se falhou por SELinux ou outro motivo
-                boolean selinuxBlock = injectResult != null
+                // Verificar se falhou por qualquer motivo indicativo de path/permissao
+                boolean shouldRetry = injectResult != null
                     && (injectResult.contains("Permission denied") || injectResult.contains("Operation not permitted")
-                        || injectResult.contains("NOT found in maps"));
+                        || injectResult.contains("NOT found in maps") || injectResult.contains("FAILED")
+                        || injectResult.contains("x0=path_addr"));
 
-                if (selinuxBlock) {
-                    // Tentar com setenforce 0 mantido + path alternativo
-                    updateStatus("Retrying with SELinux permissive...");
+                if (shouldRetry) {
+                    // Tentar com setenforce 0 mantido + path /data/local/tmp/
+                    updateStatus("Retrying with permissive + /data/local/tmp/ ...");
                     rootExec("setenforce 0 2>/dev/null");
                     Thread.sleep(500);
 
