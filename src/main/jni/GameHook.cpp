@@ -88,82 +88,118 @@ static void hookLogWrite(const char* fmt, ...) {
 }
 
 // ============================================================
-// ELF Symbol Resolver — resolve symbols direto do arquivo ELF
-// Sem dlopen/dlsym, sem namespace issues, sem fake_dlfcn
+// ELF Symbol Resolver — resolve symbols direto da MEMÓRIA
+// Usa Program Headers (PT_DYNAMIC → DT_SYMTAB/DT_STRTAB)
+// Funciona em .so STRIPPED (sem section headers)
 // ============================================================
 
-// Encontra o path completo de uma lib em /proc/self/maps
-static bool findLibPath(const char *libName, char *outPath, size_t outLen) {
-    FILE *maps = fopen("/proc/self/maps", "r");
-    if (!maps) return false;
-    char line[1024];
-    while (fgets(line, sizeof(line), maps)) {
-        if (strstr(line, libName)) {
-            char *p = strchr(line, '/');
-            if (p) {
-                char *nl = strchr(p, '\n');
-                if (nl) *nl = '\0';
-                strncpy(outPath, p, outLen - 1);
-                outPath[outLen - 1] = '\0';
-                fclose(maps);
-                return true;
-            }
-        }
-    }
-    fclose(maps);
-    return false;
-}
+#ifndef DT_GNU_HASH
+#define DT_GNU_HASH 0x6ffffef5
+#endif
 
-// Resolve um símbolo de um ELF no disco: retorna base + st_value
-static uintptr_t resolveElfSymbol(const char *elfPath, uintptr_t loadBase, const char *symName) {
-    int fd = open(elfPath, O_RDONLY);
-    if (fd < 0) {
-        LOGE("resolveElfSymbol: open(%s) failed: %s", elfPath, strerror(errno));
+static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
+    Elf64_Ehdr *ehdr = (Elf64_Ehdr *)loadBase;
+
+    // Validar ELF
+    if (ehdr->e_ident[0] != 0x7f || ehdr->e_ident[1] != 'E' ||
+        ehdr->e_ident[2] != 'L'  || ehdr->e_ident[3] != 'F') {
+        LOGE("resolveElfSymbol: invalid ELF at 0x%lx", (unsigned long)loadBase);
         return 0;
     }
 
-    Elf64_Ehdr ehdr;
-    if (read(fd, &ehdr, sizeof(ehdr)) != sizeof(ehdr)) { close(fd); return 0; }
+    Elf64_Phdr *phdrs = (Elf64_Phdr *)(loadBase + ehdr->e_phoff);
 
-    Elf64_Shdr *shdrs = (Elf64_Shdr*)malloc(ehdr.e_shnum * sizeof(Elf64_Shdr));
-    if (!shdrs) { close(fd); return 0; }
-    lseek(fd, ehdr.e_shoff, SEEK_SET);
-    read(fd, shdrs, ehdr.e_shnum * sizeof(Elf64_Shdr));
-
-    uintptr_t result = 0;
-
-    for (int i = 0; i < ehdr.e_shnum; i++) {
-        if (shdrs[i].sh_type == SHT_DYNSYM) {
-            Elf64_Shdr *strtab_sh = &shdrs[shdrs[i].sh_link];
-
-            char *strtab = (char*)malloc(strtab_sh->sh_size);
-            if (!strtab) break;
-            lseek(fd, strtab_sh->sh_offset, SEEK_SET);
-            read(fd, strtab, strtab_sh->sh_size);
-
-            int nsyms = shdrs[i].sh_size / sizeof(Elf64_Sym);
-            Elf64_Sym *syms = (Elf64_Sym*)malloc(shdrs[i].sh_size);
-            if (!syms) { free(strtab); break; }
-            lseek(fd, shdrs[i].sh_offset, SEEK_SET);
-            read(fd, syms, shdrs[i].sh_size);
-
-            for (int j = 0; j < nsyms; j++) {
-                if (syms[j].st_name && syms[j].st_value &&
-                    strcmp(strtab + syms[j].st_name, symName) == 0) {
-                    result = loadBase + syms[j].st_value;
-                    break;
-                }
-            }
-
-            free(syms);
-            free(strtab);
+    // Calcular bias (loadBase - primeiro PT_LOAD vaddr)
+    uintptr_t bias = loadBase;
+    for (int i = 0; i < ehdr->e_phnum; i++) {
+        if (phdrs[i].p_type == PT_LOAD) {
+            bias = loadBase - phdrs[i].p_vaddr;
             break;
         }
     }
 
-    free(shdrs);
-    close(fd);
-    return result;
+    // Achar PT_DYNAMIC
+    Elf64_Dyn *dyn = nullptr;
+    for (int i = 0; i < ehdr->e_phnum; i++) {
+        if (phdrs[i].p_type == PT_DYNAMIC) {
+            dyn = (Elf64_Dyn *)(bias + phdrs[i].p_vaddr);
+            break;
+        }
+    }
+    if (!dyn) {
+        LOGE("resolveElfSymbol: PT_DYNAMIC nao encontrado");
+        return 0;
+    }
+
+    // Extrair DT_SYMTAB, DT_STRTAB, DT_HASH, DT_GNU_HASH
+    Elf64_Sym *symtab = nullptr;
+    const char *strtab = nullptr;
+    uint32_t *hashTab = nullptr;
+    uint32_t *gnuHash = nullptr;
+
+    for (Elf64_Dyn *d = dyn; d->d_tag != DT_NULL; d++) {
+        switch (d->d_tag) {
+            case DT_SYMTAB:
+                symtab = (Elf64_Sym *)(bias + d->d_un.d_ptr);
+                break;
+            case DT_STRTAB:
+                strtab = (const char *)(bias + d->d_un.d_ptr);
+                break;
+            case DT_HASH:
+                hashTab = (uint32_t *)(bias + d->d_un.d_ptr);
+                break;
+            case DT_GNU_HASH:
+                gnuHash = (uint32_t *)(bias + d->d_un.d_ptr);
+                break;
+        }
+    }
+
+    if (!symtab || !strtab) {
+        LOGE("resolveElfSymbol: symtab=%p strtab=%p", (void*)symtab, (void*)strtab);
+        return 0;
+    }
+
+    // Obter contagem de símbolos via DT_HASH ou DT_GNU_HASH
+    uint32_t nSyms = 0;
+    if (hashTab) {
+        // SysV hash: { nbucket, nchain } — nchain = total symbols
+        nSyms = hashTab[1];
+    } else if (gnuHash) {
+        // GNU hash: precisa calcular o índice máximo
+        uint32_t nbuckets = gnuHash[0];
+        uint32_t symoffset = gnuHash[1];
+        uint32_t bloom_size = gnuHash[2];
+        // bloom array: bloom_size * 8 bytes (64-bit ELF)
+        uint32_t *buckets = (uint32_t *)((uint8_t *)gnuHash + 16 + bloom_size * 8);
+        uint32_t *chain = buckets + nbuckets;
+
+        uint32_t lastSym = 0;
+        for (uint32_t i = 0; i < nbuckets; i++) {
+            if (buckets[i] > lastSym) lastSym = buckets[i];
+        }
+        if (lastSym >= symoffset) {
+            uint32_t ci = lastSym - symoffset;
+            while (!(chain[ci] & 1)) { lastSym++; ci++; }
+        }
+        nSyms = lastSym + 1;
+    }
+
+    if (nSyms == 0) {
+        LOGE("resolveElfSymbol: sem DT_HASH/DT_GNU_HASH, nSyms=0");
+        return 0;
+    }
+
+    // Buscar símbolo
+    for (uint32_t i = 0; i < nSyms; i++) {
+        if (symtab[i].st_name && symtab[i].st_value) {
+            if (strcmp(strtab + symtab[i].st_name, symName) == 0) {
+                return bias + symtab[i].st_value;
+            }
+        }
+    }
+
+    LOGE("resolveElfSymbol: '%s' nao encontrado (%u symbols)", symName, nSyms);
+    return 0;
 }
 
 // ============================================================
@@ -540,32 +576,23 @@ static void* hack_thread(void*) {
     // Precisamos do MethodInfo* do LateUpdate pra trocar o methodPointer.
     // dlopen/dlsym NAO funciona (namespace do linker Android 7+).
     // Solucao: resolver simbolos il2cpp lendo o ELF do disco direto.
-    LOGI("[1/5] Resolvendo il2cpp API via ELF parser...");
-    hookLogWrite("[1/5] Resolvendo il2cpp API via ELF...");
+    LOGI("[1/5] Resolvendo il2cpp API via ELF (memoria)...");
+    hookLogWrite("[1/5] Resolvendo il2cpp API via ELF (memoria)...");
 
-    // Encontrar path do libil2cpp.so no disco
-    char il2cpp_path[512] = {0};
-    if (!findLibPath("libil2cpp.so", il2cpp_path, sizeof(il2cpp_path))) {
-        LOGE("libil2cpp.so path nao encontrado em maps!");
-        hookLogWrite("ERRO: il2cpp path nao encontrado");
-        return nullptr;
-    }
-    LOGI("il2cpp path: %s", il2cpp_path);
-    hookLogWrite("il2cpp path: %s", il2cpp_path);
-
-    // Resolver as funcoes il2cpp necessarias via ELF
+    // Resolver as funcoes il2cpp necessarias direto da memoria
+    // (PT_DYNAMIC → DT_SYMTAB/DT_STRTAB — funciona em .so stripped)
     auto p_domain_get = (void*(*)())
-        resolveElfSymbol(il2cpp_path, il2cpp_base, "il2cpp_domain_get");
+        resolveElfSymbol(il2cpp_base, "il2cpp_domain_get");
     auto p_domain_get_assemblies = (void**(*)(const void*, size_t*))
-        resolveElfSymbol(il2cpp_path, il2cpp_base, "il2cpp_domain_get_assemblies");
+        resolveElfSymbol(il2cpp_base, "il2cpp_domain_get_assemblies");
     auto p_assembly_get_image = (const void*(*)(const void*))
-        resolveElfSymbol(il2cpp_path, il2cpp_base, "il2cpp_assembly_get_image");
+        resolveElfSymbol(il2cpp_base, "il2cpp_assembly_get_image");
     auto p_image_get_name = (const char*(*)(void*))
-        resolveElfSymbol(il2cpp_path, il2cpp_base, "il2cpp_image_get_name");
+        resolveElfSymbol(il2cpp_base, "il2cpp_image_get_name");
     auto p_class_from_name = (void*(*)(const void*, const char*, const char*))
-        resolveElfSymbol(il2cpp_path, il2cpp_base, "il2cpp_class_from_name");
+        resolveElfSymbol(il2cpp_base, "il2cpp_class_from_name");
     auto p_class_get_method = (void*(*)(void*, const char*, int))
-        resolveElfSymbol(il2cpp_path, il2cpp_base, "il2cpp_class_get_method_from_name");
+        resolveElfSymbol(il2cpp_base, "il2cpp_class_get_method_from_name");
 
     LOGI("ELF resolved: domain_get=%p assemblies=%p get_image=%p get_name=%p class_from_name=%p get_method=%p",
          (void*)p_domain_get, (void*)p_domain_get_assemblies,
