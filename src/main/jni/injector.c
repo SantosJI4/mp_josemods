@@ -136,7 +136,8 @@ static int write_mem(pid_t pid, unsigned long long addr, const void *buf, size_t
 }
 
 /*
- * Find the base address of a library in a process's memory map
+ * Find the base address of a library in a process's memory map.
+ * Returns the FIRST r-xp mapping — used for dlsym offset calculations.
  */
 static unsigned long long find_lib_base(pid_t pid, const char *lib_name) {
     char path[64], line[512];
@@ -151,9 +152,50 @@ static unsigned long long find_lib_base(pid_t pid, const char *lib_name) {
             sscanf(line, "%llx-", &addr);
             break;
         }
-        /* Fallback: any executable mapping */
+        /* Fallback: any readable mapping */
         if (strstr(line, lib_name) && strstr(line, "r--p") && addr == 0) {
             sscanf(line, "%llx-", &addr);
+        }
+    }
+    fclose(f);
+    return addr;
+}
+
+/*
+ * Find the ELF LOAD base of a library — the LOWEST address mapping
+ * with file offset 0. This is where st_value=0 would map to.
+ *
+ * CRITICAL: ELF st_value is relative to this address, NOT to the r-xp segment.
+ * Example from maps:
+ *   78b142a000 r--p 00000000 linker64  <- THIS is the load base (offset=0)
+ *   78b1461000 r-xp 00037000 linker64  <- r-xp is at +0x37000
+ *
+ * st_value=0x371b0 -> real addr = 78b142a000 + 0x371b0 = 78b14611b0
+ * NOT 78b1461000 + 0x371b0 (which would be 0x37000 too far!)
+ */
+static unsigned long long find_lib_load_base(pid_t pid, const char *lib_name) {
+    char path[64], line[512];
+    snprintf(path, sizeof(path), "/proc/%d/maps", pid);
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+
+    unsigned long long addr = 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (strstr(line, lib_name)) {
+            /* Find mapping with file offset 0 (= ELF load base).
+             * Format: addr-end perms offset dev inode path */
+            unsigned long long start, end, offset;
+            char perms[8];
+            if (sscanf(line, "%llx-%llx %s %llx", &start, &end, perms, &offset) == 4) {
+                if (offset == 0) {
+                    addr = start;
+                    break;
+                }
+                /* If no offset=0 found yet, take lowest address as fallback */
+                if (addr == 0 || start < addr) {
+                    addr = start;
+                }
+            }
         }
     }
     fclose(f);
@@ -266,12 +308,15 @@ static unsigned long long resolve_remote_func(pid_t pid, const char *lib_name,
  * Resolve symbol in target process by parsing ELF on disk.
  * More reliable than offset calculation — doesn't depend on
  * the symbol being in the same library in our process.
+ *
+ * CRITICAL: Uses find_lib_load_base (offset=0 mapping), NOT find_lib_base
+ * (r-xp mapping). ELF st_value is relative to the load base.
  */
 static unsigned long long resolve_remote_func_elf(pid_t pid, const char *lib_path,
                                                    const char *lib_name,
                                                    const char *func_name) {
-    unsigned long long remote_base = find_lib_base(pid, lib_name);
-    if (!remote_base) {
+    unsigned long long load_base = find_lib_load_base(pid, lib_name);
+    if (!load_base) {
         LOGI("  resolve_elf: %s not in target maps", lib_name);
         return 0;
     }
@@ -282,9 +327,19 @@ static unsigned long long resolve_remote_func_elf(pid_t pid, const char *lib_pat
         return 0;
     }
 
-    unsigned long long remote_addr = remote_base + sym_offset;
-    LOGI("  %s (ELF): remote=%llx (base=%llx + offset=%llx) from %s",
-         func_name, remote_addr, remote_base, sym_offset, lib_path);
+    unsigned long long remote_addr = load_base + sym_offset;
+
+    /* Log both bases for debugging */
+    unsigned long long rxp_base = find_lib_base(pid, lib_name);
+    LOGI("  %s (ELF): remote=%llx (load_base=%llx + st_value=%llx) rxp_base=%llx from %s",
+         func_name, remote_addr, load_base, sym_offset, rxp_base, lib_path);
+
+    /* Sanity: remote_addr should be within the r-xp segment */
+    if (rxp_base && remote_addr < load_base) {
+        LOGE("  resolve_elf: computed addr %llx < load_base %llx — BUG!", remote_addr, load_base);
+        return 0;
+    }
+
     return remote_addr;
 }
 
