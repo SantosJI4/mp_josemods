@@ -11,8 +11,8 @@
  *
  * FLUXO:
  *   1. lib_main() → aguarda libil2cpp.so carregar
- *   2. Il2CppAttach → resolve APIs
- *   3. Resolve seus 5 offsets (OnUpdate, Camera, Transform, etc.)
+ *   2. base + offset → resolve funções direto (zero il2cpp API)
+ *   3. dlsym real → resolve Player::LateUpdate MethodInfo
  *   4. VMT hook no OnUpdate → jogo chama nosso hook automaticamente
  *   5. No hook: chama get_main, get_transform, get_position, WorldToScreenPoint
  *   6. Escreve resultado no SharedMemory
@@ -39,10 +39,6 @@
 #include "Vector3.h"
 #include "obfuscate.h"
 #include "SharedData.h"
-
-// ByNameModding
-#include "ByNameModding/fake_dlfcn.h"
-#include "ByNameModding/Il2Cpp.h"
 
 #define HOOK_TAG "GameHook"
 #define HOOK_BUILD_VER "v15-ptrace"
@@ -90,30 +86,21 @@ static void hookLogWrite(const char* fmt, ...) {
 }
 
 // ============================================================
-// CONFIGURAÇÃO DE NOMES (do dump.cs)
-// Se os nomes estão obfuscados no seu jogo, troque aqui
+// OFFSETS DO DUMP (Free Fire v12 — il2cppdumper RVA)
+// Atualizar quando o jogo atualizar
 // ============================================================
-#define ASSEMBLY_CS   "Assembly-CSharp.dll"
-#define ASSEMBLY_UE   "UnityEngine.CoreModule.dll"
-
-#define NS_PLAYER     "COW.GamePlay"        // namespace do Player
-#define CLS_PLAYER    "Player"              // nome da classe
-#define MTD_ONUPDATE  "LateUpdate"          // método hookado
-
-#define NS_CAMERA     "UnityEngine"
-#define CLS_CAMERA    "Camera"
-
-#define NS_COMPONENT  "UnityEngine"
-#define CLS_COMPONENT "Component"
-
-#define NS_TRANSFORM  "UnityEngine"
-#define CLS_TRANSFORM "Transform"
-
-#define NS_SCREEN     "UnityEngine"
-#define CLS_SCREEN    "Screen"
+#define OFF_LateUpdate              0x67BE774
+#define OFF_Camera_get_main         0x9C0764C
+#define OFF_WorldToScreenPoint      0x9C072D0
+#define OFF_get_worldToCameraMatrix 0x9C06D7C
+#define OFF_get_projectionMatrix    0x9C06E2C
+#define OFF_get_transform           0x9C4DF54
+#define OFF_get_position            0x9C5C0F4
+#define OFF_Screen_get_width        0x9C14D60
+#define OFF_Screen_get_height       0x9C14D88
 
 // ============================================================
-// Function Pointers — resolvidos em runtime pelo il2cpp
+// Function Pointers — resolvidos via base + offset direto
 // ============================================================
 // Il2Cpp ABI: TODOS os metodos recebem MethodInfo* como ultimo param
 // Estaticos: fn(MethodInfo*), Instancia: fn(self, MethodInfo*)
@@ -127,19 +114,15 @@ static int     (*fn_Screen_get_height)(void* method) = nullptr;
 
 // Para VP Matrix (Camera)
 struct Matrix4x4 { float m[16]; };
-// ARM64 ABI: structs > 16 bytes (Matrix4x4 = 64 bytes) são retornadas via
-// hidden register x8. Declarar como RETURN TYPE faz o compilador setar x8.
 static Matrix4x4 (*fn_get_worldToCameraMatrix)(void* camera, void* method) = nullptr;
 static Matrix4x4 (*fn_get_projectionMatrix)(void* camera, void* method) = nullptr;
 
-// Fallback: WorldToScreenPoint(self, Vector3 pos, int eye, MethodInfo*)
-static Vector3 (*fn_WorldToScreenPoint)(void* camera, Vector3 pos, int eye, void* method) = nullptr;
-static bool useManualW2S = true; // true = VP matrix, false = fallback direto
+// WorldToScreenPoint(self, Vector3 pos, MethodInfo*) — 1 arg version
+// O dump mostra: WorldToScreenPoint(Vector3 position) → 1 arg
+static Vector3 (*fn_WorldToScreenPoint)(void* camera, Vector3 pos, void* method) = nullptr;
+static bool useManualW2S = true;
 
-// il2cpp_class_get_method_from_name — resolvido direto do libil2cpp.so
-static void* (*resolve_method)(void* klass, const char* name, int argsCount) = nullptr;
-
-// Original OnUpdate — il2cpp ABI: TODOS os metodos recebem (self, methodInfo)
+// Original LateUpdate
 static void (*orig_OnUpdate)(void* self, void* methodInfo) = nullptr;
 
 // Shared memory
@@ -333,10 +316,9 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
         screenTop = ManualWorldToScreen(topWorld, g_vpMatrix, screenW, screenH);
     } else {
         // ── Fallback: WorldToScreenPoint direto ──
-        // Chamado POR PLAYER — mais lento, mas funciona se VP matrix não resolve
         sharedData->debugLastCall = 80 + idx;
-        screenBottom = fn_WorldToScreenPoint(camera, bottomWorld, 2, nullptr);
-        screenTop = fn_WorldToScreenPoint(camera, topWorld, 2, nullptr);
+        screenBottom = fn_WorldToScreenPoint(camera, bottomWorld, nullptr);
+        screenTop = fn_WorldToScreenPoint(camera, topWorld, nullptr);
         // Unity Y invertido
         screenBottom.y = (float)screenH - screenBottom.y;
         screenTop.y = (float)screenH - screenTop.y;
@@ -378,139 +360,63 @@ static void* hack_thread(void*) {
     LOGI("libil2cpp.so detectada");
     hookLogWrite("libil2cpp.so detectada");
 
-    // ── Resolver APIs do il2cpp via ByNameModding ──
-    Il2CppAttach("libil2cpp.so");
+    // ── Pegar base address do libil2cpp.so ──
+    uintptr_t il2cpp_base = findLibrary("libil2cpp.so");
+    if (!il2cpp_base) {
+        LOGE("findLibrary(libil2cpp.so) retornou 0!");
+        hookLogWrite("ERRO: il2cpp base = 0");
+        return nullptr;
+    }
+    LOGI("libil2cpp.so base = 0x%lx", (unsigned long)il2cpp_base);
+    hookLogWrite("il2cpp base = 0x%lx", (unsigned long)il2cpp_base);
 
-    // Esperar il2cpp domain estar pronto (não basta o .so estar nos maps)
-    // Free Fire é um jogo pesado — o domain pode demorar 5-15s após o .so carregar
-    LOGI("Aguardando il2cpp domain inicializar...");
-    hookLogWrite("Aguardando il2cpp domain...");
-    {
-        bool domainReady = false;
-        for (int i = 0; i < 60; i++) {
-            // Il2CppGetImageByName retorna 0 se domain == NULL (safe)
-            void *testImg = Il2CppGetImageByName("UnityEngine.CoreModule.dll");
-            if (testImg) {
-                LOGI("il2cpp domain PRONTO (tentativa %d): UnityEngine img=%p", i+1, testImg);
-                hookLogWrite("il2cpp domain PRONTO (tentativa %d)", i+1);
-                domainReady = true;
-                break;
-            }
-            // Tentar nome antigo do assembly
-            testImg = Il2CppGetImageByName("UnityEngine.dll");
-            if (testImg) {
-                LOGI("il2cpp domain PRONTO (UnityEngine.dll, tentativa %d): img=%p", i+1, testImg);
-                hookLogWrite("il2cpp domain PRONTO (UnityEngine.dll, tentativa %d)", i+1);
-                domainReady = true;
-                break;
-            }
-            LOGI("  domain wait... (%d/60)", i+1);
-            sleep(1);
-        }
-        if (!domainReady) {
-            LOGE("il2cpp domain NAO inicializou em 60s!");
-            hookLogWrite("ERRO: il2cpp domain timeout 60s");
-            return nullptr;
-        }
+    // ── Esperar o jogo inicializar (il2cpp_init precisa terminar) ──
+    // Não precisamos de il2cpp_domain_get — só precisamos que as funções
+    // estejam carregadas na memória. 5s é suficiente.
+    sleep(5);
+    LOGI("Aguardou 5s para init do jogo");
+
+    // ── Resolver TODAS as funções via base + offset direto ──
+    // ZERO dependência de il2cpp_domain_get, fake_dlfcn, ByNameModding
+    #define RESOLVE_OFFSET(type, offset) (type)(il2cpp_base + offset)
+
+    fn_Camera_get_main         = RESOLVE_OFFSET(void*(*)(void*),                   OFF_Camera_get_main);
+    fn_get_worldToCameraMatrix = RESOLVE_OFFSET(Matrix4x4(*)(void*, void*),        OFF_get_worldToCameraMatrix);
+    fn_get_projectionMatrix    = RESOLVE_OFFSET(Matrix4x4(*)(void*, void*),        OFF_get_projectionMatrix);
+    fn_WorldToScreenPoint      = RESOLVE_OFFSET(Vector3(*)(void*, Vector3, void*), OFF_WorldToScreenPoint);
+    fn_get_transform           = RESOLVE_OFFSET(void*(*)(void*, void*),            OFF_get_transform);
+    fn_get_position            = RESOLVE_OFFSET(Vector3(*)(void*, void*),          OFF_get_position);
+    fn_Screen_get_width        = RESOLVE_OFFSET(int(*)(void*),                     OFF_Screen_get_width);
+    fn_Screen_get_height       = RESOLVE_OFFSET(int(*)(void*),                     OFF_Screen_get_height);
+
+    LOGI("Offsets resolvidos:");
+    LOGI("  get_main          = %p (base+0x%X)", fn_Camera_get_main, OFF_Camera_get_main);
+    LOGI("  worldToCam        = %p (base+0x%X)", fn_get_worldToCameraMatrix, OFF_get_worldToCameraMatrix);
+    LOGI("  projMatrix        = %p (base+0x%X)", fn_get_projectionMatrix, OFF_get_projectionMatrix);
+    LOGI("  WorldToScreenPoint= %p (base+0x%X)", fn_WorldToScreenPoint, OFF_WorldToScreenPoint);
+    LOGI("  get_transform     = %p (base+0x%X)", fn_get_transform, OFF_get_transform);
+    LOGI("  get_position      = %p (base+0x%X)", fn_get_position, OFF_get_position);
+    LOGI("  Screen_get_width  = %p (base+0x%X)", fn_Screen_get_width, OFF_Screen_get_width);
+    LOGI("  Screen_get_height = %p (base+0x%X)", fn_Screen_get_height, OFF_Screen_get_height);
+    hookLogWrite("Offsets: cam=%p trans=%p pos=%p", fn_Camera_get_main, fn_get_transform, fn_get_position);
+
+    #undef RESOLVE_OFFSET
+
+    // VP Matrix disponivel
+    useManualW2S = true;
+    LOGI("Usando VP Matrix manual para W2S");
+
+    // Verificar se tudo resolveu
+    if (!fn_Camera_get_main || !fn_get_transform || !fn_get_position) {
+        LOGE("Falha nos offsets: cam=%p trans=%p pos=%p",
+             fn_Camera_get_main, fn_get_transform, fn_get_position);
+        hookLogWrite("ERRO: offsets invalidos");
+        return nullptr;
     }
 
     hookLogWrite("Game data dir: %s", getGameDataDir());
 
-    // ── Resolver il2cpp_class_get_method_from_name via ByNameModding API ──
-    // Il2CppAttach ja resolveu esta funcao internamente.
-    // Il2CppGetMethodInfoByName expoe ela sem precisar de outro dlopen_ex.
-    // (O segundo dlopen_ex falhava porque fake_dlfcn nao encontra libil2cpp.so
-    // quando carregados via ptrace injection em namespace diferente)
-    resolve_method = (void*(*)(void*, const char*, int)) Il2CppGetMethodInfoByName;
-
-    // Verificar se Il2CppAttach realmente resolveu a funcao
-    // (Il2CppGetMethodInfoByName retorna nullptr se internal ptr e NULL)
-    {
-        // Teste rapido: chamar com nullptr deve retornar nullptr sem crash
-        void* test = resolve_method(nullptr, "test", 0);
-        (void)test; // ok, apenas verifica que nao crashou
-        LOGI("resolve_method via Il2CppGetMethodInfoByName: OK");
-    }
-
-    // ── Resolver funções pelo NOME (usa seus offsets do dump automaticamente) ──
-    LOGI("Resolvendo Camera::get_main...");
-    hookLogWrite("Resolvendo Camera::get_main...");
-    fn_Camera_get_main = (void*(*)(void*)) Il2CppGetMethodOffset(
-        OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_CAMERA),
-        OBFUSCATE(CLS_CAMERA), OBFUSCATE("get_main"), 0);
-    LOGI("  get_main = %p", fn_Camera_get_main);
-    hookLogWrite("  get_main = %p", fn_Camera_get_main);
-
-    // VP Matrix: ARM64 ABI — Matrix4x4 retornada via x8 (return type, nao param)
-    LOGI("Resolvendo Camera matrices...");
-    fn_get_worldToCameraMatrix = (Matrix4x4(*)(void*, void*)) Il2CppGetMethodOffset(
-        OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_CAMERA),
-        OBFUSCATE(CLS_CAMERA), OBFUSCATE("get_worldToCameraMatrix"), 0);
-    LOGI("  worldToCam = %p", fn_get_worldToCameraMatrix);
-
-    fn_get_projectionMatrix = (Matrix4x4(*)(void*, void*)) Il2CppGetMethodOffset(
-        OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_CAMERA),
-        OBFUSCATE(CLS_CAMERA), OBFUSCATE("get_projectionMatrix"), 0);
-    LOGI("  projMatrix = %p", fn_get_projectionMatrix);
-
-    // Fallback: WorldToScreenPoint(Vector3 pos, MonoOrStereoscopicEye eye) — 2 args
-    fn_WorldToScreenPoint = (Vector3(*)(void*, Vector3, int, void*)) Il2CppGetMethodOffset(
-        OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_CAMERA),
-        OBFUSCATE(CLS_CAMERA), OBFUSCATE("WorldToScreenPoint"), 2);
-    // Tentar versão com 1 arg se 2 args falhou
-    if (!fn_WorldToScreenPoint) {
-        fn_WorldToScreenPoint = (Vector3(*)(void*, Vector3, int, void*)) Il2CppGetMethodOffset(
-            OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_CAMERA),
-            OBFUSCATE(CLS_CAMERA), OBFUSCATE("WorldToScreenPoint"), 1);
-    }
-    LOGI("  w2sPoint = %p", fn_WorldToScreenPoint);
-
-    // Decidir método de W2S
-    if (fn_get_worldToCameraMatrix && fn_get_projectionMatrix) {
-        useManualW2S = true;
-        LOGI("Usando VP Matrix manual para W2S");
-    } else if (fn_WorldToScreenPoint) {
-        useManualW2S = false;
-        LOGI("VP Matrix nao disponivel, usando WorldToScreenPoint fallback");
-    } else {
-        LOGE("Nenhum metodo W2S disponivel!");
-    }
-
-    LOGI("Resolvendo transform/position/screen...");
-    fn_get_transform = (void*(*)(void*, void*)) Il2CppGetMethodOffset(
-        OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_COMPONENT),
-        OBFUSCATE(CLS_COMPONENT), OBFUSCATE("get_transform"), 0);
-    LOGI("  get_transform = %p", fn_get_transform);
-
-    fn_get_position = (Vector3(*)(void*, void*)) Il2CppGetMethodOffset(
-        OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_TRANSFORM),
-        OBFUSCATE(CLS_TRANSFORM), OBFUSCATE("get_position"), 0);
-    LOGI("  get_position = %p", fn_get_position);
-
-    fn_Screen_get_width = (int(*)(void*)) Il2CppGetMethodOffset(
-        OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_SCREEN),
-        OBFUSCATE(CLS_SCREEN), OBFUSCATE("get_width"), 0);
-    LOGI("  Screen_get_width = %p", fn_Screen_get_width);
-
-    fn_Screen_get_height = (int(*)(void*)) Il2CppGetMethodOffset(
-        OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_SCREEN),
-        OBFUSCATE(CLS_SCREEN), OBFUSCATE("get_height"), 0);
-    LOGI("  Screen_get_height = %p", fn_Screen_get_height);
-
-    // Verificar se tudo resolveu
-    if (!fn_Camera_get_main || !fn_get_transform || !fn_get_position) {
-        LOGE("Falha ao resolver funções: cam=%p trans=%p pos=%p",
-             fn_Camera_get_main, fn_get_transform, fn_get_position);
-        return nullptr;
-    }
-    LOGI("Funções resolvidas: cam=%p viewMat=%p projMat=%p wts=%p trans=%p pos=%p",
-         fn_Camera_get_main, fn_get_worldToCameraMatrix, fn_get_projectionMatrix,
-         fn_WorldToScreenPoint, fn_get_transform, fn_get_position);
-
     // ── Criar shared memory ──
-    // IMPORTANTE: usar /data/local/tmp/ como PRIMARIO
-    // O overlay tambem tenta /data/local/tmp/ PRIMEIRO
-    // O game dir falha quando /proc/self/cmdline retorna zygote
     hookLogWrite("Tentando shm [%s]... uid=%d gid=%d", HOOK_BUILD_VER, getuid(), getgid());
     hookLogWrite("Paths: %s, /data/data/%s/%s, %s", SHM_PATH_1, HOOK_GAME_PACKAGE, SHM_FILENAME, SHM_PATH_2);
 
@@ -531,7 +437,7 @@ static void* hack_thread(void*) {
     }
 
     memset(sharedData, 0, sizeof(SharedESPData));
-    sharedData->magic = 0xDEADF00D;  // Overlay espera isso para conectar
+    sharedData->magic = 0xDEADF00D;
     LOGI("Shared memory criado em %s (magic=0xDEADF00D)", shmActivePath ? shmActivePath : "???");
     hookLogWrite("SHM OK: path=%s magic=0xDEADF00D mmap=%p", shmActivePath ? shmActivePath : "???", sharedData);
 
@@ -542,32 +448,109 @@ static void* hack_thread(void*) {
         LOGI("Tela: %dx%d", sharedData->screenW, sharedData->screenH);
     }
 
-    // ── VMT Hook no OnUpdate ──
-    // Pegar o Il2CppClass* para bl_PlayerNetwork
-    LOGI("Buscando classe %s::%s ...", NS_PLAYER, CLS_PLAYER);
-    hookLogWrite("Buscando classe %s::%s ...", NS_PLAYER, CLS_PLAYER);
-    void* playerClass = Il2CppGetClassType(
-        OBFUSCATE(ASSEMBLY_CS), OBFUSCATE(NS_PLAYER), OBFUSCATE(CLS_PLAYER));
+    // ── VMT Hook no LateUpdate ──
+    // Precisamos do MethodInfo* do LateUpdate pra trocar o methodPointer.
+    // Pra isso, usar il2cpp_class_get_method_from_name via real dlsym.
+    LOGI("Resolvendo MethodInfo de Player::LateUpdate via dlsym...");
+    hookLogWrite("Resolvendo MethodInfo Player::LateUpdate...");
 
+    // Resolver as 3 funcoes il2cpp necessarias pra achar o MethodInfo
+    void *il2cpp_handle = dlopen("libil2cpp.so", RTLD_NOLOAD);
+    if (!il2cpp_handle) {
+        LOGE("dlopen(libil2cpp.so, RTLD_NOLOAD) falhou: %s", dlerror());
+        hookLogWrite("ERRO: dlopen RTLD_NOLOAD falhou");
+        return nullptr;
+    }
+    LOGI("dlopen(RTLD_NOLOAD) = %p", il2cpp_handle);
+
+    auto p_domain_get = (void*(*)()) dlsym(il2cpp_handle, "il2cpp_domain_get");
+    auto p_domain_get_assemblies = (void**(*)(const void*, size_t*)) dlsym(il2cpp_handle, "il2cpp_domain_get_assemblies");
+    auto p_assembly_get_image = (const void*(*)(const void*)) dlsym(il2cpp_handle, "il2cpp_assembly_get_image");
+    auto p_image_get_name = (const char*(*)(void*)) dlsym(il2cpp_handle, "il2cpp_image_get_name");
+    auto p_class_from_name = (void*(*)(const void*, const char*, const char*)) dlsym(il2cpp_handle, "il2cpp_class_from_name");
+    auto p_class_get_method = (void*(*)(void*, const char*, int)) dlsym(il2cpp_handle, "il2cpp_class_get_method_from_name");
+
+    dlclose(il2cpp_handle);
+
+    LOGI("dlsym: domain_get=%p assemblies=%p get_image=%p get_name=%p class_from_name=%p get_method=%p",
+         (void*)p_domain_get, (void*)p_domain_get_assemblies,
+         (void*)p_assembly_get_image, (void*)p_image_get_name,
+         (void*)p_class_from_name, (void*)p_class_get_method);
+
+    if (!p_domain_get || !p_domain_get_assemblies || !p_assembly_get_image ||
+        !p_image_get_name || !p_class_from_name || !p_class_get_method) {
+        LOGE("dlsym falhou para uma ou mais funcoes il2cpp");
+        hookLogWrite("ERRO: dlsym falhou");
+        return nullptr;
+    }
+
+    // Esperar domain ficar pronto (polling com dlsym real)
+    void *domain = nullptr;
+    for (int i = 0; i < 60; i++) {
+        domain = p_domain_get();
+        if (domain) {
+            size_t sz = 0;
+            void **assemblies = p_domain_get_assemblies(domain, &sz);
+            if (assemblies && sz > 0) {
+                LOGI("il2cpp domain PRONTO (tentativa %d): domain=%p assemblies=%zu", i+1, domain, sz);
+                hookLogWrite("il2cpp domain PRONTO (tentativa %d) assemblies=%zu", i+1, sz);
+                break;
+            }
+        }
+        if (i >= 59) {
+            LOGE("il2cpp domain timeout 60s");
+            hookLogWrite("ERRO: domain timeout 60s");
+            return nullptr;
+        }
+        LOGI("  domain wait... (%d/60)", i+1);
+        sleep(1);
+    }
+
+    // Achar Assembly-CSharp image
+    size_t asmCount = 0;
+    void **assemblies = p_domain_get_assemblies(domain, &asmCount);
+    void *cs_image = nullptr;
+    for (size_t i = 0; i < asmCount; i++) {
+        void *img = (void*)p_assembly_get_image(assemblies[i]);
+        const char *name = p_image_get_name(img);
+        if (name && strcmp(name, "Assembly-CSharp.dll") == 0) {
+            cs_image = img;
+            break;
+        }
+    }
+    if (!cs_image) {
+        LOGE("Assembly-CSharp.dll nao encontrada!");
+        hookLogWrite("ERRO: Assembly-CSharp.dll nao encontrada");
+        return nullptr;
+    }
+    LOGI("Assembly-CSharp.dll = %p", cs_image);
+
+    // Achar classe Player
+    void *playerClass = p_class_from_name(cs_image, "COW.GamePlay", "Player");
     if (!playerClass) {
-        LOGE("Classe %s não encontrada", CLS_PLAYER);
-        hookLogWrite("ERRO: Classe %s nao encontrada", CLS_PLAYER);
+        LOGE("Classe Player nao encontrada");
+        hookLogWrite("ERRO: classe Player nao encontrada");
         return nullptr;
     }
-    LOGI("  playerClass = %p", playerClass);
-    hookLogWrite("  playerClass = %p", playerClass);
+    LOGI("playerClass = %p", playerClass);
+    hookLogWrite("playerClass = %p", playerClass);
 
-    // Pegar MethodInfo* para OnUpdate (via il2cpp_class_get_method_from_name)
-    LOGI("Buscando metodo %s ...", MTD_ONUPDATE);
-    void* onUpdateMethodInfo = resolve_method(playerClass, OBFUSCATE(MTD_ONUPDATE), 0);
-
+    // Pegar MethodInfo* do LateUpdate
+    void *onUpdateMethodInfo = p_class_get_method(playerClass, "LateUpdate", 0);
     if (!onUpdateMethodInfo) {
-        LOGE("Método %s não encontrado em %s", MTD_ONUPDATE, CLS_PLAYER);
-        hookLogWrite("ERRO: Metodo %s nao encontrado em %s", MTD_ONUPDATE, CLS_PLAYER);
+        LOGE("LateUpdate nao encontrado em Player");
+        hookLogWrite("ERRO: LateUpdate nao encontrado");
         return nullptr;
     }
-    LOGI("  onUpdateMethodInfo = %p", onUpdateMethodInfo);
-    hookLogWrite("  onUpdateMethodInfo = %p", onUpdateMethodInfo);
+    LOGI("LateUpdate MethodInfo = %p", onUpdateMethodInfo);
+    hookLogWrite("LateUpdate MethodInfo = %p", onUpdateMethodInfo);
+
+    // Verificar que methodPointer bate com nosso offset
+    void *currentMethodPtr = *(void**)onUpdateMethodInfo;
+    void *expectedPtr = (void*)(il2cpp_base + OFF_LateUpdate);
+    LOGI("  methodPointer atual = %p, esperado (base+off) = %p, match=%s",
+         currentMethodPtr, expectedPtr,
+         (currentMethodPtr == expectedPtr) ? "SIM" : "NAO");
 
     // Aplicar VMT Hook
     LOGI("Aplicando VMT Hook...");
@@ -579,8 +562,8 @@ static void* hack_thread(void*) {
     }
 
     hookActive.store(true);
-    LOGI("=== HOOK ATIVO === VMT hook em %s::%s", CLS_PLAYER, MTD_ONUPDATE);
-    hookLogWrite("=== HOOK ATIVO === VMT em %s::%s", CLS_PLAYER, MTD_ONUPDATE);
+    LOGI("=== HOOK ATIVO === VMT hook em Player::LateUpdate");
+    hookLogWrite("=== HOOK ATIVO === VMT em Player::LateUpdate");
 
     return nullptr;
 }

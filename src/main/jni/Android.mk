@@ -51,12 +51,9 @@ LOCAL_ARM_MODE := arm
 LOCAL_C_INCLUDES := $(LOCAL_PATH)
 LOCAL_C_INCLUDES += $(LOCAL_PATH)/include/Utils
 LOCAL_C_INCLUDES += $(LOCAL_PATH)/include/Utils/Unity
-LOCAL_C_INCLUDES += $(LOCAL_PATH)/include/Utils/Unity/ByNameModding
 
-# Sources - GameHook + ByNameModding (Il2Cpp resolver + fake_dlfcn)
+# Sources - GameHook only (direct offsets, no ByNameModding)
 HOOK_FILES := $(LOCAL_PATH)/GameHook.cpp
-HOOK_FILES += $(LOCAL_PATH)/include/Utils/Unity/ByNameModding/Il2Cpp.cpp
-HOOK_FILES += $(LOCAL_PATH)/include/Utils/Unity/ByNameModding/fake_dlfcn.cpp
 
 LOCAL_SRC_FILES := $(HOOK_FILES:$(LOCAL_PATH)/%=%)
 
