@@ -1,52 +1,9 @@
-=== JAWMODS DIAG v14 ===
-Zygisk:
-value=1
-DenyList:
-(clean)
-Module:
-total 910
-drwxr-xr-x 2 root root   3452 2026-04-13 19:32 .
-drwxr-xr-x 3 root root   3452 2026-04-14 18:50 ..
--rw-r--r-- 1 root root 924024 2026-04-14 19:44 arm64-v8a.so
-State:
-(active)
-PID=19930
+=== JAWMODS DIAG v15 (ptrace) ===
+PID=14753
+SELinux:
+Enforcing
 Maps hook:
-All Logcat GameHook:
-04-14 18:50:59.865   865   865 ? cust_nvram: chipId[0x6768], adieId[0x0000]
-04-14 18:51:00.421   861   861 ? cust_nvram: chipId[0x6768], adieId[0x0000]
-04-14 18:51:00.465  1116  1116 ? cust_nvram: chipId[0x6768], adieId[0x0000]
-04-14 18:51:01.286  1155  1155 ? cust_nvram: chipId[0x6768], adieId[0x0000]
-04-14 18:51:03.859  1677  1694 ? cust_nvram: chipId[0x6768], adieId[0x0000]
-04-14 18:51:03.870   840   840 ? cust_nvram: chipId[0x6768], adieId[0x0000]
-04-14 18:51:05.719  1764  1764 I GameHook: lib_main() LOADED [v11-sepolicy] pid=1764 uid=0
-04-14 18:51:05.719  1764  1764 I GameHook: lib_main() cmdline=[zygote64]
-04-14 18:51:05.719  1764  1764 I GameHook: lib_main() skipping (not game process)
-04-14 18:51:05.722  1764  1764 I GameHook: Zygisk onLoad() called [v11-sepolicy] pid=1764
-04-14 18:51:17.006  2007  2007 I GameHook: lib_main() LOADED [v11-sepolicy] pid=2007 uid=0
-04-14 18:51:17.006  2007  2007 I GameHook: lib_main() cmdline=[zygote64]
-04-14 18:51:17.006  2007  2007 I GameHook: lib_main() skipping (not game process)
-04-14 18:51:17.006  2007  2007 I GameHook: Zygisk onLoad() called [v11-sepolicy] pid=2007
-04-14 18:51:28.227  2217  2217 I GameHook: lib_main() LOADED [v11-sepolicy] pid=2217 uid=0
-04-14 18:51:28.227  2217  2217 I GameHook: lib_main() cmdline=[zygote64]
-04-14 18:51:28.227  2217  2217 I GameHook: lib_main() skipping (not game process)
-04-14 18:51:28.227  2217  2217 I GameHook: Zygisk onLoad() called [v11-sepolicy] pid=2217
-04-14 18:52:00.321   820   887 ? cust_nvram: chipId[0x6768], adieId[0x0000]
-04-14 18:52:11.200  7990  8125 ? cust_nvram: chipId[0x6768], adieId[0x0000]
+Logcat GameHook:
+Logcat injector:
 HookLog:
-Agent tried: true debug: true
-Last result: Exception occurred while executing attach-agent:
-java.lang.SecurityException: Process not debuggable: com.dts.freefireth
-	at com.android.server.am.ActivityManagerService.enforceDebuggable(ActivityManagerService.java:6201)
-	at com.android.server.am.ActivityManagerService.attachAgent(ActivityManagerService.java:18843)
-	at com.android.server.am.ActivityManagerShellCommand.runAttachAgent(ActivityManagerShellCommand.java:3071)
-	at com.android.server.am.ActivityManagerShellCommand.onCommand(ActivityManagerShellCommand.java:328)
-	at com.android.modules.utils.BasicShellCommandHandler.exec(BasicShellCommandHandler.java:97)
-	at android.os.ShellCommand.exec(ShellCommand.java:38)
-	at com.android.server.am.ActivityManagerService.onShellCommand(ActivityManagerService.java:9667)
-	at android.os.Binder.shellCommand(Binder.java:1054)
-	at android.os.Binder.onTransact(Binder.java:882)
-	at android.app.IActivityManager$Stub.onTransact(IActivityManager.java:5374)
-	at com.android.server.am.ActivityManagerService.onTransact(ActivityManagerService.java:2748)
-	at android.os.Binder.execTransactInternal(Binder.java:1290)
-	at android.os.Binder.execTransact(Binder.java:1249)
+Injector result: === JawMods ptrace injector v15 === Config: PID=14753 SO=/data/local/tmp/libHook.so [*] Target PID: 14753 [*] Library: /data/local/tmp/libHook.so [1] Attaching to process...   Attached to main thread 14753 [2] Saving registers... [3] Resolving dlopen...   Linker: /apex/com.android.runtime/bin/linker64   dlopen: local=70c127a020 remote=78af282020 (base: local=70c3459000 remote=78b1461000 offset=fffffffffde21020)   dlopen at: 0x78af282020 [4] Writing path to target stack...   Path written at: 0x7ff7a44320 (27 bytes) [5] Setting up dlopen call... [6] Executing dlopen in target...   Process stopped by signal 11   dlopen returned handle: 0x7ff7a44320 (SUCCESS) [7] Restoring original registers... [8] Detaching... [+] INJECTION SUCCESSFUL into PID 14753 [!] .so NOT found in maps after injection [+] INJECTION SUCCESSFUL

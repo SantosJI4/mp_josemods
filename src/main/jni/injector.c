@@ -217,37 +217,74 @@ static unsigned long long find_symbol_offset(const char *lib_path, const char *s
 }
 
 /*
- * Resolve symbol address in target process:
- *   target_addr = target_lib_base + (symbol - local_lib_base)
- *
- * For linker functions (dlopen), we can use our own process as reference
- * since the linker is the same binary (just mapped at different address).
+ * Resolve symbol address in target process via offset calculation.
+ * CRITICAL: validates that local_func is actually WITHIN lib_name
+ * to prevent negative offsets (e.g., dlopen in libdl.so vs linker64).
  */
 static unsigned long long resolve_remote_func(pid_t pid, const char *lib_name,
                                                const char *func_name) {
-    /* Find lib base in OUR process */
     unsigned long long local_base = find_lib_base(getpid(), lib_name);
-    /* Find lib base in TARGET process */
     unsigned long long remote_base = find_lib_base(pid, lib_name);
 
     if (!local_base || !remote_base) {
-        LOGE("Cannot find %s: local=%llx remote=%llx", lib_name, local_base, remote_base);
+        LOGI("  resolve_remote_func: %s not found (local=%llx remote=%llx)",
+             lib_name, local_base, remote_base);
         return 0;
     }
 
-    /* Get local function address */
     void *local_func = dlsym(RTLD_DEFAULT, func_name);
     if (!local_func) {
-        LOGE("dlsym(%s) failed: %s", func_name, dlerror());
+        LOGI("  resolve_remote_func: dlsym(%s) failed", func_name);
         return 0;
     }
 
     unsigned long long local_addr = (unsigned long long)local_func;
-    unsigned long long offset = local_addr - local_base;
-    unsigned long long remote_addr = remote_base + offset;
 
+    /* CRITICAL: validate that local_func is ABOVE local_base.
+     * If dlsym returns an address in a different library, the offset
+     * will be negative (huge unsigned) → wrong remote address → crash.
+     * Also sanity check: offset should be < 64MB (reasonable lib size). */
+    if (local_addr < local_base) {
+        LOGI("  resolve_remote_func: %s (%llx) is BELOW %s base (%llx) — wrong library!",
+             func_name, local_addr, lib_name, local_base);
+        return 0;
+    }
+    unsigned long long offset = local_addr - local_base;
+    if (offset > 0x4000000ULL) { /* 64MB sanity limit */
+        LOGI("  resolve_remote_func: offset %llx too large for %s — wrong library?",
+             offset, lib_name);
+        return 0;
+    }
+
+    unsigned long long remote_addr = remote_base + offset;
     LOGI("  %s: local=%llx remote=%llx (base: local=%llx remote=%llx offset=%llx)",
          func_name, local_addr, remote_addr, local_base, remote_base, offset);
+    return remote_addr;
+}
+
+/*
+ * Resolve symbol in target process by parsing ELF on disk.
+ * More reliable than offset calculation — doesn't depend on
+ * the symbol being in the same library in our process.
+ */
+static unsigned long long resolve_remote_func_elf(pid_t pid, const char *lib_path,
+                                                   const char *lib_name,
+                                                   const char *func_name) {
+    unsigned long long remote_base = find_lib_base(pid, lib_name);
+    if (!remote_base) {
+        LOGI("  resolve_elf: %s not in target maps", lib_name);
+        return 0;
+    }
+
+    unsigned long long sym_offset = find_symbol_offset(lib_path, func_name);
+    if (!sym_offset) {
+        LOGI("  resolve_elf: %s not found in %s", func_name, lib_path);
+        return 0;
+    }
+
+    unsigned long long remote_addr = remote_base + sym_offset;
+    LOGI("  %s (ELF): remote=%llx (base=%llx + offset=%llx) from %s",
+         func_name, remote_addr, remote_base, sym_offset, lib_path);
     return remote_addr;
 }
 
@@ -337,29 +374,42 @@ static int do_inject(pid_t pid, const char *so_path) {
     /* 3. Find dlopen in target process */
     LOGI("[3] Resolving dlopen...");
 
-    /* Try multiple methods to find dlopen */
+    /* Try multiple methods to find dlopen in target process */
     unsigned long long remote_dlopen = 0;
+    int is_loader_dlopen = 0; /* __loader_dlopen takes 3 args: (path, flags, caller_addr) */
+    char linker_path[256] = {0};
+    find_linker_name(pid, linker_path, sizeof(linker_path));
+    LOGI("  Linker: %s", linker_path[0] ? linker_path : "(not found)");
 
-    /* Method A: Use linker offset calculation */
-    {
-        char linker_name[256] = {0};
-        if (find_linker_name(pid, linker_name, sizeof(linker_name)) == 0) {
-            LOGI("  Linker: %s", linker_name);
-
-            /* ARM64 Android: dlopen is __loader_dlopen in the linker */
-            /* But we can calculate offset from our own dlopen */
-            remote_dlopen = resolve_remote_func(pid, "linker64", "dlopen");
-        }
+    /* Method A: Parse linker64 ELF on disk for __loader_dlopen
+     * Most reliable on Android 7+ — direct symbol, no guessing */
+    if (linker_path[0]) {
+        remote_dlopen = resolve_remote_func_elf(pid, linker_path, "linker64",
+                                                 "__loader_dlopen");
+        if (remote_dlopen) is_loader_dlopen = 1;
     }
 
-    /* Method B: If dlopen not found via linker, try libdl.so */
+    /* Method B: Parse linker64 ELF for dlopen */
+    if (!remote_dlopen && linker_path[0]) {
+        remote_dlopen = resolve_remote_func_elf(pid, linker_path, "linker64",
+                                                 "dlopen");
+    }
+
+    /* Method C: libdl.so offset calculation (dlopen lives here on older Android) */
     if (!remote_dlopen) {
         remote_dlopen = resolve_remote_func(pid, "libdl.so", "dlopen");
     }
 
-    /* Method C: Use __loader_dlopen directly */
+    /* Method D: Parse libdl.so ELF on disk */
+    if (!remote_dlopen) {
+        remote_dlopen = resolve_remote_func_elf(pid, "/system/lib64/libdl.so",
+                                                 "libdl.so", "dlopen");
+    }
+
+    /* Method E: last resort — linker offset calc */
     if (!remote_dlopen) {
         remote_dlopen = resolve_remote_func(pid, "linker64", "__loader_dlopen");
+        if (remote_dlopen) is_loader_dlopen = 1;
     }
 
     if (!remote_dlopen) {
@@ -384,10 +434,22 @@ static int do_inject(pid_t pid, const char *so_path) {
         }
         LOGI("  Path written at: 0x%llx (%zu bytes)", path_addr, path_len);
 
-        /* 5. Set up call to dlopen(path, RTLD_NOW) */
-        LOGI("[5] Setting up dlopen call...");
+        /* 5. Set up call to dlopen(path, RTLD_NOW) or
+         * __loader_dlopen(path, RTLD_NOW, caller_addr) */
+        LOGI("[5] Setting up dlopen call (loader_variant=%d)...", is_loader_dlopen);
         mod_regs.regs[0] = path_addr;      /* x0 = path string */
         mod_regs.regs[1] = RTLD_NOW;       /* x1 = flags */
+        if (is_loader_dlopen) {
+            /* __loader_dlopen needs caller_addr in x2 to determine namespace.
+             * Use a code address from the game's own libil2cpp.so (or any game lib)
+             * so dlopen resolves in the game's linker namespace. */
+            unsigned long long caller = find_lib_base(pid, "libil2cpp.so");
+            if (!caller) caller = find_lib_base(pid, "libunity.so");
+            if (!caller) caller = find_lib_base(pid, "libmain.so");
+            if (!caller) caller = orig_regs.pc; /* fallback: where target was executing */
+            mod_regs.regs[2] = caller;
+            LOGI("  caller_addr (x2) = 0x%llx", caller);
+        }
         mod_regs.pc = remote_dlopen;        /* pc = dlopen */
         mod_regs.regs[30] = 0;             /* lr = 0 (will SIGSEGV after return) */
         /* Keep SP aligned */
@@ -421,16 +483,29 @@ static int do_inject(pid_t pid, const char *so_path) {
                 LOGI("  Process stopped by signal %d", sig);
 
                 if (sig == SIGSEGV || sig == SIGBUS) {
-                    /* Expected — dlopen returned and jumped to lr=0 */
-                    /* Check return value in x0 */
+                    /* Check return value in x0 and where PC crashed */
                     struct arm64_regs after_regs;
                     get_regs(pid, &after_regs);
-                    if (after_regs.regs[0] != 0) {
-                        LOGI("  dlopen returned handle: 0x%llx (SUCCESS)", after_regs.regs[0]);
+                    LOGI("  after: x0=%llx pc=%llx sp=%llx",
+                         after_regs.regs[0], after_regs.pc, after_regs.sp);
+
+                    /* If PC is 0 (our lr trap), dlopen returned normally.
+                     * If PC is elsewhere, something crashed before dlopen ran. */
+                    if (after_regs.pc == 0 && after_regs.regs[0] != 0) {
+                        /* PC=0 means it jumped to lr=0 after return = SUCCESS */
+                        LOGI("  dlopen handle: 0x%llx (SUCCESS — pc=0 trap)", after_regs.regs[0]);
+                        ret = 0;
+                    } else if (after_regs.pc != 0 && after_regs.regs[0] == mod_regs.regs[0]) {
+                        /* x0 unchanged + PC != 0 = crashed at bad dlopen address */
+                        LOGE("  CRASH at pc=%llx — dlopen address is WRONG!", after_regs.pc);
+                        LOGE("  x0 unchanged (=path_addr) — dlopen never executed");
+                        ret = -1;
+                    } else if (after_regs.regs[0] != 0) {
+                        /* x0 changed to non-zero = probably success */
+                        LOGI("  dlopen handle: 0x%llx (likely SUCCESS)", after_regs.regs[0]);
                         ret = 0;
                     } else {
-                        LOGE("  dlopen returned NULL (FAILED)");
-                        /* Try to get dlerror — but we can't easily call it here */
+                        LOGE("  dlopen returned NULL (FAILED) pc=%llx", after_regs.pc);
                         ret = -1;
                     }
                     break;
