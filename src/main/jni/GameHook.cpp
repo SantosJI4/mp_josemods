@@ -533,19 +533,15 @@ static void* hack_thread(void*) {
     LOGI("Shared memory criado em %s (magic=0xDEADF00D)", shmActivePath ? shmActivePath : "???");
     hookLogWrite("SHM OK: path=%s magic=0xDEADF00D mmap=%p", shmActivePath ? shmActivePath : "???", sharedData);
 
-    // Preencher tamanho de tela
-    if (fn_Screen_get_width && fn_Screen_get_height) {
-        sharedData->screenW = fn_Screen_get_width(nullptr);
-        sharedData->screenH = fn_Screen_get_height(nullptr);
-        LOGI("Tela: %dx%d", sharedData->screenW, sharedData->screenH);
-    }
+    // NOTA: Screen::get_width/height chamado DEPOIS do domain pronto
+    // (il2cpp runtime precisa estar inicializado antes de chamar metodos)
 
     // ── VMT Hook no LateUpdate ──
     // Precisamos do MethodInfo* do LateUpdate pra trocar o methodPointer.
     // dlopen/dlsym NAO funciona (namespace do linker Android 7+).
     // Solucao: resolver simbolos il2cpp lendo o ELF do disco direto.
-    LOGI("Resolvendo il2cpp API via ELF parser...");
-    hookLogWrite("Resolvendo il2cpp API via ELF...");
+    LOGI("[1/5] Resolvendo il2cpp API via ELF parser...");
+    hookLogWrite("[1/5] Resolvendo il2cpp API via ELF...");
 
     // Encontrar path do libil2cpp.so no disco
     char il2cpp_path[512] = {0};
@@ -555,6 +551,7 @@ static void* hack_thread(void*) {
         return nullptr;
     }
     LOGI("il2cpp path: %s", il2cpp_path);
+    hookLogWrite("il2cpp path: %s", il2cpp_path);
 
     // Resolver as funcoes il2cpp necessarias via ELF
     auto p_domain_get = (void*(*)())
@@ -584,7 +581,10 @@ static void* hack_thread(void*) {
         return nullptr;
     }
 
-    // Esperar domain ficar pronto (polling com dlsym real)
+    LOGI("[2/5] Esperando il2cpp domain...");
+    hookLogWrite("[2/5] Esperando domain...");
+
+    // Esperar domain ficar pronto
     void *domain = nullptr;
     for (int i = 0; i < 60; i++) {
         domain = p_domain_get();
@@ -606,7 +606,18 @@ static void* hack_thread(void*) {
         sleep(1);
     }
 
+    // Agora il2cpp runtime esta pronto — seguro chamar metodos
+    LOGI("[3/5] Screen size...");
+    if (fn_Screen_get_width && fn_Screen_get_height) {
+        sharedData->screenW = fn_Screen_get_width(nullptr);
+        sharedData->screenH = fn_Screen_get_height(nullptr);
+        LOGI("Tela: %dx%d", sharedData->screenW, sharedData->screenH);
+        hookLogWrite("Tela: %dx%d", sharedData->screenW, sharedData->screenH);
+    }
+
     // Achar Assembly-CSharp image
+    LOGI("[3/5] Buscando Assembly-CSharp...");
+    hookLogWrite("[3/5] Buscando Assembly-CSharp...");
     size_t asmCount = 0;
     void **assemblies = p_domain_get_assemblies(domain, &asmCount);
     void *cs_image = nullptr;
@@ -626,6 +637,8 @@ static void* hack_thread(void*) {
     LOGI("Assembly-CSharp.dll = %p", cs_image);
 
     // Achar classe Player
+    LOGI("[4/5] Buscando Player class...");
+    hookLogWrite("[4/5] Buscando Player class...");
     void *playerClass = p_class_from_name(cs_image, "COW.GamePlay", "Player");
     if (!playerClass) {
         LOGE("Classe Player nao encontrada");
@@ -653,8 +666,8 @@ static void* hack_thread(void*) {
          (currentMethodPtr == expectedPtr) ? "SIM" : "NAO");
 
     // Aplicar VMT Hook
-    LOGI("Aplicando VMT Hook...");
-    hookLogWrite("Aplicando VMT Hook...");
+    LOGI("[5/5] Aplicando VMT Hook...");
+    hookLogWrite("[5/5] Aplicando VMT Hook...");
     if (!VmtHook(onUpdateMethodInfo, (void*)Hook_OnUpdate, (void**)&orig_OnUpdate)) {
         LOGE("VMT Hook falhou");
         hookLogWrite("ERRO: VMT Hook falhou");
