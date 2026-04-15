@@ -401,18 +401,25 @@ static void* hack_thread(void*) {
     }
 
     // ── Resolver funções pelo NOME (usa seus offsets do dump automaticamente) ──
+    LOGI("Resolvendo Camera::get_main...");
+    hookLogWrite("Resolvendo Camera::get_main...");
     fn_Camera_get_main = (void*(*)(void*)) Il2CppGetMethodOffset(
         OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_CAMERA),
         OBFUSCATE(CLS_CAMERA), OBFUSCATE("get_main"), 0);
+    LOGI("  get_main = %p", fn_Camera_get_main);
+    hookLogWrite("  get_main = %p", fn_Camera_get_main);
 
     // VP Matrix: ARM64 ABI — Matrix4x4 retornada via x8 (return type, nao param)
+    LOGI("Resolvendo Camera matrices...");
     fn_get_worldToCameraMatrix = (Matrix4x4(*)(void*, void*)) Il2CppGetMethodOffset(
         OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_CAMERA),
         OBFUSCATE(CLS_CAMERA), OBFUSCATE("get_worldToCameraMatrix"), 0);
+    LOGI("  worldToCam = %p", fn_get_worldToCameraMatrix);
 
     fn_get_projectionMatrix = (Matrix4x4(*)(void*, void*)) Il2CppGetMethodOffset(
         OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_CAMERA),
         OBFUSCATE(CLS_CAMERA), OBFUSCATE("get_projectionMatrix"), 0);
+    LOGI("  projMatrix = %p", fn_get_projectionMatrix);
 
     // Fallback: WorldToScreenPoint(Vector3 pos, MonoOrStereoscopicEye eye) — 2 args
     fn_WorldToScreenPoint = (Vector3(*)(void*, Vector3, int, void*)) Il2CppGetMethodOffset(
@@ -424,6 +431,7 @@ static void* hack_thread(void*) {
             OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_CAMERA),
             OBFUSCATE(CLS_CAMERA), OBFUSCATE("WorldToScreenPoint"), 1);
     }
+    LOGI("  w2sPoint = %p", fn_WorldToScreenPoint);
 
     // Decidir método de W2S
     if (fn_get_worldToCameraMatrix && fn_get_projectionMatrix) {
@@ -436,21 +444,26 @@ static void* hack_thread(void*) {
         LOGE("Nenhum metodo W2S disponivel!");
     }
 
+    LOGI("Resolvendo transform/position/screen...");
     fn_get_transform = (void*(*)(void*, void*)) Il2CppGetMethodOffset(
         OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_COMPONENT),
         OBFUSCATE(CLS_COMPONENT), OBFUSCATE("get_transform"), 0);
+    LOGI("  get_transform = %p", fn_get_transform);
 
     fn_get_position = (Vector3(*)(void*, void*)) Il2CppGetMethodOffset(
         OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_TRANSFORM),
         OBFUSCATE(CLS_TRANSFORM), OBFUSCATE("get_position"), 0);
+    LOGI("  get_position = %p", fn_get_position);
 
     fn_Screen_get_width = (int(*)(void*)) Il2CppGetMethodOffset(
         OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_SCREEN),
         OBFUSCATE(CLS_SCREEN), OBFUSCATE("get_width"), 0);
+    LOGI("  Screen_get_width = %p", fn_Screen_get_width);
 
     fn_Screen_get_height = (int(*)(void*)) Il2CppGetMethodOffset(
         OBFUSCATE(ASSEMBLY_UE), OBFUSCATE(NS_SCREEN),
         OBFUSCATE(CLS_SCREEN), OBFUSCATE("get_height"), 0);
+    LOGI("  Screen_get_height = %p", fn_Screen_get_height);
 
     // Verificar se tudo resolveu
     if (!fn_Camera_get_main || !fn_get_transform || !fn_get_position) {
@@ -499,25 +512,37 @@ static void* hack_thread(void*) {
 
     // ── VMT Hook no OnUpdate ──
     // Pegar o Il2CppClass* para bl_PlayerNetwork
+    LOGI("Buscando classe %s::%s ...", NS_PLAYER, CLS_PLAYER);
+    hookLogWrite("Buscando classe %s::%s ...", NS_PLAYER, CLS_PLAYER);
     void* playerClass = Il2CppGetClassType(
         OBFUSCATE(ASSEMBLY_CS), OBFUSCATE(NS_PLAYER), OBFUSCATE(CLS_PLAYER));
 
     if (!playerClass) {
         LOGE("Classe %s não encontrada", CLS_PLAYER);
+        hookLogWrite("ERRO: Classe %s nao encontrada", CLS_PLAYER);
         return nullptr;
     }
+    LOGI("  playerClass = %p", playerClass);
+    hookLogWrite("  playerClass = %p", playerClass);
 
     // Pegar MethodInfo* para OnUpdate (via il2cpp_class_get_method_from_name)
+    LOGI("Buscando metodo %s ...", MTD_ONUPDATE);
     void* onUpdateMethodInfo = resolve_method(playerClass, OBFUSCATE(MTD_ONUPDATE), 0);
 
     if (!onUpdateMethodInfo) {
         LOGE("Método %s não encontrado em %s", MTD_ONUPDATE, CLS_PLAYER);
+        hookLogWrite("ERRO: Metodo %s nao encontrado em %s", MTD_ONUPDATE, CLS_PLAYER);
         return nullptr;
     }
+    LOGI("  onUpdateMethodInfo = %p", onUpdateMethodInfo);
+    hookLogWrite("  onUpdateMethodInfo = %p", onUpdateMethodInfo);
 
     // Aplicar VMT Hook
+    LOGI("Aplicando VMT Hook...");
+    hookLogWrite("Aplicando VMT Hook...");
     if (!VmtHook(onUpdateMethodInfo, (void*)Hook_OnUpdate, (void**)&orig_OnUpdate)) {
         LOGE("VMT Hook falhou");
+        hookLogWrite("ERRO: VMT Hook falhou");
         return nullptr;
     }
 

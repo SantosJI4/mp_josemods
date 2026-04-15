@@ -1,13 +1,9 @@
 === JAWMODS DIAG v15 (ptrace) ===
-PID=1728
+PID=12069
 SELinux:
 Enforcing
 Maps hook:
-775304e000-7753129000 r-xp 00000000 fd:23 665312                         /data/app/~~KNxSKliV9ouBCEhOY-KOow==/com.dts.freefireth-4HDf70MRQwQdjF64XL_O0g==/lib/arm64/libHook.so
-7753138000-775313e000 r--p 000da000 fd:23 665312                         /data/app/~~KNxSKliV9ouBCEhOY-KOow==/com.dts.freefireth-4HDf70MRQwQdjF64XL_O0g==/lib/arm64/libHook.so
-775313e000-775313f000 rw-p 000e0000 fd:23 665312                         /data/app/~~KNxSKliV9ouBCEhOY-KOow==/com.dts.freefireth-4HDf70MRQwQdjF64XL_O0g==/lib/arm64/libHook.so
 Logcat GameHook:
---------- beginning of main
 04-15 18:46:18.724  1728  1728 I GameHook: lib_main() LOADED [v15-ptrace] pid=1728 uid=10409
 04-15 18:46:18.724  1728  1728 I GameHook: lib_main() cmdline=[com.dts.freefireth]
 04-15 18:46:18.724  1728  1728 I GameHook: libHook.so loaded (ptrace) [v15-ptrace] pid=1728
@@ -18,13 +14,27 @@ Logcat GameHook:
 04-15 18:46:19.157  1728  1966 I GameHook: libil2cpp.so detectada
 04-15 18:46:22.264  1728  1966 I GameHook: Game data dir: /data/data/com.dts.freefireth
 04-15 18:46:22.302  1728  1966 E GameHook: Falha ao resolver il2cpp_class_get_method_from_name
+04-15 19:02:07.423 12069 12069 I GameHook: lib_main() LOADED [v15-ptrace] pid=12069 uid=10409
+04-15 19:02:07.423 12069 12069 I GameHook: lib_main() cmdline=[com.dts.freefireth]
+04-15 19:02:07.423 12069 12069 I GameHook: libHook.so loaded (ptrace) [v15-ptrace] pid=12069
+04-15 19:02:07.549 12069 12069 I GameHook: === HOOK CARREGADO (ptrace) [v15-ptrace] === pid=12069 uid=10409
+04-15 19:02:07.580 12069 12256 I GameHook: Thread iniciada, aguardando libil2cpp.so...
+04-15 19:02:07.581 12069 12256 I GameHook: Hook thread iniciada, aguardando libil2cpp.so...
+04-15 19:02:07.626 12069 12256 I GameHook: libil2cpp.so detectada
+04-15 19:02:07.801 12069 12256 I GameHook: libil2cpp.so detectada
+04-15 19:02:10.888 12069 12256 I GameHook: Game data dir: /data/data/com.dts.freefireth
+04-15 19:02:10.889 12069 12256 I GameHook: resolve_method via Il2CppGetMethodInfoByName: OK
 Logcat injector:
 HookLog:
-=== HOOK CARREGADO (ptrace) [v15-ptrace] === pid=1728 uid=10409
+=== HOOK CARREGADO (ptrace) [v15-ptrace] === pid=12069 uid=10409
 Thread iniciada, aguardando libil2cpp.so...
 libil2cpp.so detectada
 === HOOK CARREGADO (ptrace) [v15-ptrace] === pid=1728 uid=10409
 Thread iniciada, aguardando libil2cpp.so...
 libil2cpp.so detectada
 Game data dir: /data/data/com.dts.freefireth
-Injector result: === JawMods ptrace injector v15 === Config: PID=1728 SO=/data/app/~~KNxSKliV9ouBCEhOY-KOow==/com.dts.freefireth-4HDf70MRQwQdjF64XL_O0g==/lib/arm64/libHook.so [*] Target PID: 1728 [*] Library: /data/app/~~KNxSKliV9ouBCEhOY-KOow==/com.dts.freefireth-4HDf70MRQwQdjF64XL_O0g==/lib/arm64/libHook.so [1] Attaching to process...   Attached to main thread 1728 [2] Saving registers... [3] Resolving dlopen...   Linker: /apex/com.android.runtime/bin/linker64   __loader_dlopen (ELF): remote=78b14611b0 (load_base=78b142a000 + st_value=371b0) rxp_base=78b1461000 from /apex/com.android.runtime/bin/linker64   dlopen at: 0x78b14611b0   dlopen code: [0]=a9bc7bfd [1]=f9000bf7 [4] Writing path to target stack...   Path written at: 0x7ff7a44050 (102 bytes) [5] Setting up dlopen call (loader_variant=1)...   caller_addr (x2) = 0x7736307000 [6] Executing dlopen in target...   Process stopped by signal 11   after: x0=d9f642eab446d8d9 pc=0 sp=7ff7a44040   dlopen handle: 0xd9f642eab446d8d9 (SUCCESS — pc=0 trap) [7] Restoring original registers... [8] Detaching... [+] INJECTION SUCCESSFUL into PID 1728   Verified: 775304e000-7753129000 r-xp 00000000 fd:23 665312                         /data/app/~~KNxSKliV9ouBCEhOY-KOow==/com.dts.freefireth-4HDf70MRQwQdjF64XL_O0g==/lib/arm64/libHook.so    Verified: 7753138000-775313e000 r--p 000da000 fd:23 665312                         /data/app/~~KNxSKliV9ouBCEhOY-KOow==/com.dts.freefireth-4HDf70MRQwQdjF64XL_O0g==/lib/arm64/libHook.so    Verified: 775313e000-775313f000 rw-p 000e0000 fd:23 665312                         /data/app/~~KNxSKliV9ouBCEhOY-KOow==/com.dts.freefireth-4HDf70MRQwQdjF64XL_O0g==/lib/arm64/libHook.so  [+] Verified: .so in /proc/1728/maps (3 entries) [+] INJECTION SUCCESSFUL
+=== HOOK CARREGADO (ptrace) [v15-ptrace] === pid=12069 uid=10409
+Thread iniciada, aguardando libil2cpp.so...
+libil2cpp.so detectada
+Game data dir: /data/data/com.dts.freefireth
+Injector result: === JawMods ptrace injector v15 === Config: PID=12069 SO=/data/app/~~KNxSKliV9ouBCEhOY-KOow==/com.dts.freefireth-4HDf70MRQwQdjF64XL_O0g==/lib/arm64/libHook.so [*] Target PID: 12069 [*] Library: /data/app/~~KNxSKliV9ouBCEhOY-KOow==/com.dts.freefireth-4HDf70MRQwQdjF64XL_O0g==/lib/arm64/libHook.so [1] Attaching to process...   Attached to main thread 12069 [2] Saving registers... [3] Resolving dlopen...   Linker: /apex/com.android.runtime/bin/linker64   __loader_dlopen (ELF): remote=78b14611b0 (load_base=78b142a000 + st_value=371b0) rxp_base=78b1461000 from /apex/com.android.runtime/bin/linker64   dlopen at: 0x78b14611b0   dlopen code: [0]=a9bc7bfd [1]=f9000bf7 [4] Writing path to target stack...   Path written at: 0x7ff7a41bb0 (102 bytes) [5] Setting up dlopen call (loader_variant=1)...   caller_addr (x2) = 0x77258bb000 [6] Executing dlopen in target...   Process stopped by signal 11   after: x0=64ec89e9029842c1 pc=0 sp=7ff7a41ba0   dlopen handle: 0x64ec89e9029842c1 (SUCCESS — pc=0 trap) [7] Restoring original registers... [8] Detaching... [+] INJECTION SUCCESSFUL into PID 12069   Verified: 776d080000-776d15a000 r-xp 00000000 fd:23 665312                         /data/app/~~KNxSKliV9ouBCEhOY-KOow==/com.dts.freefireth-4HDf70MRQwQdjF64XL_O0g==/lib/arm64/libHook.so    Verified: 776d169000-776d16f000 r--p 000d9000 fd:23 665312                         /data/app/~~KNxSKliV9ouBCEhOY-KOow==/com.dts.freefireth-4HDf70MRQwQdjF64XL_O0g==/lib/arm64/libHook.so    Verified: 776d16f000-776d170000 rw-p 000df000 fd:23 665312                         /data/app/~~KNxSKliV9ouBCEhOY-KOow==/com.dts.freefireth-4HDf70MRQwQdjF64XL_O0g==/lib/arm64/libHook.so  [+] Verified: .so in /proc/12069/maps (3 entries) [+] INJECTION SUCCESSFUL
