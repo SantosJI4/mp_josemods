@@ -380,7 +380,37 @@ static void* hack_thread(void*) {
 
     // ── Resolver APIs do il2cpp via ByNameModding ──
     Il2CppAttach("libil2cpp.so");
-    sleep(3); // Esperar assemblies carregarem
+
+    // Esperar il2cpp domain estar pronto (não basta o .so estar nos maps)
+    // Free Fire é um jogo pesado — o domain pode demorar 5-15s após o .so carregar
+    LOGI("Aguardando il2cpp domain inicializar...");
+    hookLogWrite("Aguardando il2cpp domain...");
+    {
+        void *domain = nullptr;
+        for (int i = 0; i < 30; i++) {
+            sleep(1);
+            // Il2CppGetImageByName agora retorna 0 se domain == NULL
+            void *testImg = Il2CppGetImageByName("UnityEngine.CoreModule.dll");
+            if (testImg) {
+                LOGI("il2cpp domain PRONTO (tentativa %d): UnityEngine img=%p", i+1, testImg);
+                hookLogWrite("il2cpp domain PRONTO (tentativa %d)", i+1);
+                break;
+            }
+            // Tentar nome antigo do assembly
+            testImg = Il2CppGetImageByName("UnityEngine.dll");
+            if (testImg) {
+                LOGI("il2cpp domain PRONTO (UnityEngine.dll, tentativa %d): img=%p", i+1, testImg);
+                hookLogWrite("il2cpp domain PRONTO (UnityEngine.dll, tentativa %d)", i+1);
+                break;
+            }
+            if (i >= 29) {
+                LOGE("il2cpp domain NAO inicializou em 30s!");
+                hookLogWrite("ERRO: il2cpp domain timeout 30s");
+                return nullptr;
+            }
+            LOGI("  domain wait... (%d/30)", i+1);
+        }
+    }
 
     hookLogWrite("Game data dir: %s", getGameDataDir());
 

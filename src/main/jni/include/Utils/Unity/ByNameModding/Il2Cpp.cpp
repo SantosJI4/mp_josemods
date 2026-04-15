@@ -60,6 +60,10 @@ void Il2CppAttach(const char *name) {
     il2cpp_object_new = (void *(*)(void *)) dlsym_ex(handle, "il2cpp_object_new");
 
     dlclose_ex(handle);
+
+    IL2CPP_LOGI("Il2CppAttach: ptrs domain_get=%p domain_get_assemblies=%p class_get_method=%p",
+        (void*)il2cpp_domain_get, (void*)il2cpp_domain_get_assemblies,
+        (void*)il2cpp_class_get_method_from_name);
 }
 // =========================================================================== //
 typedef unsigned short UTF16;
@@ -125,8 +129,28 @@ Il2CppString *Il2CppString::CreateMonoString(const wchar_t *s, int len) {
 }
 // =========================================================================== //
 void *Il2CppGetImageByName(const char *image) {
+    if (!il2cpp_domain_get || !il2cpp_domain_get_assemblies || !il2cpp_assembly_get_image || !il2cpp_image_get_name) {
+        IL2CPP_LOGE("Il2CppGetImageByName: function pointers not resolved!");
+        return 0;
+    }
+
+    IL2CPP_LOGI("Il2CppGetImageByName: calling il2cpp_domain_get() at %p", (void*)il2cpp_domain_get);
+    void *domain = il2cpp_domain_get();
+    IL2CPP_LOGI("Il2CppGetImageByName: domain=%p", domain);
+    if (!domain) {
+        IL2CPP_LOGE("Il2CppGetImageByName: domain is NULL! il2cpp not initialized yet?");
+        return 0;
+    }
+
     size_t size;
-    void **assemblies = il2cpp_domain_get_assemblies(il2cpp_domain_get(), &size);
+    IL2CPP_LOGI("Il2CppGetImageByName: calling il2cpp_domain_get_assemblies(%p)", domain);
+    void **assemblies = il2cpp_domain_get_assemblies(domain, &size);
+    IL2CPP_LOGI("Il2CppGetImageByName: assemblies=%p size=%zu", assemblies, size);
+    if (!assemblies || size == 0) {
+        IL2CPP_LOGE("Il2CppGetImageByName: no assemblies! il2cpp not ready?");
+        return 0;
+    }
+
     for(int i = 0; i < size; ++i) {
         void *img = (void *)il2cpp_assembly_get_image(assemblies[i]);
 

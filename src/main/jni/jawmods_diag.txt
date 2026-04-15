@@ -1,32 +1,32 @@
 === JAWMODS DIAG v15 (ptrace) ===
-PID=12069
+PID=20074
 SELinux:
 Enforcing
 Maps hook:
 Logcat GameHook:
-04-15 18:46:18.724  1728  1728 I GameHook: lib_main() LOADED [v15-ptrace] pid=1728 uid=10409
-04-15 18:46:18.724  1728  1728 I GameHook: lib_main() cmdline=[com.dts.freefireth]
-04-15 18:46:18.724  1728  1728 I GameHook: libHook.so loaded (ptrace) [v15-ptrace] pid=1728
-04-15 18:46:19.052  1728  1728 I GameHook: === HOOK CARREGADO (ptrace) [v15-ptrace] === pid=1728 uid=10409
-04-15 18:46:19.136  1728  1966 I GameHook: Thread iniciada, aguardando libil2cpp.so...
-04-15 18:46:19.136  1728  1966 I GameHook: Hook thread iniciada, aguardando libil2cpp.so...
-04-15 18:46:19.139  1728  1966 I GameHook: libil2cpp.so detectada
-04-15 18:46:19.157  1728  1966 I GameHook: libil2cpp.so detectada
-04-15 18:46:22.264  1728  1966 I GameHook: Game data dir: /data/data/com.dts.freefireth
-04-15 18:46:22.302  1728  1966 E GameHook: Falha ao resolver il2cpp_class_get_method_from_name
-04-15 19:02:07.423 12069 12069 I GameHook: lib_main() LOADED [v15-ptrace] pid=12069 uid=10409
-04-15 19:02:07.423 12069 12069 I GameHook: lib_main() cmdline=[com.dts.freefireth]
-04-15 19:02:07.423 12069 12069 I GameHook: libHook.so loaded (ptrace) [v15-ptrace] pid=12069
-04-15 19:02:07.549 12069 12069 I GameHook: === HOOK CARREGADO (ptrace) [v15-ptrace] === pid=12069 uid=10409
-04-15 19:02:07.580 12069 12256 I GameHook: Thread iniciada, aguardando libil2cpp.so...
-04-15 19:02:07.581 12069 12256 I GameHook: Hook thread iniciada, aguardando libil2cpp.so...
-04-15 19:02:07.626 12069 12256 I GameHook: libil2cpp.so detectada
-04-15 19:02:07.801 12069 12256 I GameHook: libil2cpp.so detectada
-04-15 19:02:10.888 12069 12256 I GameHook: Game data dir: /data/data/com.dts.freefireth
-04-15 19:02:10.889 12069 12256 I GameHook: resolve_method via Il2CppGetMethodInfoByName: OK
+04-15 19:05:03.913 16214 16214 I GameHook: libHook.so loaded (ptrace) [v15-ptrace] pid=16214
+04-15 19:05:03.947 16214 16214 I GameHook: === HOOK CARREGADO (ptrace) [v15-ptrace] === pid=16214 uid=10409
+04-15 19:05:03.966 16214 16445 I GameHook: Thread iniciada, aguardando libil2cpp.so...
+04-15 19:05:03.966 16214 16445 I GameHook: Hook thread iniciada, aguardando libil2cpp.so...
+04-15 19:05:03.967 16214 16445 I GameHook: libil2cpp.so detectada
+04-15 19:05:03.982 16214 16445 I GameHook: libil2cpp.so detectada
+04-15 19:05:07.047 16214 16445 I GameHook: Game data dir: /data/data/com.dts.freefireth
+04-15 19:05:07.047 16214 16445 I GameHook: resolve_method via Il2CppGetMethodInfoByName: OK
+04-15 19:14:18.194 20074 20074 I GameHook: lib_main() LOADED [v15-ptrace] pid=20074 uid=10409
+04-15 19:14:18.194 20074 20074 I GameHook: lib_main() cmdline=[com.dts.freefireth]
+04-15 19:14:18.194 20074 20074 I GameHook: libHook.so loaded (ptrace) [v15-ptrace] pid=20074
+04-15 19:14:18.256 20074 20074 I GameHook: === HOOK CARREGADO (ptrace) [v15-ptrace] === pid=20074 uid=10409
+04-15 19:14:18.312 20074 20360 I GameHook: Thread iniciada, aguardando libil2cpp.so...
+04-15 19:14:18.312 20074 20360 I GameHook: Hook thread iniciada, aguardando libil2cpp.so...
+04-15 19:14:18.313 20074 20360 I GameHook: libil2cpp.so detectada
+04-15 19:14:18.366 20074 20360 I GameHook: libil2cpp.so detectada
+04-15 19:14:21.489 20074 20360 I GameHook: Game data dir: /data/data/com.dts.freefireth
+04-15 19:14:21.490 20074 20360 I GameHook: resolve_method via Il2CppGetMethodInfoByName: OK
+04-15 19:14:21.490 20074 20360 I GameHook: Resolvendo Camera::get_main...
+04-15 19:14:21.500 20074 20360 I GameHook: Resolvendo Camera::get_main...
 Logcat injector:
 HookLog:
-=== HOOK CARREGADO (ptrace) [v15-ptrace] === pid=12069 uid=10409
+=== HOOK CARREGADO (ptrace) [v15-ptrace] === pid=20074 uid=10409
 Thread iniciada, aguardando libil2cpp.so...
 libil2cpp.so detectada
 === HOOK CARREGADO (ptrace) [v15-ptrace] === pid=1728 uid=10409
@@ -37,4 +37,17 @@ Game data dir: /data/data/com.dts.freefireth
 Thread iniciada, aguardando libil2cpp.so...
 libil2cpp.so detectada
 Game data dir: /data/data/com.dts.freefireth
-Injector result: === JawMods ptrace injector v15 === Config: PID=12069 SO=/data/app/~~KNxSKliV9ouBCEhOY-KOow==/com.dts.freefireth-4HDf70MRQwQdjF64XL_O0g==/lib/arm64/libHook.so [*] Target PID: 12069 [*] Library: /data/app/~~KNxSKliV9ouBCEhOY-KOow==/com.dts.freefireth-4HDf70MRQwQdjF64XL_O0g==/lib/arm64/libHook.so [1] Attaching to process...   Attached to main thread 12069 [2] Saving registers... [3] Resolving dlopen...   Linker: /apex/com.android.runtime/bin/linker64   __loader_dlopen (ELF): remote=78b14611b0 (load_base=78b142a000 + st_value=371b0) rxp_base=78b1461000 from /apex/com.android.runtime/bin/linker64   dlopen at: 0x78b14611b0   dlopen code: [0]=a9bc7bfd [1]=f9000bf7 [4] Writing path to target stack...   Path written at: 0x7ff7a41bb0 (102 bytes) [5] Setting up dlopen call (loader_variant=1)...   caller_addr (x2) = 0x77258bb000 [6] Executing dlopen in target...   Process stopped by signal 11   after: x0=64ec89e9029842c1 pc=0 sp=7ff7a41ba0   dlopen handle: 0x64ec89e9029842c1 (SUCCESS — pc=0 trap) [7] Restoring original registers... [8] Detaching... [+] INJECTION SUCCESSFUL into PID 12069   Verified: 776d080000-776d15a000 r-xp 00000000 fd:23 665312                         /data/app/~~KNxSKliV9ouBCEhOY-KOow==/com.dts.freefireth-4HDf70MRQwQdjF64XL_O0g==/lib/arm64/libHook.so    Verified: 776d169000-776d16f000 r--p 000d9000 fd:23 665312                         /data/app/~~KNxSKliV9ouBCEhOY-KOow==/com.dts.freefireth-4HDf70MRQwQdjF64XL_O0g==/lib/arm64/libHook.so    Verified: 776d16f000-776d170000 rw-p 000df000 fd:23 665312                         /data/app/~~KNxSKliV9ouBCEhOY-KOow==/com.dts.freefireth-4HDf70MRQwQdjF64XL_O0g==/lib/arm64/libHook.so  [+] Verified: .so in /proc/12069/maps (3 entries) [+] INJECTION SUCCESSFUL
+=== HOOK CARREGADO (ptrace) [v15-ptrace] === pid=14914 uid=10409
+Thread iniciada, aguardando libil2cpp.so...
+libil2cpp.so detectada
+Game data dir: /data/data/com.dts.freefireth
+=== HOOK CARREGADO (ptrace) [v15-ptrace] === pid=16214 uid=10409
+Thread iniciada, aguardando libil2cpp.so...
+libil2cpp.so detectada
+Game data dir: /data/data/com.dts.freefireth
+=== HOOK CARREGADO (ptrace) [v15-ptrace] === pid=20074 uid=10409
+Thread iniciada, aguardando libil2cpp.so...
+libil2cpp.so detectada
+Game data dir: /data/data/com.dts.freefireth
+Resolvendo Camera::get_main...
+Injector result: === JawMods ptrace injector v15 === Config: PID=20074 SO=/data/app/~~KNxSKliV9ouBCEhOY-KOow==/com.dts.freefireth-4HDf70MRQwQdjF64XL_O0g==/lib/arm64/libHook.so [*] Target PID: 20074 [*] Library: /data/app/~~KNxSKliV9ouBCEhOY-KOow==/com.dts.freefireth-4HDf70MRQwQdjF64XL_O0g==/lib/arm64/libHook.so [1] Attaching to process...   Attached to main thread 20074 [2] Saving registers... [3] Resolving dlopen...   Linker: /apex/com.android.runtime/bin/linker64   __loader_dlopen (ELF): remote=78b14611b0 (load_base=78b142a000 + st_value=371b0) rxp_base=78b1461000 from /apex/com.android.runtime/bin/linker64   dlopen at: 0x78b14611b0   dlopen code: [0]=a9bc7bfd [1]=f9000bf7 [4] Writing path to target stack...   Path written at: 0x7ff7a442b0 (102 bytes) [5] Setting up dlopen call (loader_variant=1)...   caller_addr (x2) = 0x7734e74000 [6] Executing dlopen in target...   Process stopped by signal 11   after: x0=d430cdf25dba1faf pc=0 sp=7ff7a442a0   dlopen handle: 0xd430cdf25dba1faf (SUCCESS — pc=0 trap) [7] Restoring original registers... [8] Detaching... [+] INJECTION SUCCESSFUL into PID 20074   Verified: 7725e88000-7725f62000 r-xp 00000000 fd:23 665312                         /data/app/~~KNxSKliV9ouBCEhOY-KOow==/com.dts.freefireth-4HDf70MRQwQdjF64XL_O0g==/lib/arm64/libHook.so    Verified: 7725f71000-7725f77000 r--p 000d9000 fd:23 665312                         /data/app/~~KNxSKliV9ouBCEhOY-KOow==/com.dts.freefireth-4HDf70MRQwQdjF64XL_O0g==/lib/arm64/libHook.so    Verified: 7725f77000-7725f78000 rw-p 000df000 fd:23 665312                         /data/app/~~KNxSKliV9ouBCEhOY-KOow==/com.dts.freefireth-4HDf70MRQwQdjF64XL_O0g==/lib/arm64/libHook.so  [+] Verified: .so in /proc/20074/maps (3 entries) [+] INJECTION SUCCESSFUL
