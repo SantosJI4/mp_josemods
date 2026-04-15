@@ -386,14 +386,14 @@ static void* hack_thread(void*) {
     LOGI("Aguardando il2cpp domain inicializar...");
     hookLogWrite("Aguardando il2cpp domain...");
     {
-        void *domain = nullptr;
-        for (int i = 0; i < 30; i++) {
-            sleep(1);
-            // Il2CppGetImageByName agora retorna 0 se domain == NULL
+        bool domainReady = false;
+        for (int i = 0; i < 60; i++) {
+            // Il2CppGetImageByName retorna 0 se domain == NULL (safe)
             void *testImg = Il2CppGetImageByName("UnityEngine.CoreModule.dll");
             if (testImg) {
                 LOGI("il2cpp domain PRONTO (tentativa %d): UnityEngine img=%p", i+1, testImg);
                 hookLogWrite("il2cpp domain PRONTO (tentativa %d)", i+1);
+                domainReady = true;
                 break;
             }
             // Tentar nome antigo do assembly
@@ -401,14 +401,16 @@ static void* hack_thread(void*) {
             if (testImg) {
                 LOGI("il2cpp domain PRONTO (UnityEngine.dll, tentativa %d): img=%p", i+1, testImg);
                 hookLogWrite("il2cpp domain PRONTO (UnityEngine.dll, tentativa %d)", i+1);
+                domainReady = true;
                 break;
             }
-            if (i >= 29) {
-                LOGE("il2cpp domain NAO inicializou em 30s!");
-                hookLogWrite("ERRO: il2cpp domain timeout 30s");
-                return nullptr;
-            }
-            LOGI("  domain wait... (%d/30)", i+1);
+            LOGI("  domain wait... (%d/60)", i+1);
+            sleep(1);
+        }
+        if (!domainReady) {
+            LOGE("il2cpp domain NAO inicializou em 60s!");
+            hookLogWrite("ERRO: il2cpp domain timeout 60s");
+            return nullptr;
         }
     }
 

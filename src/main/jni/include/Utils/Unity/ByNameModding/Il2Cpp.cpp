@@ -2,8 +2,9 @@
 
 #include "Includes.h"
 #include "fake_dlfcn.h"
+#include <dlfcn.h>
 
-#define LOG_TAG "DarkTeam-Il2Cpp"
+#define LOG_TAG "GameHook"
 
 #define IL2CPP_LOGI(...) __android_log_print(ANDROID_LOG_INFO,LOG_TAG,__VA_ARGS__)
 #define IL2CPP_LOGD(...) __android_log_print(ANDROID_LOG_DEBUG,LOG_TAG,__VA_ARGS__)
@@ -32,38 +33,85 @@ namespace {
     void *(*il2cpp_object_new)(void *klass);
 }
 // =========================================================================== //
+// Helper: resolve symbol from either real or fake handle
+static void *resolve_sym(void *handle, bool use_real, const char *sym) {
+    void *ret = use_real ? dlsym(handle, sym) : dlsym_ex(handle, sym);
+    if (!ret) IL2CPP_LOGW("  resolve_sym: %s = NULL (use_real=%d)", sym, use_real);
+    return ret;
+}
+
 void Il2CppAttach(const char *name) {
-    void *handle = dlopen_ex(name, 0);
-    while (!handle) {
-        handle = dlopen_ex(name, 0);
-        sleep(1);
+    void *handle = NULL;
+    bool use_real = false;
+
+    // ── Strategy 1: real dlopen (works if we're in game's linker namespace) ──
+    // libHook.so is loaded via __loader_dlopen with caller_addr from libil2cpp.so,
+    // so we share the game's namespace. RTLD_NOLOAD just gets existing handle.
+    handle = dlopen(name, RTLD_NOLOAD);
+    if (handle) {
+        // Verify we can actually resolve a known symbol
+        void *test = dlsym(handle, "il2cpp_domain_get");
+        if (test) {
+            use_real = true;
+            IL2CPP_LOGI("Il2CppAttach: REAL dlopen+dlsym OK for %s (handle=%p)", name, handle);
+        } else {
+            IL2CPP_LOGW("Il2CppAttach: REAL dlopen OK but dlsym failed: %s", dlerror());
+            dlclose(handle);
+            handle = NULL;
+        }
+    } else {
+        IL2CPP_LOGW("Il2CppAttach: REAL dlopen failed for %s: %s", name, dlerror());
     }
 
-    il2cpp_assembly_get_image = (const void *(*)(const void *)) dlsym_ex(handle, "il2cpp_assembly_get_image");
-    il2cpp_domain_get = (void *(*)()) dlsym_ex(handle, "il2cpp_domain_get");
-    il2cpp_domain_get_assemblies = (void **(*)(const void* , size_t*)) dlsym_ex(handle, "il2cpp_domain_get_assemblies");
-    il2cpp_image_get_name = (const char *(*)(void *)) dlsym_ex(handle, "il2cpp_image_get_name");
-    il2cpp_class_from_name = (void* (*)(const void*, const char*, const char *)) dlsym_ex(handle, "il2cpp_class_from_name");
-    il2cpp_class_get_field_from_name = (void* (*)(void*, const char *)) dlsym_ex(handle, "il2cpp_class_get_field_from_name");
-    il2cpp_class_get_method_from_name = (void* (*)(void *, const char*, int)) dlsym_ex(handle, "il2cpp_class_get_method_from_name");
-    il2cpp_field_get_offset = (size_t (*)(void *)) dlsym_ex(handle, "il2cpp_field_get_offset");
-    il2cpp_field_static_get_value = (void (*)(void*, void *)) dlsym_ex(handle, "il2cpp_field_static_get_value");
-    il2cpp_field_static_set_value = (void (*)(void*, void *)) dlsym_ex(handle, "il2cpp_field_static_set_value");
-    il2cpp_array_new = (void *(*)(void*, size_t)) dlsym_ex(handle, "il2cpp_array_new");
-    il2cpp_string_chars = (uint16_t *(*)(void*)) dlsym_ex(handle, "il2cpp_string_chars");
-    il2cpp_string_new = (Il2CppString *(*)(const char *)) dlsym_ex(handle, "il2cpp_string_new");
-    il2cpp_string_new_utf16 = (Il2CppString *(*)(const wchar_t *, int32_t)) dlsym_ex(handle, "il2cpp_string_new");
-    il2cpp_type_get_name = (char *(*)(void *)) dlsym_ex(handle, "il2cpp_type_get_name");
-    il2cpp_method_get_param = (void *(*)(void *, uint32_t)) dlsym_ex(handle, "il2cpp_method_get_param");
-    il2cpp_class_get_methods = (void *(*)(void *, void **)) dlsym_ex(handle, "il2cpp_class_get_methods");
-    il2cpp_method_get_name = (const char *(*)(void *)) dlsym_ex(handle, "il2cpp_method_get_name");
-    il2cpp_object_new = (void *(*)(void *)) dlsym_ex(handle, "il2cpp_object_new");
+    // ── Strategy 2: fallback to fake_dlfcn (ELF parsing) ──
+    if (!handle) {
+        IL2CPP_LOGI("Il2CppAttach: falling back to fake_dlfcn for %s", name);
+        handle = dlopen_ex(name, 0);
+        while (!handle) {
+            handle = dlopen_ex(name, 0);
+            sleep(1);
+        }
+        use_real = false;
+        IL2CPP_LOGI("Il2CppAttach: fake_dlfcn handle=%p", handle);
+    }
 
-    dlclose_ex(handle);
+    // ── Resolve all il2cpp API function pointers ──
+    #define RESOLVE(var, type, sym) var = (type) resolve_sym(handle, use_real, sym)
 
-    IL2CPP_LOGI("Il2CppAttach: ptrs domain_get=%p domain_get_assemblies=%p class_get_method=%p",
-        (void*)il2cpp_domain_get, (void*)il2cpp_domain_get_assemblies,
+    RESOLVE(il2cpp_assembly_get_image,       const void*(*)(const void*),          "il2cpp_assembly_get_image");
+    RESOLVE(il2cpp_domain_get,               void*(*)(),                            "il2cpp_domain_get");
+    RESOLVE(il2cpp_domain_get_assemblies,    void**(*)(const void*, size_t*),       "il2cpp_domain_get_assemblies");
+    RESOLVE(il2cpp_image_get_name,           const char*(*)(void*),                 "il2cpp_image_get_name");
+    RESOLVE(il2cpp_class_from_name,          void*(*)(const void*, const char*, const char*), "il2cpp_class_from_name");
+    RESOLVE(il2cpp_class_get_field_from_name, void*(*)(void*, const char*),          "il2cpp_class_get_field_from_name");
+    RESOLVE(il2cpp_class_get_method_from_name, void*(*)(void*, const char*, int),    "il2cpp_class_get_method_from_name");
+    RESOLVE(il2cpp_field_get_offset,         size_t(*)(void*),                      "il2cpp_field_get_offset");
+    RESOLVE(il2cpp_field_static_get_value,   void(*)(void*, void*),                 "il2cpp_field_static_get_value");
+    RESOLVE(il2cpp_field_static_set_value,   void(*)(void*, void*),                 "il2cpp_field_static_set_value");
+    RESOLVE(il2cpp_array_new,                void*(*)(void*, size_t),               "il2cpp_array_new");
+    RESOLVE(il2cpp_string_chars,             uint16_t*(*)(void*),                   "il2cpp_string_chars");
+    RESOLVE(il2cpp_string_new,               Il2CppString*(*)(const char*),         "il2cpp_string_new");
+    RESOLVE(il2cpp_string_new_utf16,         Il2CppString*(*)(const wchar_t*, int32_t), "il2cpp_string_new_utf16");
+    RESOLVE(il2cpp_type_get_name,            char*(*)(void*),                       "il2cpp_type_get_name");
+    RESOLVE(il2cpp_method_get_param,         void*(*)(void*, uint32_t),             "il2cpp_method_get_param");
+    RESOLVE(il2cpp_class_get_methods,        void*(*)(void*, void**),               "il2cpp_class_get_methods");
+    RESOLVE(il2cpp_method_get_name,          const char*(*)(void*),                 "il2cpp_method_get_name");
+    RESOLVE(il2cpp_object_new,               void*(*)(void*),                       "il2cpp_object_new");
+
+    #undef RESOLVE
+
+    if (use_real) dlclose(handle);
+    else dlclose_ex(handle);
+
+    IL2CPP_LOGI("Il2CppAttach: DONE (real=%d) domain_get=%p domain_get_assemblies=%p class_get_method=%p",
+        use_real, (void*)il2cpp_domain_get, (void*)il2cpp_domain_get_assemblies,
         (void*)il2cpp_class_get_method_from_name);
+
+    // ── Quick test: call domain_get to see if it works ──
+    if (il2cpp_domain_get) {
+        void *test_domain = il2cpp_domain_get();
+        IL2CPP_LOGI("Il2CppAttach: quick test domain_get() = %p", test_domain);
+    }
 }
 // =========================================================================== //
 typedef unsigned short UTF16;
@@ -388,9 +436,11 @@ unsigned long Il2CppGetStaticFieldOffset(const char *image, const char *namespaz
 
 // ================================================================================================================ //
 bool Il2CppIsAssembliesLoaded() {
+    if (!il2cpp_domain_get || !il2cpp_domain_get_assemblies) return false;
+    void *domain = il2cpp_domain_get();
+    if (!domain) return false;
     size_t size;
-    void **assemblies = il2cpp_domain_get_assemblies(il2cpp_domain_get(), &size);
-
+    void **assemblies = il2cpp_domain_get_assemblies(domain, &size);
     return size != 0 && assemblies != 0;
 }
 // ================================================================================================================ //
