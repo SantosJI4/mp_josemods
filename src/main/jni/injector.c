@@ -491,10 +491,16 @@ static int do_inject(pid_t pid, const char *so_path) {
 
                     /* If PC is 0 (our lr trap), dlopen returned normally.
                      * If PC is elsewhere, something crashed before dlopen ran. */
-                    if (after_regs.pc == 0 && after_regs.regs[0] != 0) {
-                        /* PC=0 means it jumped to lr=0 after return = SUCCESS */
+                    if (after_regs.pc == 0 && after_regs.regs[0] != 0
+                        && after_regs.regs[0] != mod_regs.regs[0]) {
+                        /* PC=0 (lr trap) + x0 != 0 + x0 != path_addr = real handle */
                         LOGI("  dlopen handle: 0x%llx (SUCCESS — pc=0 trap)", after_regs.regs[0]);
                         ret = 0;
+                    } else if (after_regs.pc == 0 && after_regs.regs[0] == mod_regs.regs[0]) {
+                        /* PC=0 but x0 == path_addr = dlopen returned NULL or SELinux blocked */
+                        LOGE("  dlopen FAILED: x0=path_addr (SELinux? file permissions?)");
+                        LOGE("  The .so path may not be executable by the target process");
+                        ret = -1;
                     } else if (after_regs.pc != 0 && after_regs.regs[0] == mod_regs.regs[0]) {
                         /* x0 unchanged + PC != 0 = crashed at bad dlopen address */
                         LOGE("  CRASH at pc=%llx — dlopen address is WRONG!", after_regs.pc);

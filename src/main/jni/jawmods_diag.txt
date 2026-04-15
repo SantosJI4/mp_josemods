@@ -1,9 +1,9 @@
 === JAWMODS DIAG v15 (ptrace) ===
-PID=14753
+PID=24129
 SELinux:
 Enforcing
 Maps hook:
 Logcat GameHook:
 Logcat injector:
 HookLog:
-Injector result: === JawMods ptrace injector v15 === Config: PID=14753 SO=/data/local/tmp/libHook.so [*] Target PID: 14753 [*] Library: /data/local/tmp/libHook.so [1] Attaching to process...   Attached to main thread 14753 [2] Saving registers... [3] Resolving dlopen...   Linker: /apex/com.android.runtime/bin/linker64   dlopen: local=70c127a020 remote=78af282020 (base: local=70c3459000 remote=78b1461000 offset=fffffffffde21020)   dlopen at: 0x78af282020 [4] Writing path to target stack...   Path written at: 0x7ff7a44320 (27 bytes) [5] Setting up dlopen call... [6] Executing dlopen in target...   Process stopped by signal 11   dlopen returned handle: 0x7ff7a44320 (SUCCESS) [7] Restoring original registers... [8] Detaching... [+] INJECTION SUCCESSFUL into PID 14753 [!] .so NOT found in maps after injection [+] INJECTION SUCCESSFUL
+Injector result: === JawMods ptrace injector v15 === Config: PID=24129 SO=/data/local/tmp/libHook.so [*] Target PID: 24129 [*] Library: /data/local/tmp/libHook.so [1] Attaching to process...   Attached to main thread 24129 [2] Saving registers... [3] Resolving dlopen...   Linker: /apex/com.android.runtime/bin/linker64   __loader_dlopen (ELF): remote=78b14981b0 (base=78b1461000 + offset=371b0) from /apex/com.android.runtime/bin/linker64   dlopen at: 0x78b14981b0 [4] Writing path to target stack...   Path written at: 0x7ff7a43be0 (27 bytes) [5] Setting up dlopen call (loader_variant=1)...   caller_addr (x2) = 0x7736757000 [6] Executing dlopen in target...   Process stopped by signal 11   after: x0=7ff7a43be0 pc=0 sp=7ff7a43bd0   dlopen handle: 0x7ff7a43be0 (SUCCESS — pc=0 trap) [7] Restoring original registers... [8] Detaching... [+] INJECTION SUCCESSFUL into PID 24129 [!] .so NOT found in maps after injection [+] INJECTION SUCCESSFUL

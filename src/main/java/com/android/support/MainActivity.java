@@ -184,21 +184,40 @@ public class MainActivity extends Activity {
                 return;
             }
 
-            // Copiar para /data/local/tmp/ com permissoes
+            // Copiar injector para /data/local/tmp/
             rootExec("cp " + injSrc + " " + tmpInjector
-                    + " ; cp " + hookSrc + " " + tmpHook
-                    + " ; chmod 755 " + tmpInjector
-                    + " ; chmod 755 " + tmpHook);
+                    + " ; chmod 755 " + tmpInjector);
 
-            // Validar copia
+            // CRITICO: Copiar libHook.so para o diretorio de dados do JOGO
+            // /data/local/tmp/ tem contexto SELinux 'shell_data_file' que
+            // untrusted_app NAO pode executar (falta permissao 'execute'/'map').
+            // O diretorio do jogo tem contexto 'app_data_file' = permissao total.
+            final String gameDir = "/data/data/" + GAME_PACKAGE;
+            final String gameHookPath = gameDir + "/libHook.so";
+
+            // Obter UID do jogo para chown correto
+            String gameUid = rootExec("stat -c %u " + gameDir + " 2>/dev/null");
+            if (gameUid == null || gameUid.trim().isEmpty()) gameUid = "10000";
+            gameUid = gameUid.trim();
+
+            rootExec("cp " + hookSrc + " " + gameHookPath
+                    + " ; chmod 755 " + gameHookPath
+                    + " ; chown " + gameUid + ":" + gameUid + " " + gameHookPath
+                    + " ; chcon u:object_r:app_data_file:s0 " + gameHookPath);
+
+            // Tambem manter copia em /data/local/tmp/ (para SHM e fallback)
+            rootExec("cp " + hookSrc + " " + tmpHook + " ; chmod 755 " + tmpHook);
+
+            // Validar copias
             String checkInj = rootExec("ls -la " + tmpInjector + " 2>/dev/null");
-            String checkHook = rootExec("ls -la " + tmpHook + " 2>/dev/null");
+            String checkHook = rootExec("ls -la " + gameHookPath + " 2>/dev/null");
             if (checkInj == null || !checkInj.contains("libinjector")
                 || checkHook == null || !checkHook.contains("libHook")) {
-                updateStatus("Failed to copy files to /data/local/tmp/.\nCheck root access.");
+                updateStatus("Failed to copy files.\nCheck root access.");
                 resetButton();
                 return;
             }
+            updateStatus("Files ready. Hook at: " + gameHookPath);
 
             // 3. Pre-criar SHM e SELinux (runtime — via supolicy se disponivel)
             updateStatus("Setting up SHM...");
@@ -207,20 +226,19 @@ public class MainActivity extends Activity {
                     + " ; chmod 666 /data/local/tmp/.esp_shm"
                     + " ; touch /data/local/tmp/.hook_log ; chmod 666 /data/local/tmp/.hook_log");
 
-            // SELinux permissivo para o /data/local/tmp (runtime — nao precisa reboot)
-            rootExec("supolicy --live 'allow untrusted_app shell_data_file dir { search read write open create add_name getattr }'"
-                    + " 2>/dev/null;"
-                    + " supolicy --live 'allow untrusted_app shell_data_file file { read write open create getattr setattr }'"
-                    + " 2>/dev/null;"
-                    + " magiskpolicy --live 'allow untrusted_app shell_data_file dir { search read write open create add_name getattr }'"
-                    + " 2>/dev/null;"
-                    + " magiskpolicy --live 'allow untrusted_app shell_data_file file { read write open create getattr setattr }'"
-                    + " 2>/dev/null");
-            // Tambem precisa regra pra ptrace
-            rootExec("supolicy --live 'allow shell untrusted_app process { ptrace }' 2>/dev/null;"
-                    + " magiskpolicy --live 'allow shell untrusted_app process { ptrace }' 2>/dev/null;"
-                    + " supolicy --live 'allow init untrusted_app process { ptrace }' 2>/dev/null;"
-                    + " magiskpolicy --live 'allow init untrusted_app process { ptrace }' 2>/dev/null");
+            // SELinux: permitir acesso ao /data/local/tmp/ (SHM + hook log)
+            // CRITICO: incluir 'execute' e 'map' para dlopen funcionar!
+            rootExec("magiskpolicy --live 'allow untrusted_app shell_data_file dir { search read write open create add_name getattr }' 2>/dev/null;"
+                    + " magiskpolicy --live 'allow untrusted_app shell_data_file file { read write open create getattr setattr execute map }' 2>/dev/null;"
+                    + " magiskpolicy --live 'allow untrusted_app app_data_file file { read write open create getattr execute map }' 2>/dev/null;"
+                    + " supolicy --live 'allow untrusted_app shell_data_file dir { search read write open create add_name getattr }' 2>/dev/null;"
+                    + " supolicy --live 'allow untrusted_app shell_data_file file { read write open create getattr setattr execute map }' 2>/dev/null;"
+                    + " supolicy --live 'allow untrusted_app app_data_file file { read write open create getattr execute map }' 2>/dev/null");
+            // Permitir ptrace
+            rootExec("magiskpolicy --live 'allow shell untrusted_app process { ptrace }' 2>/dev/null;"
+                    + " magiskpolicy --live 'allow init untrusted_app process { ptrace }' 2>/dev/null;"
+                    + " supolicy --live 'allow shell untrusted_app process { ptrace }' 2>/dev/null;"
+                    + " supolicy --live 'allow init untrusted_app process { ptrace }' 2>/dev/null");
 
             // 4. Fechar e reiniciar o jogo (limpo)
             updateStatus("Starting Free Fire...");
@@ -292,8 +310,17 @@ public class MainActivity extends Activity {
                 }
             });
 
-            // Escrever config file (constructor do injector le isso)
-            rootExec("printf '" + gamePid + "\\n" + tmpHook + "\\n' > /data/local/tmp/.inject_config");
+            // CRITICO: setenforce 0 ANTES da injecao
+            // __loader_dlopen precisa de SELinux permissive para carregar .so
+            // de /data/local/tmp/ (shell_data_file). Mesmo com supolicy,
+            // alguns devices bloqueiam execute/map em runtime.
+            // GameGuardian tambem faz setenforce 0.
+            String prevEnforce = rootExec("getenforce 2>/dev/null");
+            rootExec("setenforce 0 2>/dev/null");
+
+            // Escrever config file com path dentro do game dir
+            // (app_data_file context = permissao total para o jogo)
+            rootExec("printf '" + gamePid + "\\n" + gameHookPath + "\\n' > /data/local/tmp/.inject_config");
 
             // Executar via LD_PRELOAD: carrega libinjector.so no shell root,
             // constructor le o config, faz ptrace+dlopen, e _exit()
@@ -301,17 +328,24 @@ public class MainActivity extends Activity {
                 "LD_PRELOAD=" + tmpInjector + " /system/bin/cat /dev/null 2>&1");
             updateStatus("Injector output:\n" + (injectResult != null ? injectResult.trim() : "(null)"));
 
-            boolean injected = injectResult != null && injectResult.contains("SUCCESSFUL");
-            boolean dlOpenOk = injectResult != null && injectResult.contains("handle:");
+            // Restaurar SELinux
+            if (prevEnforce != null && prevEnforce.trim().equalsIgnoreCase("Enforcing")) {
+                rootExec("setenforce 1 2>/dev/null");
+            }
 
-            if (!injected) {
-                // Verificar se falhou por SELinux
+            boolean injected = injectResult != null && injectResult.contains("SUCCESSFUL");
+            // Checar se .so foi encontrado nos maps (confirma dlopen real)
+            boolean inMaps = injectResult != null && injectResult.contains("Verified:");
+
+            if (!injected || !inMaps) {
+                // Verificar se falhou por SELinux ou outro motivo
                 boolean selinuxBlock = injectResult != null
-                    && (injectResult.contains("Permission denied") || injectResult.contains("Operation not permitted"));
+                    && (injectResult.contains("Permission denied") || injectResult.contains("Operation not permitted")
+                        || injectResult.contains("NOT found in maps"));
 
                 if (selinuxBlock) {
-                    // Tentar setenforce 0 como ultimo recurso
-                    updateStatus("SELinux blocking ptrace. Trying setenforce 0...");
+                    // Tentar com setenforce 0 mantido + path alternativo
+                    updateStatus("Retrying with SELinux permissive...");
                     rootExec("setenforce 0 2>/dev/null");
                     Thread.sleep(500);
 
@@ -345,14 +379,15 @@ public class MainActivity extends Activity {
                         gamePid = np.trim();
                     }
 
-                    // Retry injecao via LD_PRELOAD
+                    // Retry com /data/local/tmp path (setenforce 0 ativo)
                     rootExec("printf '" + gamePid + "\\n" + tmpHook + "\\n' > /data/local/tmp/.inject_config");
                     injectResult = rootExec(
                         "LD_PRELOAD=" + tmpInjector + " /system/bin/cat /dev/null 2>&1");
                     updateStatus("Retry output:\n" + (injectResult != null ? injectResult.trim() : "(null)"));
                     injected = injectResult != null && injectResult.contains("SUCCESSFUL");
+                    inMaps = injectResult != null && injectResult.contains("Verified:");
 
-                    // Restaurar SELinux
+                    // Restaurar SELinux (apos jogo ja ter o .so carregado)
                     rootExec("setenforce 1 2>/dev/null");
                 }
             }
