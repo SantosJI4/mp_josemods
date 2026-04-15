@@ -165,8 +165,9 @@ public class MainActivity extends Activity {
             updateStatus("Preparing files...");
             final String nativeDir = getApplicationInfo().nativeLibraryDir;
             final String hookSrc = nativeDir + "/libHook.so";
+            final String injSrc = nativeDir + "/libinjector.so";
             final String tmpHook = "/data/local/tmp/libHook.so";
-            final String tmpInjector = "/data/local/tmp/injector";
+            final String tmpInjector = "/data/local/tmp/libinjector.so";
 
             if (!new File(hookSrc).exists()) {
                 updateStatus("libHook.so not found.\nDid you do a clean build?");
@@ -174,27 +175,16 @@ public class MainActivity extends Activity {
                 return;
             }
 
-            // Injector fica como libinjector.so no APK
-            // (Android so extrai lib*.so para nativeLibraryDir)
-            String injSrc = nativeDir + "/libinjector.so";
+            // libinjector.so e BUILD_SHARED_LIBRARY -> APK sempre empacota
             if (!new File(injSrc).exists()) {
-                // Fallback: checar sem prefixo/sufixo
-                injSrc = nativeDir + "/injector";
-            }
-            if (!new File(injSrc).exists()) {
-                // Ultimo fallback: libinjector (sem .so)
-                injSrc = nativeDir + "/libinjector";
-            }
-            if (!new File(injSrc).exists()) {
-                updateStatus("Injector binary not found.\n"
+                updateStatus("libinjector.so not found.\n"
                     + "nativeDir: " + nativeDir + "\n"
-                    + "Tried: libinjector.so, injector, libinjector\n"
-                    + "Rebuild the project.");
+                    + "Rebuild the project (clean build).");
                 resetButton();
                 return;
             }
 
-            // Copiar e dar permissoes
+            // Copiar para /data/local/tmp/ com permissoes
             rootExec("cp " + injSrc + " " + tmpInjector
                     + " ; cp " + hookSrc + " " + tmpHook
                     + " ; chmod 755 " + tmpInjector
@@ -203,7 +193,7 @@ public class MainActivity extends Activity {
             // Validar copia
             String checkInj = rootExec("ls -la " + tmpInjector + " 2>/dev/null");
             String checkHook = rootExec("ls -la " + tmpHook + " 2>/dev/null");
-            if (checkInj == null || !checkInj.contains("injector")
+            if (checkInj == null || !checkInj.contains("libinjector")
                 || checkHook == null || !checkHook.contains("libHook")) {
                 updateStatus("Failed to copy files to /data/local/tmp/.\nCheck root access.");
                 resetButton();
@@ -291,7 +281,7 @@ public class MainActivity extends Activity {
                 // Continuar mesmo assim — talvez demore mais
             }
 
-            // 7. INJECAO VIA PTRACE
+            // 7. INJECAO VIA PTRACE (LD_PRELOAD + constructor)
             updateStatus("INJECTING via ptrace...\nPID=" + gamePid);
 
             // Iniciar overlay ANTES da injecao (pode demorar)
@@ -302,8 +292,13 @@ public class MainActivity extends Activity {
                 }
             });
 
-            // Executar injector
-            String injectResult = rootExec(tmpInjector + " " + gamePid + " " + tmpHook + " 2>&1");
+            // Escrever config file (constructor do injector le isso)
+            rootExec("printf '" + gamePid + "\\n" + tmpHook + "\\n' > /data/local/tmp/.inject_config");
+
+            // Executar via LD_PRELOAD: carrega libinjector.so no shell root,
+            // constructor le o config, faz ptrace+dlopen, e _exit()
+            String injectResult = rootExec(
+                "LD_PRELOAD=" + tmpInjector + " /system/bin/cat /dev/null 2>&1");
             updateStatus("Injector output:\n" + (injectResult != null ? injectResult.trim() : "(null)"));
 
             boolean injected = injectResult != null && injectResult.contains("SUCCESSFUL");
@@ -350,8 +345,10 @@ public class MainActivity extends Activity {
                         gamePid = np.trim();
                     }
 
-                    // Retry injecao
-                    injectResult = rootExec(tmpInjector + " " + gamePid + " " + tmpHook + " 2>&1");
+                    // Retry injecao via LD_PRELOAD
+                    rootExec("printf '" + gamePid + "\\n" + tmpHook + "\\n' > /data/local/tmp/.inject_config");
+                    injectResult = rootExec(
+                        "LD_PRELOAD=" + tmpInjector + " /system/bin/cat /dev/null 2>&1");
                     updateStatus("Retry output:\n" + (injectResult != null ? injectResult.trim() : "(null)"));
                     injected = injectResult != null && injectResult.contains("SUCCESSFUL");
 

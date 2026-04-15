@@ -63,20 +63,20 @@ LOCAL_SRC_FILES := $(HOOK_FILES:$(LOCAL_PATH)/%=%)
 include $(BUILD_SHARED_LIBRARY)
 
 # ============================================================
-# MODULE 3: injector — PTRACE INJECTOR (executável ARM64)
-# Binário nativo que injeta libHook.so no jogo via ptrace+dlopen
-# Executado via root pelo app Java
+# MODULE 3: libinjector.so — PTRACE INJECTOR (shared library)
+# Compilado como .so para o APK empacotar (Android só extrai lib*.so)
+# Invocado via LD_PRELOAD em shell root — constructor lê config
+# e faz ptrace+dlopen no processo do jogo
 # ============================================================
 
 include $(CLEAR_VARS)
 LOCAL_MODULE := injector
-LOCAL_MODULE_FILENAME := libinjector
 
-LOCAL_CFLAGS := -w -fvisibility=hidden -O2 -DNDEBUG -pie -fPIE
+LOCAL_CFLAGS := -w -fvisibility=hidden -O2 -DNDEBUG -fPIC
 LOCAL_LDFLAGS += -Wl,--gc-sections,--strip-all
 LOCAL_LDLIBS := -llog -ldl
 LOCAL_ARM_MODE := arm
 
 LOCAL_SRC_FILES := injector.c
 
-include $(BUILD_EXECUTABLE)
+include $(BUILD_SHARED_LIBRARY)

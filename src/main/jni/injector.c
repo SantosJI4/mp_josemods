@@ -480,39 +480,70 @@ detach_only:
 
 /*
  * ================================================================
- * ENTRY POINT
+ * ENTRY POINT: __attribute__((constructor))
  * ================================================================
+ *
+ * Compilado como BUILD_SHARED_LIBRARY (libinjector.so) para o APK
+ * empacotar. Invocado via LD_PRELOAD em um shell root:
+ *
+ *   su -c "LD_PRELOAD=/data/local/tmp/libinjector.so cat /dev/null"
+ *
+ * O constructor le PID e path de /data/local/tmp/.inject_config
+ * (escrito pelo Java antes do LD_PRELOAD), faz a injecao, e _exit().
+ *
+ * Se o config nao existe, retorna silenciosamente (nao interfere
+ * com outros processos caso .so seja carregado acidentalmente).
  */
-int main(int argc, char *argv[]) {
-    if (argc < 3) {
-        fprintf(stderr, "Usage: %s <PID> <path_to_so>\n", argv[0]);
-        fprintf(stderr, "Example: %s 12345 /data/local/tmp/libHook.so\n", argv[0]);
-        return 1;
+#define INJECT_CONFIG "/data/local/tmp/.inject_config"
+
+__attribute__((constructor))
+static void injector_entry(void) {
+    /* Somente executar se o config file existe */
+    FILE *cfg = fopen(INJECT_CONFIG, "r");
+    if (!cfg) return;
+
+    /* Ler PID e caminho do .so */
+    char pid_str[32] = {0};
+    char so_path[256] = {0};
+
+    if (!fgets(pid_str, sizeof(pid_str), cfg) ||
+        !fgets(so_path, sizeof(so_path), cfg)) {
+        LOGE("Failed to read config file");
+        fclose(cfg);
+        return;
     }
+    fclose(cfg);
 
-    pid_t target_pid = atoi(argv[1]);
-    const char *so_path = argv[2];
+    /* Remover config imediatamente (evita re-execucao) */
+    unlink(INJECT_CONFIG);
 
-    if (target_pid <= 0) {
-        LOGE("Invalid PID: %s", argv[1]);
-        return 1;
+    /* Parse */
+    pid_t target_pid = atoi(pid_str);
+    char *nl = strchr(so_path, '\n');
+    if (nl) *nl = '\0';
+    nl = strchr(so_path, '\r');
+    if (nl) *nl = '\0';
+
+    if (target_pid <= 0 || so_path[0] == '\0') {
+        LOGE("Invalid config: pid=%d path=[%s]", target_pid, so_path);
+        _exit(1);
     }
 
     if (getuid() != 0) {
         LOGE("Must run as root (uid=0). Current uid=%d", getuid());
-        return 1;
+        _exit(1);
     }
 
-    LOGI("=== JawMods ptrace injector v1. ===");
+    LOGI("=== JawMods ptrace injector v15 ===");
+    LOGI("Config: PID=%d SO=%s", target_pid, so_path);
     int result = do_inject(target_pid, so_path);
 
-    /* Verify injection by checking maps */
+    /* Verificar injecao nos maps */
     if (result == 0) {
-        usleep(500000); /* Wait 500ms for constructor to run */
+        usleep(500000);
         char cmd[512];
         snprintf(cmd, sizeof(cmd), "grep -c '%s' /proc/%d/maps 2>/dev/null",
                  so_path, target_pid);
-
         FILE *p = popen(cmd, "r");
         if (p) {
             char out[32] = {0};
@@ -520,12 +551,15 @@ int main(int argc, char *argv[]) {
             pclose(p);
             int count = atoi(out);
             if (count > 0) {
-                LOGI("[+] Verified: .so found in /proc/%d/maps (%d entries)", target_pid, count);
+                LOGI("[+] Verified: .so in /proc/%d/maps (%d entries)", target_pid, count);
             } else {
-                LOGI("[!] Warning: .so NOT found in maps after injection. May have been unloaded.");
+                LOGI("[!] .so NOT found in maps after injection");
             }
         }
     }
 
-    return result == 0 ? 0 : 1;
+    LOGI(result == 0 ? "[+] INJECTION SUCCESSFUL" : "[-] INJECTION FAILED");
+    fflush(stdout);
+    fflush(stderr);
+    _exit(result == 0 ? 0 : 1);
 }
