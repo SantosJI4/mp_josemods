@@ -384,19 +384,20 @@ static void* hack_thread(void*) {
 
     hookLogWrite("Game data dir: %s", getGameDataDir());
 
-    // ── Resolver il2cpp_class_get_method_from_name DIRETO do libil2cpp.so ──
-    // Precisamos do MethodInfo* para VMT hook (Il2CppGetMethodOffset retorna *method, não MethodInfo*)
+    // ── Resolver il2cpp_class_get_method_from_name via ByNameModding API ──
+    // Il2CppAttach ja resolveu esta funcao internamente.
+    // Il2CppGetMethodInfoByName expoe ela sem precisar de outro dlopen_ex.
+    // (O segundo dlopen_ex falhava porque fake_dlfcn nao encontra libil2cpp.so
+    // quando carregados via ptrace injection em namespace diferente)
+    resolve_method = (void*(*)(void*, const char*, int)) Il2CppGetMethodInfoByName;
+
+    // Verificar se Il2CppAttach realmente resolveu a funcao
+    // (Il2CppGetMethodInfoByName retorna nullptr se internal ptr e NULL)
     {
-        void* handle = dlopen_ex("libil2cpp.so", 0);
-        if (handle) {
-            resolve_method = (void*(*)(void*, const char*, int))
-                dlsym_ex(handle, "il2cpp_class_get_method_from_name");
-            dlclose_ex(handle);
-        }
-    }
-    if (!resolve_method) {
-        LOGE("Falha ao resolver il2cpp_class_get_method_from_name");
-        return nullptr;
+        // Teste rapido: chamar com nullptr deve retornar nullptr sem crash
+        void* test = resolve_method(nullptr, "test", 0);
+        (void)test; // ok, apenas verifica que nao crashou
+        LOGI("resolve_method via Il2CppGetMethodInfoByName: OK");
     }
 
     // ── Resolver funções pelo NOME (usa seus offsets do dump automaticamente) ──

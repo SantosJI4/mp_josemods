@@ -274,6 +274,7 @@ void Il2CppSetStaticFieldValue(const char *image, const char *namespaze, const c
 
 void *Il2CppGetMethodOffset(const char *image, const char *namespaze, const char *clazz, const char *name, int argsCount = 0);
 void *Il2CppGetMethodOffset(const char *image, const char *namespaze, const char *clazz, const char *name, char** args, int argsCount);
+void *Il2CppGetMethodInfoByName(void *klass, const char *name, int argsCount);
 
 size_t Il2CppGetFieldOffset(const char *image, const char *namespaze, const char *clazz, const char *name);
 

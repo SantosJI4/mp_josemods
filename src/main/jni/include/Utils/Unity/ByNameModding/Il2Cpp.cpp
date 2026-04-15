@@ -267,6 +267,11 @@ void *Il2CppGetMethodOffset(const char *image, const char *namespaze, const char
     return *method;
 }
 // ================================================================================================================ //
+void *Il2CppGetMethodInfoByName(void *klass, const char *name, int argsCount) {
+    if (!il2cpp_class_get_method_from_name || !klass) return nullptr;
+    return il2cpp_class_get_method_from_name(klass, name, argsCount);
+}
+// ================================================================================================================ //
 void *Il2CppGetMethodOffset(const char *image, const char *namespaze, const char *clazz, const char *name, char** args, int argsCount) {
     void *img = Il2CppGetImageByName(image);
     if(!img) {
