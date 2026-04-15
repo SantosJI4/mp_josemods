@@ -33,6 +33,8 @@
 #include <cerrno>
 #include <cstdarg>
 #include <ctime>
+#include <fcntl.h>
+#include <elf.h>
 #include <android/log.h>
 
 #include "Utils.h"
@@ -41,7 +43,7 @@
 #include "SharedData.h"
 
 #define HOOK_TAG "GameHook"
-#define HOOK_BUILD_VER "v15-ptrace"
+#define HOOK_BUILD_VER "v16-offsets"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, HOOK_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, HOOK_TAG, __VA_ARGS__)
 
@@ -83,6 +85,85 @@ static void hookLogWrite(const char* fmt, ...) {
 
     // Logcat tambem
     __android_log_print(ANDROID_LOG_INFO, HOOK_TAG, "%s", buf);
+}
+
+// ============================================================
+// ELF Symbol Resolver — resolve symbols direto do arquivo ELF
+// Sem dlopen/dlsym, sem namespace issues, sem fake_dlfcn
+// ============================================================
+
+// Encontra o path completo de uma lib em /proc/self/maps
+static bool findLibPath(const char *libName, char *outPath, size_t outLen) {
+    FILE *maps = fopen("/proc/self/maps", "r");
+    if (!maps) return false;
+    char line[1024];
+    while (fgets(line, sizeof(line), maps)) {
+        if (strstr(line, libName)) {
+            char *p = strchr(line, '/');
+            if (p) {
+                char *nl = strchr(p, '\n');
+                if (nl) *nl = '\0';
+                strncpy(outPath, p, outLen - 1);
+                outPath[outLen - 1] = '\0';
+                fclose(maps);
+                return true;
+            }
+        }
+    }
+    fclose(maps);
+    return false;
+}
+
+// Resolve um símbolo de um ELF no disco: retorna base + st_value
+static uintptr_t resolveElfSymbol(const char *elfPath, uintptr_t loadBase, const char *symName) {
+    int fd = open(elfPath, O_RDONLY);
+    if (fd < 0) {
+        LOGE("resolveElfSymbol: open(%s) failed: %s", elfPath, strerror(errno));
+        return 0;
+    }
+
+    Elf64_Ehdr ehdr;
+    if (read(fd, &ehdr, sizeof(ehdr)) != sizeof(ehdr)) { close(fd); return 0; }
+
+    Elf64_Shdr *shdrs = (Elf64_Shdr*)malloc(ehdr.e_shnum * sizeof(Elf64_Shdr));
+    if (!shdrs) { close(fd); return 0; }
+    lseek(fd, ehdr.e_shoff, SEEK_SET);
+    read(fd, shdrs, ehdr.e_shnum * sizeof(Elf64_Shdr));
+
+    uintptr_t result = 0;
+
+    for (int i = 0; i < ehdr.e_shnum; i++) {
+        if (shdrs[i].sh_type == SHT_DYNSYM) {
+            Elf64_Shdr *strtab_sh = &shdrs[shdrs[i].sh_link];
+
+            char *strtab = (char*)malloc(strtab_sh->sh_size);
+            if (!strtab) break;
+            lseek(fd, strtab_sh->sh_offset, SEEK_SET);
+            read(fd, strtab, strtab_sh->sh_size);
+
+            int nsyms = shdrs[i].sh_size / sizeof(Elf64_Sym);
+            Elf64_Sym *syms = (Elf64_Sym*)malloc(shdrs[i].sh_size);
+            if (!syms) { free(strtab); break; }
+            lseek(fd, shdrs[i].sh_offset, SEEK_SET);
+            read(fd, syms, shdrs[i].sh_size);
+
+            for (int j = 0; j < nsyms; j++) {
+                if (syms[j].st_name && syms[j].st_value &&
+                    strcmp(strtab + syms[j].st_name, symName) == 0) {
+                    result = loadBase + syms[j].st_value;
+                    break;
+                }
+            }
+
+            free(syms);
+            free(strtab);
+            break;
+        }
+    }
+
+    free(shdrs);
+    close(fd);
+    return result;
 }
 
 // ============================================================
@@ -361,6 +442,9 @@ static void* hack_thread(void*) {
     hookLogWrite("libil2cpp.so detectada");
 
     // ── Pegar base address do libil2cpp.so ──
+    // findLibrary retorna o PRIMEIRO mapeamento que contém o nome.
+    // No Android ARM64, o primeiro mapeamento é r--p offset=0 = load base.
+    // Os offsets do il2cppdumper (RVA) são relativos a esse endereço.
     uintptr_t il2cpp_base = findLibrary("libil2cpp.so");
     if (!il2cpp_base) {
         LOGE("findLibrary(libil2cpp.so) retornou 0!");
@@ -370,11 +454,19 @@ static void* hack_thread(void*) {
     LOGI("libil2cpp.so base = 0x%lx", (unsigned long)il2cpp_base);
     hookLogWrite("il2cpp base = 0x%lx", (unsigned long)il2cpp_base);
 
-    // ── Esperar o jogo inicializar (il2cpp_init precisa terminar) ──
-    // Não precisamos de il2cpp_domain_get — só precisamos que as funções
-    // estejam carregadas na memória. 5s é suficiente.
-    sleep(5);
-    LOGI("Aguardou 5s para init do jogo");
+    // Validar que a base é realmente o inicio do ELF (magic: 7f 45 4c 46)
+    {
+        unsigned char elfMagic[4] = {0};
+        memcpy(elfMagic, (void*)il2cpp_base, 4);
+        if (elfMagic[0] != 0x7f || elfMagic[1] != 'E' || elfMagic[2] != 'L' || elfMagic[3] != 'F') {
+            LOGE("ERRO: base 0x%lx NAO é ELF! magic=%02x%02x%02x%02x",
+                 (unsigned long)il2cpp_base, elfMagic[0], elfMagic[1], elfMagic[2], elfMagic[3]);
+            hookLogWrite("ERRO: base nao e ELF! magic=%02x%02x%02x%02x",
+                         elfMagic[0], elfMagic[1], elfMagic[2], elfMagic[3]);
+            return nullptr;
+        }
+        LOGI("ELF magic validado: OK (7f454c46)");
+    }
 
     // ── Resolver TODAS as funções via base + offset direto ──
     // ZERO dependência de il2cpp_domain_get, fake_dlfcn, ByNameModding
@@ -450,37 +542,45 @@ static void* hack_thread(void*) {
 
     // ── VMT Hook no LateUpdate ──
     // Precisamos do MethodInfo* do LateUpdate pra trocar o methodPointer.
-    // Pra isso, usar il2cpp_class_get_method_from_name via real dlsym.
-    LOGI("Resolvendo MethodInfo de Player::LateUpdate via dlsym...");
-    hookLogWrite("Resolvendo MethodInfo Player::LateUpdate...");
+    // dlopen/dlsym NAO funciona (namespace do linker Android 7+).
+    // Solucao: resolver simbolos il2cpp lendo o ELF do disco direto.
+    LOGI("Resolvendo il2cpp API via ELF parser...");
+    hookLogWrite("Resolvendo il2cpp API via ELF...");
 
-    // Resolver as 3 funcoes il2cpp necessarias pra achar o MethodInfo
-    void *il2cpp_handle = dlopen("libil2cpp.so", RTLD_NOLOAD);
-    if (!il2cpp_handle) {
-        LOGE("dlopen(libil2cpp.so, RTLD_NOLOAD) falhou: %s", dlerror());
-        hookLogWrite("ERRO: dlopen RTLD_NOLOAD falhou");
+    // Encontrar path do libil2cpp.so no disco
+    char il2cpp_path[512] = {0};
+    if (!findLibPath("libil2cpp.so", il2cpp_path, sizeof(il2cpp_path))) {
+        LOGE("libil2cpp.so path nao encontrado em maps!");
+        hookLogWrite("ERRO: il2cpp path nao encontrado");
         return nullptr;
     }
-    LOGI("dlopen(RTLD_NOLOAD) = %p", il2cpp_handle);
+    LOGI("il2cpp path: %s", il2cpp_path);
 
-    auto p_domain_get = (void*(*)()) dlsym(il2cpp_handle, "il2cpp_domain_get");
-    auto p_domain_get_assemblies = (void**(*)(const void*, size_t*)) dlsym(il2cpp_handle, "il2cpp_domain_get_assemblies");
-    auto p_assembly_get_image = (const void*(*)(const void*)) dlsym(il2cpp_handle, "il2cpp_assembly_get_image");
-    auto p_image_get_name = (const char*(*)(void*)) dlsym(il2cpp_handle, "il2cpp_image_get_name");
-    auto p_class_from_name = (void*(*)(const void*, const char*, const char*)) dlsym(il2cpp_handle, "il2cpp_class_from_name");
-    auto p_class_get_method = (void*(*)(void*, const char*, int)) dlsym(il2cpp_handle, "il2cpp_class_get_method_from_name");
+    // Resolver as funcoes il2cpp necessarias via ELF
+    auto p_domain_get = (void*(*)())
+        resolveElfSymbol(il2cpp_path, il2cpp_base, "il2cpp_domain_get");
+    auto p_domain_get_assemblies = (void**(*)(const void*, size_t*))
+        resolveElfSymbol(il2cpp_path, il2cpp_base, "il2cpp_domain_get_assemblies");
+    auto p_assembly_get_image = (const void*(*)(const void*))
+        resolveElfSymbol(il2cpp_path, il2cpp_base, "il2cpp_assembly_get_image");
+    auto p_image_get_name = (const char*(*)(void*))
+        resolveElfSymbol(il2cpp_path, il2cpp_base, "il2cpp_image_get_name");
+    auto p_class_from_name = (void*(*)(const void*, const char*, const char*))
+        resolveElfSymbol(il2cpp_path, il2cpp_base, "il2cpp_class_from_name");
+    auto p_class_get_method = (void*(*)(void*, const char*, int))
+        resolveElfSymbol(il2cpp_path, il2cpp_base, "il2cpp_class_get_method_from_name");
 
-    dlclose(il2cpp_handle);
-
-    LOGI("dlsym: domain_get=%p assemblies=%p get_image=%p get_name=%p class_from_name=%p get_method=%p",
+    LOGI("ELF resolved: domain_get=%p assemblies=%p get_image=%p get_name=%p class_from_name=%p get_method=%p",
          (void*)p_domain_get, (void*)p_domain_get_assemblies,
          (void*)p_assembly_get_image, (void*)p_image_get_name,
          (void*)p_class_from_name, (void*)p_class_get_method);
+    hookLogWrite("ELF: domain=%p class=%p method=%p",
+         (void*)p_domain_get, (void*)p_class_from_name, (void*)p_class_get_method);
 
     if (!p_domain_get || !p_domain_get_assemblies || !p_assembly_get_image ||
         !p_image_get_name || !p_class_from_name || !p_class_get_method) {
-        LOGE("dlsym falhou para uma ou mais funcoes il2cpp");
-        hookLogWrite("ERRO: dlsym falhou");
+        LOGE("ELF resolver falhou para uma ou mais funcoes il2cpp");
+        hookLogWrite("ERRO: ELF resolver falhou");
         return nullptr;
     }
 
