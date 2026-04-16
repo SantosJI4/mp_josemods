@@ -856,6 +856,12 @@ void* hack_thread(void*) {
 
 bool g_hookStarted = false;
 
+// fd do SHM pre-aberto em preAppSpecialize (root context) pelo modulo Zygisk.
+// Usado por shm_create_file() para contornar SELinux no contexto untrusted_app.
+#ifdef ZYGISK_BUILD
+int g_zygisk_shm_fd = -1;
+#endif
+
 // lib_main() é o entry point para injeção via ptrace (libgl2.so).
 // Em modo Zygisk, o entry point é postAppSpecialize() em zygisk_main.cpp.
 #ifndef ZYGISK_BUILD

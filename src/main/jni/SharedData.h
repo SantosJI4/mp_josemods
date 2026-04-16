@@ -89,6 +89,15 @@ static void shm_unmap(SharedESPData* data) {
 
 static const char* shmActivePath = nullptr;
 
+// fd pre-aberto em preAppSpecialize (root context) pelo modulo Zygisk.
+// SELinux bloqueia untrusted_app de criar shell_data_file,
+// mas um fd aberto como root sobrevive ao setuid e pode ser reutilizado.
+#ifdef ZYGISK_BUILD
+extern int g_zygisk_shm_fd;
+#else
+static int g_zygisk_shm_fd = -1;
+#endif
+
 // Game data dir — hardcode o package pois /proc/self/cmdline nao e confiavel
 // (no constructor ainda e 'app_process64' do zygote)
 #ifndef HOOK_GAME_PACKAGE
@@ -122,6 +131,15 @@ static const char* getGameLogPath() {
 // Cria/abre shared memory (hook no jogo — roda como UID do app)
 // Tenta: 1) /data/local/tmp/ (PROVADO funcionar), 2) data dir do jogo, 3) /sdcard/
 static int shm_create_file() {
+    // ZYGISK: fd pre-aberto em root context (preAppSpecialize antes do setuid)
+    // Este fd bypass SELinux pois foi aberto como root e sobrevive ao setuid.
+    if (g_zygisk_shm_fd >= 0) {
+        ftruncate(g_zygisk_shm_fd, SHARED_MEM_SIZE);
+        fchmod(g_zygisk_shm_fd, 0666);
+        shmActivePath = SHM_PATH_1;
+        return g_zygisk_shm_fd;
+    }
+
     // PRIMARIO: /data/local/tmp/ — pre-criado pelo overlay com chmod 666
     // Este e o path que o hook COMPROVOU funcionar (fd=196 no logcat)
     int fd = open(SHM_PATH_1, O_RDWR);
