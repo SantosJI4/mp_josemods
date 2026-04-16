@@ -860,8 +860,11 @@ __attribute__((constructor))
 void lib_main() {
     LOGI("lib_main() LOADED [%s] pid=%d uid=%d", HOOK_BUILD_VER, getpid(), getuid());
 
-    // Esconder da /proc/self/maps IMEDIATAMENTE (antes do anti-cheat escanear)
-    hideFromMaps();
+    // hideFromMaps() DESATIVADO: causa crash por race condition.
+    // mmap(MAP_FIXED) sobre r-- zera rodata durante a janela de restauracao.
+    // Codigo acessando string literals nesse instante = leitura de zeros = crash.
+    // O rename libgl2.so ja e suficiente contra maps scan.
+    // hideFromMaps();
 
     // Verificar se estamos no processo do jogo
     char cmdline[256] = {0};
