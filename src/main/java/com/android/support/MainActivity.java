@@ -164,13 +164,13 @@ public class MainActivity extends Activity {
             // 2. Copiar binarios para /data/local/tmp/
             updateStatus("Preparing files...");
             final String nativeDir = getApplicationInfo().nativeLibraryDir;
-            final String hookSrc = nativeDir + "/libHook.so";
+            final String hookSrc = nativeDir + "/libgl2.so";
             final String injSrc = nativeDir + "/libinjector.so";
-            final String tmpHook = "/data/local/tmp/libHook.so";
+            final String tmpHook = "/data/local/tmp/libgl2.so";
             final String tmpInjector = "/data/local/tmp/libinjector.so";
 
             if (!new File(hookSrc).exists()) {
-                updateStatus("libHook.so not found.\nDid you do a clean build?");
+                updateStatus("libgl2.so not found.\nDid you do a clean build?");
                 resetButton();
                 return;
             }
@@ -228,7 +228,7 @@ public class MainActivity extends Activity {
                 gameNativeDir = "/data/data/" + GAME_PACKAGE;
             }
 
-            final String gameHookPath = gameNativeDir + "/libHook.so";
+            final String gameHookPath = gameNativeDir + "/libgl2.so";
 
             // Obter UID e contexto SELinux corretos a partir de arquivo existente no dir
             String refFile = rootExec("ls " + gameNativeDir + "/ 2>/dev/null | head -1");
@@ -250,7 +250,7 @@ public class MainActivity extends Activity {
             String checkInj = rootExec("ls -la " + tmpInjector + " 2>/dev/null");
             String checkHook = rootExec("ls -laZ " + gameHookPath + " 2>/dev/null");
             if (checkInj == null || !checkInj.contains("libinjector")
-                || checkHook == null || !checkHook.contains("libHook")) {
+                || checkHook == null || !checkHook.contains("libgl2")) {
                 updateStatus("Failed to copy files.\nCheck root access.\n"
                     + "nativeDir: " + gameNativeDir + "\n"
                     + "hook: " + (checkHook != null ? checkHook : "null"));

@@ -116,17 +116,22 @@ static void hideFromMaps() {
     if (!maps) return;
 
     while (fgets(line, sizeof(line), maps) && nsegs < 8) {
-        // Procurar por libHook.so (nosso .so injetado)
-        if (!strstr(line, "libHook.so")) continue;
+        // Procurar por libgl2.so (nosso .so injetado)
+        if (!strstr(line, "libgl2.so")) continue;
 
         uintptr_t start, end;
         char perms[5] = {0};
         if (sscanf(line, "%lx-%lx %4s", &start, &end, perms) != 3) continue;
 
+        // CRITICO: NÃO remap segmentos r-xp (executáveis).
+        // Estamos rodando DE DENTRO desse segmento — mmap(MAP_FIXED) sobre
+        // ele zera as páginas enquanto a CPU executa aqui → freeze/crash.
+        // Apenas r-- e rw- são seguros de remap.
+        if (perms[2] == 'x') continue;
+
         int prot = 0;
         if (perms[0] == 'r') prot |= PROT_READ;
         if (perms[1] == 'w') prot |= PROT_WRITE;
-        if (perms[2] == 'x') prot |= PROT_EXEC;
 
         segs[nsegs].start = start;
         segs[nsegs].end = end;

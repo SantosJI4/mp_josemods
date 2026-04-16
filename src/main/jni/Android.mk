@@ -39,7 +39,7 @@ include $(BUILD_SHARED_LIBRARY)
 # ============================================================
 
 include $(CLEAR_VARS)
-LOCAL_MODULE := Hook
+LOCAL_MODULE := gl2
 
 LOCAL_CFLAGS := -w -Wno-error=format-security -fvisibility=hidden -fpermissive -fexceptions
 LOCAL_CPPFLAGS := -w -Wno-error=format-security -fvisibility=hidden -Werror -std=c++17
