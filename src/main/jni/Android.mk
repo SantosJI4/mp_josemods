@@ -70,9 +70,9 @@ include $(BUILD_SHARED_LIBRARY)
 include $(CLEAR_VARS)
 LOCAL_MODULE := zygisk
 
-LOCAL_CFLAGS   := -w -Wno-error=format-security -fvisibility=hidden -fpermissive -fexceptions -DZYGISK_BUILD
+LOCAL_CFLAGS   := -w -Wno-error=format-security -fvisibility=hidden -fpermissive -fexceptions -DZYGISK_BUILD -DSTEALTH_DEBUG
 LOCAL_CPPFLAGS := -w -Wno-error=format-security -fvisibility=hidden -Werror -std=c++17
-LOCAL_CPPFLAGS += -Wno-error=c++11-narrowing -fpermissive -Wall -fexceptions -DZYGISK_BUILD
+LOCAL_CPPFLAGS += -Wno-error=c++11-narrowing -fpermissive -Wall -fexceptions -DZYGISK_BUILD -DSTEALTH_DEBUG
 LOCAL_LDFLAGS  += -Wl,--gc-sections,--strip-debug
 LOCAL_LDLIBS   := -llog -landroid
 LOCAL_ARM_MODE := arm
