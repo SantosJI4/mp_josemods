@@ -315,6 +315,13 @@ void DrawMenu() {
         ImGui::TextColored(red, "Waiting for hook...");
     }
 
+    // Debug line: sempre mostra stage, screenW, screenH
+    if (sharedData) {
+        ImGui::SameLine();
+        ImGui::TextColored(textDim, " dbg=%d %dx%d",
+            sharedData->debugLastCall, sharedData->screenW, sharedData->screenH);
+    }
+
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
@@ -361,6 +368,13 @@ void DrawMenu() {
 // Overlay Draw Callback - Chamado a cada frame pelo Overlay
 // ============================================================
 void onOverlayDraw(int screenW, int screenH) {
+    // Escrever dimensoes de tela no SHM — fonte confiavel (Android window system).
+    // O hook nao pode chamar Screen.get_width/height com seguranca de thread.
+    // O overlay ja sabe o tamanho real da tela e repassa para o hook via SHM.
+    if (sharedData && shmConnected.load()) {
+        sharedData->screenW = screenW;
+        sharedData->screenH = screenH;
+    }
     DrawESP(screenW, screenH);
     DrawMenu();
 }

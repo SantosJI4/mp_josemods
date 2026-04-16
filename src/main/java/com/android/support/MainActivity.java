@@ -307,19 +307,34 @@ public class MainActivity extends Activity {
                         }
                     });
 
-                    // Lançar Free Fire automaticamente
-                    runOnUi(new Runnable() {
-                        @Override
-                        public void run() {
-                            try {
-                                Intent ffIntent = getPackageManager().getLaunchIntentForPackage("com.dts.freefireth");
-                                if (ffIntent != null) {
-                                    ffIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                                    startActivity(ffIntent);
+                    // Lançar Free Fire via monkey (root — mais confiável que Intent API)
+                    // monkey -p <pkg> -c android.intent.category.LAUNCHER 1
+                    // envia exatamente 1 evento de launch para o app, independente
+                    // de estado da Activity ou do PackageManager.
+                    updateStatus("Lançando Free Fire...");
+                    String launchResult = rootExec(
+                        "monkey -p " + GAME_PACKAGE + " -c android.intent.category.LAUNCHER 1 2>&1");
+                    // Fallback: Intent API caso monkey falhe (sem monkey no device)
+                    if (launchResult == null || launchResult.isEmpty() ||
+                            launchResult.contains("Error") || launchResult.contains("No activities")) {
+                        runOnUi(new Runnable() {
+                            @Override
+                            public void run() {
+                                try {
+                                    Intent ffIntent = getPackageManager()
+                                        .getLaunchIntentForPackage(GAME_PACKAGE);
+                                    if (ffIntent != null) {
+                                        ffIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                                                | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+                                        startActivity(ffIntent);
+                                    }
+                                } catch (Exception e) {
+                                    updateStatus("Não foi possível lançar " + GAME_PACKAGE
+                                        + ": " + e.getMessage());
                                 }
-                            } catch (Exception ignored) {}
-                        }
-                    });
+                            }
+                        });
+                    }
 
                     // Aguardar SHM magic (hook Zygisk ativo = 0xDEADF00D)
                     updateStatus("Iniciando Free Fire e aguardando hook...");

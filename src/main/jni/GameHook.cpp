@@ -793,13 +793,12 @@ void* hack_thread(void*) {
     }
 
     // Agora il2cpp runtime esta pronto — seguro chamar metodos
-    LOGI("[3/5] Screen size...");
-    if (fn_Screen_get_width && fn_Screen_get_height) {
-        sharedData->screenW = fn_Screen_get_width(nullptr);
-        sharedData->screenH = fn_Screen_get_height(nullptr);
-        LOGI("Tela: %dx%d", sharedData->screenW, sharedData->screenH);
-        hookLogWrite("Tela: %dx%d", sharedData->screenW, sharedData->screenH);
-    }
+    // NOTA: Screen::get_width/height NAO e chamado aqui.
+    // O overlay conhece as dimensoes da tela via Android window system
+    // e as escreve no SHM a cada frame (onOverlayDraw). Isso e mais
+    // confiavel que chamar il2cpp de uma thread nao-Unity.
+    LOGI("[3/5] il2cpp runtime pronto (screenW/H via overlay)");
+    hookLogWrite("[3/5] il2cpp runtime pronto (screenW/H escrito pelo overlay)");
 
     // Achar Assembly-CSharp image
     LOGI("[3/5] Buscando Assembly-CSharp...");
