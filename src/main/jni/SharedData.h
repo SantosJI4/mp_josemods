@@ -37,7 +37,8 @@ struct ESPEntry {
 };
 
 struct SharedESPData {
-    uint32_t magic;               // 0xDEADF00D = dados válidos
+    uint32_t magic;               // 0xDEADF00D = SHM criado (hack_thread rodando)
+    uint32_t hookApplied;         // 0xBEEF1234 = VmtHook OK, hookActive=true
     std::atomic<uint32_t> writeSeq; // Sequência de escrita (detectar update)
     int screenW;
     int screenH;

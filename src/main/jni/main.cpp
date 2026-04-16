@@ -48,7 +48,7 @@
 // ============================================================
 // ESP State
 // ============================================================
-static bool esp = false;
+static bool esp = true;   // ligado por padrao
 static bool drawEnemyBox = true;
 static bool drawSnapLine = true;
 static bool drawDistance = false;
@@ -181,9 +181,8 @@ void* shmReaderLoop(void*) {
 void DrawESP(int screenW, int screenH) {
     if (!sharedData || !shmConnected.load()) return;
 
-    // SEMPRE setar espEnabled (mesmo se ESP desligado no UI)
-    // Isso comunica ao hook no jogo se deve processar players
-    sharedData->espEnabled = esp ? 1 : 0;
+    // Hook SEMPRE coleta players (espEnabled=1 fixo) — draw controlado pelo toggle
+    sharedData->espEnabled = 1;
 
     if (!esp) return;
 
@@ -301,11 +300,17 @@ void DrawMenu() {
     ImGui::Begin("JAWMODS", nullptr, ImGuiWindowFlags_None);
 
     // ── Status ──
-    bool hooked = shmConnected.load() && sharedData && sharedData->magic == 0xDEADF00D;
-    if (hooked) {
+    bool shmReady   = shmConnected.load() && sharedData && sharedData->magic == 0xDEADF00D;
+    bool vmtApplied = shmReady && sharedData->hookApplied == 0xBEEF1234;
+    if (vmtApplied) {
         ImGui::TextColored(green, "Connected");
         ImGui::SameLine();
         ImGui::TextColored(textDim, "| %d targets", sharedData->playerCount);
+    } else if (shmReady) {
+        // SHM criado mas VmtHook ainda nao aplicado (aguardando domain/init)
+        ImGui::TextColored(ImVec4(1.0f,0.65f,0.0f,1.0f), "Hook iniciando...");
+        ImGui::SameLine();
+        ImGui::TextColored(textDim, "stage=%d", sharedData->debugLastCall);
     } else {
         ImGui::TextColored(red, "Waiting for hook...");
     }

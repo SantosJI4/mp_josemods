@@ -434,8 +434,7 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     // Sempre manter magic ativo para overlay detectar
     sharedData->magic = 0xDEADF00D;
 
-    // Overlay controla se o hook processa ESP
-    if (!sharedData->espEnabled) return;
+    // espEnabled reservado para futuro; hook sempre processa players
 
     // ── Detectar início de novo frame por tempo ──
     // Unity chama Update() para todos os objetos em sequência dentro do mesmo frame.
@@ -842,6 +841,7 @@ void* hack_thread(void*) {
     }
 
     hookActive.store(true);
+    sharedData->hookApplied = 0xBEEF1234;  // sinaliza overlay que VMT hook esta ativo
     LOGI("=== HOOK ATIVO === VMT hook em Player::LateUpdate");
     hookLogWrite("=== HOOK ATIVO === VMT em Player::LateUpdate");
 
