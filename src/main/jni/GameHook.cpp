@@ -550,7 +550,7 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
 // INIT — Resolve funções + aplica VMT hook
 // ============================================================
 
-static void* hack_thread(void*) {
+void* hack_thread(void*) {
     // Esconder nome da thread (anti-cheat enumera threads)
     prctl(PR_SET_NAME, "Binder:default", 0, 0, 0);
 
@@ -854,7 +854,7 @@ static void* hack_thread(void*) {
 // esta funcao roda automaticamente via __attribute__((constructor))
 // ============================================================
 
-static bool g_hookStarted = false;
+bool g_hookStarted = false;
 
 // lib_main() é o entry point para injeção via ptrace (libgl2.so).
 // Em modo Zygisk, o entry point é postAppSpecialize() em zygisk_main.cpp.
