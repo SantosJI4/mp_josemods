@@ -20,6 +20,7 @@
 #include "zygisk.hpp"
 #include <pthread.h>
 #include <cstring>
+#include <cerrno>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
