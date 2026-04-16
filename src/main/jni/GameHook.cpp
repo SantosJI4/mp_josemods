@@ -556,8 +556,11 @@ void* hack_thread(void*) {
     hookLogWrite("Thread iniciada, aguardando libil2cpp.so...");
     LOGI("Hook thread iniciada, aguardando libil2cpp.so...");
 
+    if (sharedData) sharedData->debugLastCall = 1; // stage 1: thread started
+
     // ── Aguardar il2cpp carregar ──
     while (!isLibraryLoaded("libil2cpp.so")) {
+        if (sharedData) sharedData->debugLastCall = 2; // stage 2: waiting libil2cpp
         sleep(1);
     }
     LOGI("libil2cpp.so detectada");
@@ -567,8 +570,10 @@ void* hack_thread(void*) {
     // findLibrary retorna o PRIMEIRO mapeamento que contém o nome.
     // No Android ARM64, o primeiro mapeamento é r--p offset=0 = load base.
     // Os offsets do il2cppdumper (RVA) são relativos a esse endereço.
+    if (sharedData) sharedData->debugLastCall = 3; // stage 3: libil2cpp found
     uintptr_t il2cpp_base = findLibrary("libil2cpp.so");
     if (!il2cpp_base) {
+        if (sharedData) sharedData->debugLastCall = 93; // stage 93: base=0 error
         LOGE("findLibrary(libil2cpp.so) retornou 0!");
         hookLogWrite("ERRO: il2cpp base = 0");
         return nullptr;
@@ -687,8 +692,10 @@ void* hack_thread(void*) {
     hookLogWrite("ELF: domain=%p class=%p method=%p",
          (void*)p_domain_get, (void*)p_class_from_name, (void*)p_class_get_method);
 
+    if (sharedData) sharedData->debugLastCall = 4; // stage 4: ELF resolve done
     if (!p_domain_get || !p_domain_get_assemblies || !p_assembly_get_image ||
         !p_image_get_name || !p_class_from_name || !p_class_get_method) {
+        if (sharedData) sharedData->debugLastCall = 94; // stage 94: ELF resolve failed
         LOGE("ELF resolver falhou para uma ou mais funcoes il2cpp");
         hookLogWrite("ERRO: ELF resolver falhou");
         return nullptr;
@@ -714,6 +721,7 @@ void* hack_thread(void*) {
     LOGI("[2/5] Aguardando il2cpp runtime inicializar...");
     hookLogWrite("[2/5] Aguardando il2cpp init...");
 
+    if (sharedData) sharedData->debugLastCall = 5; // stage 5: waiting metadata
     // Fase 1: Esperar global-metadata.dat em /proc/self/maps
     bool metadataFound = false;
     for (int i = 0; i < 60; i++) {
@@ -739,10 +747,12 @@ void* hack_thread(void*) {
         sleep(1);
     }
     if (!metadataFound) {
+        if (sharedData) sharedData->debugLastCall = 95; // stage 95: metadata timeout
         LOGE("global-metadata.dat timeout 60s");
         hookLogWrite("ERRO: metadata timeout");
         return nullptr;
     }
+    if (sharedData) sharedData->debugLastCall = 6; // stage 6: metadata found
 
     // Fase 2: Esperar domain ficar pronto (metadata existe, mas init pode
     // nao ter terminado ainda — domain_get agora eh seguro de chamar)
@@ -761,7 +771,9 @@ void* hack_thread(void*) {
                 break;
             }
         }
+        if (sharedData) sharedData->debugLastCall = 7; // stage 7: waiting domain
         if (i >= 29) {
+            if (sharedData) sharedData->debugLastCall = 97; // stage 97: domain timeout
             LOGE("il2cpp domain timeout (30s apos metadata)");
             hookLogWrite("ERRO: domain timeout 30s");
             return nullptr;
@@ -794,21 +806,26 @@ void* hack_thread(void*) {
         }
     }
     if (!cs_image) {
+        if (sharedData) sharedData->debugLastCall = 96; // stage 96: assembly not found
         LOGE("Assembly-CSharp.dll nao encontrada!");
         hookLogWrite("ERRO: Assembly-CSharp.dll nao encontrada");
         return nullptr;
     }
+    if (sharedData) sharedData->debugLastCall = 8; // stage 8: Assembly-CSharp found
     LOGI("Assembly-CSharp.dll = %p", cs_image);
 
     // Achar classe Player
     LOGI("[4/5] Buscando Player class...");
     hookLogWrite("[4/5] Buscando Player class...");
+    if (sharedData) sharedData->debugLastCall = 81; // stage 81: finding Player class
     void *playerClass = p_class_from_name(cs_image, "COW.GamePlay", "Player");
     if (!playerClass) {
+        if (sharedData) sharedData->debugLastCall = 98; // stage 98: Player class not found
         LOGE("Classe Player nao encontrada");
         hookLogWrite("ERRO: classe Player nao encontrada");
         return nullptr;
     }
+    if (sharedData) sharedData->debugLastCall = 9; // stage 9: Player class found
     LOGI("playerClass = %p", playerClass);
     hookLogWrite("playerClass = %p", playerClass);
 
@@ -817,6 +834,7 @@ void* hack_thread(void*) {
     hookLogWrite("Buscando LateUpdate MethodInfo...");
     void *onUpdateMethodInfo = p_class_get_method(playerClass, "LateUpdate", 0);
     if (!onUpdateMethodInfo) {
+        if (sharedData) sharedData->debugLastCall = 99; // stage 99: LateUpdate not found
         LOGE("LateUpdate nao encontrado em Player");
         hookLogWrite("ERRO: LateUpdate nao encontrado");
         return nullptr;
