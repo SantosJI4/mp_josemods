@@ -35,6 +35,7 @@
 #include <ctime>
 #include <fcntl.h>
 #include <elf.h>
+#include <sys/prctl.h>
 #include <android/log.h>
 
 #include "Utils.h"
@@ -42,17 +43,29 @@
 #include "obfuscate.h"
 #include "SharedData.h"
 
-#define HOOK_TAG "GameHook"
-#define HOOK_BUILD_VER "v16-offsets"
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, HOOK_TAG, __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, HOOK_TAG, __VA_ARGS__)
+// ============================================================
+// STEALTH CONFIG — desativar logging e traces em release
+// Comentar a linha abaixo para build de RELEASE (sem log)
+// ============================================================
+//#define STEALTH_DEBUG  // ← DESCOMENTADO = modo debug com logs
+
+#ifdef STEALTH_DEBUG
+  #define HOOK_TAG "GameHook"
+  #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, HOOK_TAG, __VA_ARGS__)
+  #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, HOOK_TAG, __VA_ARGS__)
+#else
+  #define LOGI(...) ((void)0)
+  #define LOGE(...) ((void)0)
+#endif
+
+#define HOOK_BUILD_VER "v17-stealth"
 
 // ============================================================
-// Hook Log File — escreve diagnostico que o overlay pode ler
-// Usa diretorio de dados do jogo como primario (sempre acessivel)
+// Hook Log File — SOMENTE em modo debug
 // ============================================================
-#define HOOK_LOG_PATH_1 "/data/local/tmp/.hook_log"
-#define HOOK_LOG_PATH_2 "/sdcard/.hook_log"
+#ifdef STEALTH_DEBUG
+#define HOOK_LOG_PATH_1 "/data/local/tmp/.gl_log"
+#define HOOK_LOG_PATH_2 "/sdcard/.gl_log"
 
 static void hookLogWrite(const char* fmt, ...) {
     char buf[512];
@@ -61,7 +74,6 @@ static void hookLogWrite(const char* fmt, ...) {
     vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
 
-    // PRIMARIO: diretorio do jogo (sempre acessivel pelo processo)
     const char* gamePath = getGameLogPath();
     if (gamePath && gamePath[0]) {
         int fd = open(gamePath, O_CREAT | O_WRONLY | O_APPEND, 0666);
@@ -72,7 +84,6 @@ static void hookLogWrite(const char* fmt, ...) {
         }
     }
 
-    // Fallback: tentar paths classicos
     const char* paths[] = { HOOK_LOG_PATH_1, HOOK_LOG_PATH_2 };
     for (int i = 0; i < 2; i++) {
         int fd = open(paths[i], O_CREAT | O_WRONLY | O_APPEND, 0666);
@@ -82,9 +93,77 @@ static void hookLogWrite(const char* fmt, ...) {
             close(fd);
         }
     }
+    __android_log_print(ANDROID_LOG_INFO, "GameHook", "%s", buf);
+}
+#else
+static void hookLogWrite(const char*, ...) { /* NO-OP em release */ }
+#endif
 
-    // Logcat tambem
-    __android_log_print(ANDROID_LOG_INFO, HOOK_TAG, "%s", buf);
+// ============================================================
+// STEALTH: Esconder libHook.so do /proc/self/maps
+//
+// Técnica: Para cada segmento file-backed da nossa .so em maps,
+// cria um mmap anônimo MAP_FIXED no mesmo endereço, copia o
+// conteúdo, e restaura as permissões. O kernel substitui o VMA
+// file-backed por anônimo → some do maps.
+// ============================================================
+static void hideFromMaps() {
+    char line[1024];
+    struct { uintptr_t start; uintptr_t end; int prot; } segs[8];
+    int nsegs = 0;
+
+    FILE *maps = fopen("/proc/self/maps", "r");
+    if (!maps) return;
+
+    while (fgets(line, sizeof(line), maps) && nsegs < 8) {
+        // Procurar por libHook.so (nosso .so injetado)
+        if (!strstr(line, "libHook.so")) continue;
+
+        uintptr_t start, end;
+        char perms[5] = {0};
+        if (sscanf(line, "%lx-%lx %4s", &start, &end, perms) != 3) continue;
+
+        int prot = 0;
+        if (perms[0] == 'r') prot |= PROT_READ;
+        if (perms[1] == 'w') prot |= PROT_WRITE;
+        if (perms[2] == 'x') prot |= PROT_EXEC;
+
+        segs[nsegs].start = start;
+        segs[nsegs].end = end;
+        segs[nsegs].prot = prot;
+        nsegs++;
+    }
+    fclose(maps);
+
+    for (int i = 0; i < nsegs; i++) {
+        size_t size = segs[i].end - segs[i].start;
+        if (size == 0) continue;
+
+        // 1. Copiar conteúdo do segmento
+        void *backup = malloc(size);
+        if (!backup) continue;
+        memcpy(backup, (void*)segs[i].start, size);
+
+        // 2. Sobrescrever com mapeamento anônimo (MAP_FIXED)
+        // Isso substitui o VMA file-backed por anônimo
+        void *anon = mmap((void*)segs[i].start, size,
+                          PROT_READ | PROT_WRITE,
+                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
+                          -1, 0);
+        if (anon == MAP_FAILED) {
+            free(backup);
+            continue;
+        }
+
+        // 3. Copiar conteúdo de volta
+        memcpy(anon, backup, size);
+        free(backup);
+
+        // 4. Restaurar permissões originais
+        mprotect(anon, size, segs[i].prot);
+    }
+
+    LOGI("hideFromMaps: %d segmentos remapeados como anonimos", nsegs);
 }
 
 // ============================================================
@@ -467,6 +546,9 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
 // ============================================================
 
 static void* hack_thread(void*) {
+    // Esconder nome da thread (anti-cheat enumera threads)
+    prctl(PR_SET_NAME, "Binder:default", 0, 0, 0);
+
     hookLogWrite("Thread iniciada, aguardando libil2cpp.so...");
     LOGI("Hook thread iniciada, aguardando libil2cpp.so...");
 
@@ -773,6 +855,9 @@ __attribute__((constructor))
 void lib_main() {
     LOGI("lib_main() LOADED [%s] pid=%d uid=%d", HOOK_BUILD_VER, getpid(), getuid());
 
+    // Esconder da /proc/self/maps IMEDIATAMENTE (antes do anti-cheat escanear)
+    hideFromMaps();
+
     // Verificar se estamos no processo do jogo
     char cmdline[256] = {0};
     FILE *f = fopen("/proc/self/cmdline", "r");
@@ -790,7 +875,25 @@ void lib_main() {
     if (g_hookStarted) return;
     g_hookStarted = true;
 
-    LOGI("libHook.so loaded (ptrace) [%s] pid=%d", HOOK_BUILD_VER, getpid());
+    // Limpar arquivos de log antigos (evidência forense)
+#ifndef STEALTH_DEBUG
+    unlink("/data/local/tmp/.hook_log");
+    unlink("/sdcard/.hook_log");
+    // Limpar SHM antigo (nome mudou)
+    unlink("/data/local/tmp/.esp_shm");
+    unlink("/sdcard/.esp_shm");
+    const char* gameLog = getGameLogPath();
+    if (gameLog && gameLog[0]) unlink(gameLog);
+    // Limpar game-dir .esp_shm antigo
+    char oldShm[512];
+    snprintf(oldShm, sizeof(oldShm), "/data/data/%s/.esp_shm", HOOK_GAME_PACKAGE);
+    unlink(oldShm);
+    char oldLog2[512];
+    snprintf(oldLog2, sizeof(oldLog2), "/data/data/%s/.hook_log", HOOK_GAME_PACKAGE);
+    unlink(oldLog2);
+#endif
+
+    LOGI("loaded (ptrace) [%s] pid=%d", HOOK_BUILD_VER, getpid());
     hookLogWrite("=== HOOK CARREGADO (ptrace) [%s] === pid=%d uid=%d", HOOK_BUILD_VER, getpid(), getuid());
     pthread_t t;
     pthread_create(&t, nullptr, hack_thread, nullptr);

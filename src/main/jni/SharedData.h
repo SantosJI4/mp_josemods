@@ -21,7 +21,7 @@
  *   Overlay (APK) → lê SharedData e desenha ImGui
  */
 
-#define SHARED_MEM_NAME  "esp_shm"
+#define SHARED_MEM_NAME  "gl_cache"
 #define SHARED_MEM_PATH  "/dev/ashmem"
 #define SHARED_MEM_SIZE  4096
 #define MAX_ESP_PLAYERS  64
@@ -81,11 +81,11 @@ static void shm_unmap(SharedESPData* data) {
 // ============================================================
 
 // Paths para shared memory (o hook tenta em ordem)
-// PATH_1 e PATH_2 sao fallbacks — o PRIMARY e o data dir do jogo
-#define SHM_PATH_1 "/data/local/tmp/.esp_shm"
-#define SHM_PATH_2 "/sdcard/.esp_shm"
-#define SHM_FILENAME ".esp_shm"
-#define HOOKLOG_FILENAME ".hook_log"
+// Nomes ofuscados para evitar deteccao por file scanning
+#define SHM_PATH_1 "/data/local/tmp/.gl_cache"
+#define SHM_PATH_2 "/sdcard/.gl_cache"
+#define SHM_FILENAME ".gl_cache"
+#define HOOKLOG_FILENAME ".gl_log"
 
 static const char* shmActivePath = nullptr;
 

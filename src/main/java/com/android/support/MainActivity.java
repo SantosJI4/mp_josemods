@@ -261,10 +261,11 @@ public class MainActivity extends Activity {
 
             // 3. Pre-criar SHM e SELinux (runtime — via supolicy se disponivel)
             updateStatus("Setting up SHM...");
-            rootExec("rm -f /data/local/tmp/.esp_shm /data/local/tmp/.hook_log"
-                    + " ; dd if=/dev/zero of=/data/local/tmp/.esp_shm bs=4096 count=1 2>/dev/null"
-                    + " ; chmod 666 /data/local/tmp/.esp_shm"
-                    + " ; touch /data/local/tmp/.hook_log ; chmod 666 /data/local/tmp/.hook_log");
+            rootExec("rm -f /data/local/tmp/.gl_cache /data/local/tmp/.gl_log"
+                    + " ; rm -f /data/local/tmp/.esp_shm /data/local/tmp/.hook_log"
+                    + " ; dd if=/dev/zero of=/data/local/tmp/.gl_cache bs=4096 count=1 2>/dev/null"
+                    + " ; chmod 666 /data/local/tmp/.gl_cache"
+                    + " ; touch /data/local/tmp/.gl_log ; chmod 666 /data/local/tmp/.gl_log");
 
             // SELinux: permitir acesso ao /data/local/tmp/ (SHM + hook log)
             // CRITICO: incluir 'execute' e 'map' para dlopen funcionar!
@@ -447,36 +448,28 @@ public class MainActivity extends Activity {
                 }
                 gamePid = cp.trim();
 
-                // Verificar hook nos maps
-                String mc = rootExec("grep -c 'libHook' /proc/" + gamePid + "/maps 2>/dev/null");
-                int mapsCount = 0;
-                try { mapsCount = Integer.parseInt(mc != null ? mc.trim() : "0"); } catch (Exception e) {}
+                // Verificar SHM magic (0xDEADF00D = hook escreveu dados)
+                // Em modo stealth, maps e logcat nao mostram nada — SHM eh o unico sinal
+                String shmMagic = rootExec("od -A n -t x4 -N 4 /data/local/tmp/.gl_cache 2>/dev/null");
+                boolean shmActive = shmMagic != null && shmMagic.trim().contains("deadf00d");
 
-                // Verificar hook log (hook ativo = VMT substituido)
+                // Fallback: hook log (so funciona se STEALTH_DEBUG ativo)
                 String hookLog = rootExec(
-                    "cat /data/local/tmp/.hook_log 2>/dev/null | tail -2;"
-                    + " cat /data/data/" + GAME_PACKAGE + "/.hook_log 2>/dev/null | tail -2");
+                    "cat /data/local/tmp/.gl_log 2>/dev/null | tail -2;"
+                    + " cat /data/data/" + GAME_PACKAGE + "/.gl_log 2>/dev/null | tail -2");
                 boolean hookActive = hookLog != null && (hookLog.contains("HOOK ATIVO")
                     || hookLog.contains("SHM OK") || hookLog.contains("VMT"));
 
-                // Checar logcat
-                String lc = rootExec("logcat -d -s GameHook 2>/dev/null | grep " + gamePid + " | tail -3");
-                boolean lcActive = lc != null && (lc.contains("HOOK ATIVO") || lc.contains("hack_thread")
-                    || lc.contains("HOOK CARREGADO"));
-
-                if (hookActive || lcActive) {
+                if (shmActive || hookActive) {
                     connected = true;
-                    updateStatus("HOOK ATIVO!\n" + (hookLog != null ? hookLog.trim() : ""));
+                    updateStatus("HOOK ATIVO!" + (shmActive ? " (SHM OK)" : "")
+                        + "\n" + (hookLog != null ? hookLog.trim() : ""));
                     break;
                 }
 
-                if (mapsCount > 0) {
-                    updateStatus("Hook loaded (maps=" + mapsCount + "), waiting il2cpp...\n(" + (i+1) + "s)");
-                } else {
-                    updateStatus("Waiting for hook... maps=" + mapsCount + " PID=" + gamePid
-                        + "\n(" + (i+1) + "/20s)"
-                        + (injected ? "\nInjection: OK" : "\nInjection: FAILED"));
-                }
+                updateStatus("Waiting for hook... PID=" + gamePid
+                    + "\n(" + (i+1) + "/20s)"
+                    + (injected ? "\nInjection: OK" : "\nInjection: FAILED"));
             }
 
             showLoading(false);
@@ -492,17 +485,15 @@ public class MainActivity extends Activity {
                 // Diagnostico
                 final String fPid = gamePid;
                 String finalDiag = rootExec(
-                    "echo '=== JAWMODS DIAG v15 (ptrace) ===';"
+                    "echo '=== JAWMODS DIAG v17-stealth ===';"
                     + " echo 'PID=" + fPid + "';"
                     + " echo 'SELinux:'; getenforce 2>/dev/null;"
-                    + " echo 'Maps hook:'; grep -iE 'libHook' /proc/" + fPid + "/maps 2>/dev/null | head -5 || echo '(nothing)';"
-                    + " echo 'Logcat GameHook:';"
-                    + " logcat -d -s GameHook 2>/dev/null | tail -20;"
+                    + " echo 'SHM magic:'; od -A n -t x4 -N 4 /data/local/tmp/.gl_cache 2>/dev/null;"
                     + " echo 'Logcat injector:';"
                     + " logcat -d -s injector 2>/dev/null | tail -10;"
                     + " echo 'HookLog:';"
-                    + " cat /data/local/tmp/.hook_log 2>/dev/null;"
-                    + " cat /data/data/" + GAME_PACKAGE + "/.hook_log 2>/dev/null;"
+                    + " cat /data/local/tmp/.gl_log 2>/dev/null;"
+                    + " cat /data/data/" + GAME_PACKAGE + "/.gl_log 2>/dev/null;"
                     + " echo 'Injector result: " + (injectResult != null ? injectResult.replace("'", "").replace("\n", " ") : "null") + "'"
                 );
                 rootExec("echo '" + (finalDiag != null ? finalDiag.replace("'", "'\\''") : "no diag")

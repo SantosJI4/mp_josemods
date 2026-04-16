@@ -67,7 +67,7 @@ static uint32_t lastWriteSeq = 0;
 
 // ============================================================
 // SharedMemory Reader — Conecta ao arquivo criado pelo hook
-// Tenta: 1) /data/data/<game>/.esp_shm, 2) /data/local/tmp/, 3) /sdcard/
+// Tenta: 1) /data/data/<game>/.gl_cache, 2) /data/local/tmp/, 3) /sdcard/
 // ============================================================
 static std::atomic<bool> readerRunning{false};
 static pthread_t readerThread = 0;
@@ -254,8 +254,8 @@ void DrawESP(int screenW, int screenH) {
 // Hook Log Reader — lê o arquivo de log do hook para diagnostico
 // Tenta: game dir, /data/local/tmp/, /sdcard/
 // ============================================================
-#define HOOK_LOG_PATH_1 "/data/local/tmp/.hook_log"
-#define HOOK_LOG_PATH_2 "/sdcard/.hook_log"
+#define HOOK_LOG_PATH_1 "/data/local/tmp/.gl_log"
+#define HOOK_LOG_PATH_2 "/sdcard/.gl_log"
 static char hookLogBuf[2048] = "Nenhum log do hook";
 static time_t hookLogLastRead = 0;
 
