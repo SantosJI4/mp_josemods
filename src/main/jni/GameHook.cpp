@@ -468,11 +468,9 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
             g_vpValid = true;
         }
 
-        // Tela (atualiza sempre — pode mudar com rotação)
-        if (fn_Screen_get_width && fn_Screen_get_height) {
-            sharedData->screenW = fn_Screen_get_width(nullptr);
-            sharedData->screenH = fn_Screen_get_height(nullptr);
-        }
+        // Tela: NÃO chamar fn_Screen_get_width/Height a cada frame —
+        // chamar il2cpp C# de dentro de um hook pode causar freeze.
+        // O tamanho já é setado uma vez em hack_thread após domain init.
     }
 
     int idx = sharedData->playerCount;
@@ -553,7 +551,22 @@ void* hack_thread(void*) {
     // Esconder nome da thread (anti-cheat enumera threads)
     prctl(PR_SET_NAME, "Binder:default", 0, 0, 0);
 
-    hookLogWrite("Thread iniciada, aguardando libil2cpp.so...");
+    // ── Criar SHM IMEDIATAMENTE (Zygisk: fd já disponível como root) ──
+    // Garante sharedData != null durante todos os stage markers abaixo.
+    if (!sharedData) {
+        shmFd = shm_create_file();
+        if (shmFd >= 0) {
+            sharedData = shm_map(shmFd);
+            if (sharedData) {
+                memset(sharedData, 0, sizeof(SharedESPData));
+                sharedData->magic = 0xDEADF00D;
+            } else {
+                close(shmFd);
+            }
+        }
+    }
+
+    hookLogWrite("Thread iniciada, aguardando libil2cpp.so... shm=%p", sharedData);
     LOGI("Hook thread iniciada, aguardando libil2cpp.so...");
 
     if (sharedData) sharedData->debugLastCall = 1; // stage 1: thread started
@@ -635,30 +648,27 @@ void* hack_thread(void*) {
 
     hookLogWrite("Game data dir: %s", getGameDataDir());
 
-    // ── Criar shared memory ──
-    hookLogWrite("Tentando shm [%s]... uid=%d gid=%d", HOOK_BUILD_VER, getuid(), getgid());
-    hookLogWrite("Paths: %s, /data/data/%s/%s, %s", SHM_PATH_1, HOOK_GAME_PACKAGE, SHM_FILENAME, SHM_PATH_2);
-
-    shmFd = shm_create_file();
-    if (shmFd < 0) {
-        LOGE("Falha ao criar shared memory: errno=%d (%s)", errno, strerror(errno));
-        hookLogWrite("FALHA shm_create_file: errno=%d (%s) uid=%d", errno, strerror(errno), getuid());
-        return nullptr;
-    }
-    hookLogWrite("shm_create_file OK: fd=%d path=%s", shmFd, shmActivePath ? shmActivePath : "???");
-
-    sharedData = shm_map(shmFd);
+    // SHM já criado no início do hack_thread.
+    // Se por algum motivo falhou lá, tenta novamente agora.
     if (!sharedData) {
-        close(shmFd);
-        LOGE("Falha ao mapear shared memory: errno=%d (%s)", errno, strerror(errno));
-        hookLogWrite("FALHA shm_map: errno=%d (%s)", errno, strerror(errno));
-        return nullptr;
+        shmFd = shm_create_file();
+        if (shmFd < 0) {
+            LOGE("Falha ao criar shared memory: errno=%d (%s)", errno, strerror(errno));
+            hookLogWrite("FALHA shm_create_file: errno=%d (%s) uid=%d", errno, strerror(errno), getuid());
+            return nullptr;
+        }
+        sharedData = shm_map(shmFd);
+        if (!sharedData) {
+            close(shmFd);
+            LOGE("Falha ao mapear shared memory: errno=%d (%s)", errno, strerror(errno));
+            hookLogWrite("FALHA shm_map: errno=%d (%s)", errno, strerror(errno));
+            return nullptr;
+        }
+        memset(sharedData, 0, sizeof(SharedESPData));
+        sharedData->magic = 0xDEADF00D;
     }
-
-    memset(sharedData, 0, sizeof(SharedESPData));
-    sharedData->magic = 0xDEADF00D;
-    LOGI("Shared memory criado em %s (magic=0xDEADF00D)", shmActivePath ? shmActivePath : "???");
-    hookLogWrite("SHM OK: path=%s magic=0xDEADF00D mmap=%p", shmActivePath ? shmActivePath : "???", sharedData);
+    LOGI("SHM OK: path=%s mmap=%p", shmActivePath ? shmActivePath : "???", sharedData);
+    hookLogWrite("SHM OK: path=%s mmap=%p", shmActivePath ? shmActivePath : "???", sharedData);
 
     // NOTA: Screen::get_width/height chamado DEPOIS do domain pronto
     // (il2cpp runtime precisa estar inicializado antes de chamar metodos)

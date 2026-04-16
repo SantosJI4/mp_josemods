@@ -307,8 +307,22 @@ public class MainActivity extends Activity {
                         }
                     });
 
+                    // Lançar Free Fire automaticamente
+                    runOnUi(new Runnable() {
+                        @Override
+                        public void run() {
+                            try {
+                                Intent ffIntent = getPackageManager().getLaunchIntentForPackage("com.dts.freefireth");
+                                if (ffIntent != null) {
+                                    ffIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                                    startActivity(ffIntent);
+                                }
+                            } catch (Exception ignored) {}
+                        }
+                    });
+
                     // Aguardar SHM magic (hook Zygisk ativo = 0xDEADF00D)
-                    updateStatus("Aguardando hook Zygisk...\n(Abra o Free Fire se ainda nÃ£o abriu)");
+                    updateStatus("Iniciando Free Fire e aguardando hook...");
                     boolean connected = false;
                     for (int i = 0; i < 60; i++) {
                         Thread.sleep(1000);
