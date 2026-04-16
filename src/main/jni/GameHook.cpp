@@ -35,8 +35,6 @@
 #include <ctime>
 #include <fcntl.h>
 #include <elf.h>
-#include <setjmp.h>
-#include <signal.h>
 #include <android/log.h>
 
 #include "Utils.h"
@@ -623,77 +621,68 @@ static void* hack_thread(void*) {
     }
 
     // Aguardar il2cpp_init() completar.
-    // libil2cpp.so carrega ANTES de il2cpp_init() rodar.
-    // Chamar domain_get antes de init = SIGSEGV.
-    // Espera progressiva: checa se domain_get retorna sem crash.
+    // IMPORTANTE: NAO usar sigsetjmp/siglongjmp — quebra o ART (signal chain).
+    // Em vez disso, esperar global-metadata.dat aparecer em maps.
+    // il2cpp_init() faz mmap do metadata file → quando aparece em maps,
+    // o runtime ja esta inicializado o suficiente pra domain_get funcionar.
     LOGI("[2/5] Aguardando il2cpp runtime inicializar...");
     hookLogWrite("[2/5] Aguardando il2cpp init...");
 
-    // Setup signal handler para capturar SIGSEGV do domain_get
-    static sigjmp_buf s_jmpBuf;
-    static volatile sig_atomic_t s_inSafeCall = 0;
-
-    struct sigaction saNew, saOldSEGV, saOldBUS;
-    memset(&saNew, 0, sizeof(saNew));
-    saNew.sa_handler = [](int) {
-        if (s_inSafeCall) siglongjmp(s_jmpBuf, 1);
-    };
-    sigemptyset(&saNew.sa_mask);
-    saNew.sa_flags = 0;
-    sigaction(SIGSEGV, &saNew, &saOldSEGV);
-    sigaction(SIGBUS, &saNew, &saOldBUS);
-
-    void *domain = nullptr;
-    for (int i = 0; i < 120; i++) {
-        LOGI("  domain_get tentativa %d/120...", i+1);
-
-        // Chamada protegida por sigsetjmp
-        s_inSafeCall = 1;
-        if (sigsetjmp(s_jmpBuf, 1) == 0) {
-            domain = p_domain_get();
-        } else {
-            // SIGSEGV capturado — il2cpp ainda nao inicializou
-            domain = nullptr;
-            if (i == 0) {
-                LOGI("  domain_get SIGSEGV capturado — il2cpp nao inicializou ainda");
-                hookLogWrite("domain_get SIGSEGV — aguardando init");
+    // Fase 1: Esperar global-metadata.dat em /proc/self/maps
+    bool metadataFound = false;
+    for (int i = 0; i < 60; i++) {
+        FILE *maps = fopen("/proc/self/maps", "r");
+        if (maps) {
+            char line[1024];
+            while (fgets(line, sizeof(line), maps)) {
+                if (strstr(line, "global-metadata.dat")) {
+                    metadataFound = true;
+                    break;
+                }
             }
+            fclose(maps);
         }
-        s_inSafeCall = 0;
-
-        if (domain) {
-            size_t sz = 0;
-            void **assemblies = nullptr;
-
-            s_inSafeCall = 1;
-            if (sigsetjmp(s_jmpBuf, 1) == 0) {
-                assemblies = p_domain_get_assemblies(domain, &sz);
-            } else {
-                assemblies = nullptr;
-                sz = 0;
-            }
-            s_inSafeCall = 0;
-
-            if (assemblies && sz > 0) {
-                LOGI("il2cpp domain PRONTO (tentativa %d): domain=%p assemblies=%zu", i+1, domain, sz);
-                hookLogWrite("il2cpp domain PRONTO (tentativa %d) assemblies=%zu", i+1, sz);
-                break;
-            }
+        if (metadataFound) {
+            LOGI("  global-metadata.dat encontrado (tentativa %d)", i+1);
+            hookLogWrite("metadata encontrado (tentativa %d)", i+1);
+            break;
         }
-        if (i >= 119) {
-            // Restaurar handler antes de sair
-            sigaction(SIGSEGV, &saOldSEGV, nullptr);
-            sigaction(SIGBUS, &saOldBUS, nullptr);
-            LOGE("il2cpp domain timeout 120s");
-            hookLogWrite("ERRO: domain timeout 120s");
-            return nullptr;
+        if (i % 5 == 0) {
+            LOGI("  aguardando global-metadata.dat... (%d/60)", i+1);
         }
         sleep(1);
     }
+    if (!metadataFound) {
+        LOGE("global-metadata.dat timeout 60s");
+        hookLogWrite("ERRO: metadata timeout");
+        return nullptr;
+    }
 
-    // Restaurar signal handler original
-    sigaction(SIGSEGV, &saOldSEGV, nullptr);
-    sigaction(SIGBUS, &saOldBUS, nullptr);
+    // Fase 2: Esperar domain ficar pronto (metadata existe, mas init pode
+    // nao ter terminado ainda — domain_get agora eh seguro de chamar)
+    sleep(3); // margem de seguranca apos metadata aparecer
+    LOGI("  Metadata encontrado + 3s margem. Tentando domain_get...");
+
+    void *domain = nullptr;
+    for (int i = 0; i < 30; i++) {
+        domain = p_domain_get();
+        if (domain) {
+            size_t sz = 0;
+            void **assemblies = p_domain_get_assemblies(domain, &sz);
+            if (assemblies && sz > 0) {
+                LOGI("il2cpp domain PRONTO (tentativa %d): domain=%p assemblies=%zu", i+1, domain, sz);
+                hookLogWrite("domain PRONTO (tentativa %d) assemblies=%zu", i+1, sz);
+                break;
+            }
+        }
+        if (i >= 29) {
+            LOGE("il2cpp domain timeout (30s apos metadata)");
+            hookLogWrite("ERRO: domain timeout 30s");
+            return nullptr;
+        }
+        LOGI("  domain wait... (%d/30)", i+1);
+        sleep(1);
+    }
 
     // Agora il2cpp runtime esta pronto — seguro chamar metodos
     LOGI("[3/5] Screen size...");
@@ -738,6 +727,8 @@ static void* hack_thread(void*) {
     hookLogWrite("playerClass = %p", playerClass);
 
     // Pegar MethodInfo* do LateUpdate
+    LOGI("  Chamando class_get_method_from_name(LateUpdate, 0)...");
+    hookLogWrite("Buscando LateUpdate MethodInfo...");
     void *onUpdateMethodInfo = p_class_get_method(playerClass, "LateUpdate", 0);
     if (!onUpdateMethodInfo) {
         LOGE("LateUpdate nao encontrado em Player");
