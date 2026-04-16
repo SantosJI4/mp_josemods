@@ -1,4 +1,4 @@
-package com.android.support;
+﻿package com.android.support;
 
 import android.app.Activity;
 import android.content.Intent;
@@ -21,9 +21,9 @@ import java.io.InputStreamReader;
 public class MainActivity extends Activity {
     private static final int OVERLAY_PERMISSION_CODE = 1234;
 
-    // ══════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     // MUDE AQUI: Package name do jogo
-    // ══════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     private static final String GAME_PACKAGE = "com.dts.freefireth";
 
     private TextView tvStatus;
@@ -64,7 +64,7 @@ public class MainActivity extends Activity {
             }
         });
 
-        // Checar permissão de overlay
+        // Checar permissÃ£o de overlay
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
             setStatus("Requesting overlay permission...");
             Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -99,7 +99,7 @@ public class MainActivity extends Activity {
     private void onStartClicked() {
         if (injecting) return;
 
-        // Verificar permissão de overlay
+        // Verificar permissÃ£o de overlay
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
             Toast.makeText(this, "Overlay permission required", Toast.LENGTH_SHORT).show();
             return;
@@ -144,374 +144,109 @@ public class MainActivity extends Activity {
         }).start();
     }
 
-    // ══════════════════════════════════════
-    // LOGICA — PTRACE INJECTION (v15)
-    // Usa injector nativo para fazer ptrace+dlopen no processo do jogo
-    // Mesmo metodo do GameGuardian e LibTool
-    // Nao precisa de Zygisk, attach-agent, ou set-debug-app
-    // ══════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // LOGICA â€” ZYGISK MODULE INSTALL (v18)
+    // Instala libzygisk.so como mÃ³dulo Magisk.
+    // O hook roda antes do anti-cheat, sem ptrace, sem arquivo no game dir.
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     private void doInjectAndStart() {
         try {
             // 1. Verificar root
             updateStatus("Checking root...");
             final String rootCheck = rootExec("id");
             if (rootCheck == null || !rootCheck.contains("uid=0")) {
-                updateStatus("No root access.\nptrace injection requires root (su).");
+                updateStatus("No root access.\nRoot (Magisk) required.");
                 resetButton();
                 return;
             }
 
-            // 2. Copiar binarios para /data/local/tmp/
-            updateStatus("Preparing files...");
+            // 2. Verificar se Magisk estÃ¡ presente
+            updateStatus("Checking Magisk...");
+            final String magiskVer = rootExec("magisk -v 2>/dev/null || echo 'not found'");
+            if (magiskVer == null || magiskVer.contains("not found")) {
+                updateStatus("Magisk not found.\nInstall Magisk first.");
+                resetButton();
+                return;
+            }
+
+            // 3. Extrair libzygisk.so do APK
+            updateStatus("Installing Zygisk module...");
             final String nativeDir = getApplicationInfo().nativeLibraryDir;
-            final String hookSrc = nativeDir + "/libgl2.so";
-            final String injSrc = nativeDir + "/libinjector.so";
-            final String tmpHook = "/data/local/tmp/libgl2.so";
-            final String tmpInjector = "/data/local/tmp/libinjector.so";
+            final String zygiskSrc = nativeDir + "/libzygisk.so";
 
-            if (!new File(hookSrc).exists()) {
-                updateStatus("libgl2.so not found.\nDid you do a clean build?");
+            if (!new File(zygiskSrc).exists()) {
+                updateStatus("libzygisk.so not found.\nRebuild the project (clean build).");
                 resetButton();
                 return;
             }
 
-            // libinjector.so e BUILD_SHARED_LIBRARY -> APK sempre empacota
-            if (!new File(injSrc).exists()) {
-                updateStatus("libinjector.so not found.\n"
-                    + "nativeDir: " + nativeDir + "\n"
-                    + "Rebuild the project (clean build).");
+            // 4. Criar estrutura do mÃ³dulo Magisk
+            final String moduleDir = "/data/adb/modules/jawmods";
+            rootExec("mkdir -p " + moduleDir + "/zygisk");
+
+            // module.prop
+            rootExec("echo 'id=jawmods\n"
+                   + "name=JawMods ESP\n"
+                   + "version=v18\n"
+                   + "versionCode=18\n"
+                   + "author=JawMods\n"
+                   + "description=Free Fire ESP Zygisk module'"
+                   + " > " + moduleDir + "/module.prop");
+
+            // Copiar .so para zygisk/arm64-v8a.so
+            rootExec("cp " + zygiskSrc + " " + moduleDir + "/zygisk/arm64-v8a.so"
+                   + " ; chmod 644 " + moduleDir + "/zygisk/arm64-v8a.so");
+
+            // Remover mÃ³dulo antigo se existir
+            rootExec("rm -f " + moduleDir + "/disable " + moduleDir + "/remove");
+
+            // 5. Verificar instalaÃ§Ã£o
+            String check = rootExec("ls -la " + moduleDir + "/zygisk/arm64-v8a.so 2>/dev/null");
+            if (check == null || !check.contains("arm64-v8a.so")) {
+                updateStatus("Failed to install module.\nCheck root access.\nDir: " + moduleDir);
                 resetButton();
                 return;
             }
 
-            // Copiar injector para /data/local/tmp/
-            rootExec("cp " + injSrc + " " + tmpInjector
-                    + " ; chmod 755 " + tmpInjector);
+            updateStatus("MÃ³dulo Zygisk instalado!\nPath: " + moduleDir + "/zygisk/arm64-v8a.so\n\n"
+                       + "AÃ‡ÃƒO NECESSÃRIA:\n"
+                       + "1. Reinicie o dispositivo\n"
+                       + "2. Abra o Free Fire\n"
+                       + "3. Volte aqui e aperte START novamente\n"
+                       + "   (sÃ³ para iniciar o overlay)");
 
-            // CRITICO: Copiar libHook.so para o nativeLibraryDir do JOGO
-            // O linker namespace do Android 7+ SÓ permite dlopen de paths
-            // dentro do nativeLibraryDir do app (e system/vendor).
-            // /data/data/ e /data/local/tmp/ NAO estao nos permitted_paths!
-            // Mesmo com setenforce 0, o linker rejeita paths fora do namespace.
-            String gameNativeDir = null;
+            // Marcar que precisa de reboot
+            final boolean needsReboot = true;
 
-            // Metodo 1: dumpsys package -> nativeLibraryDir
-            String dumpNative = rootExec(
-                "dumpsys package " + GAME_PACKAGE
-                + " | grep 'nativeLibraryDir=' | head -1 | sed 's/.*nativeLibraryDir=//' | tr -d ' \\n'");
-            if (dumpNative != null && dumpNative.trim().contains("/")) {
-                gameNativeDir = dumpNative.trim();
-            }
+            // 6. Pre-criar SHM para o hook escrever
+            rootExec("rm -f /data/local/tmp/.gl_cache /data/local/tmp/.esp_shm"
+                   + " ; dd if=/dev/zero of=/data/local/tmp/.gl_cache bs=4096 count=1 2>/dev/null"
+                   + " ; chmod 666 /data/local/tmp/.gl_cache");
 
-            // Metodo 2: Derivar do APK path
-            if (gameNativeDir == null) {
-                String apkLine = rootExec("pm path " + GAME_PACKAGE + " | head -1");
-                if (apkLine != null && apkLine.contains(":")) {
-                    String apkPath = apkLine.substring(apkLine.indexOf(':') + 1).trim();
-                    if (apkPath.endsWith("/base.apk")) {
-                        String apkDir = apkPath.replace("/base.apk", "");
-                        // Checar arm64 ou arm64-v8a
-                        String libSub = rootExec(
-                            "ls -d " + apkDir + "/lib/arm64 " + apkDir + "/lib/arm64-v8a 2>/dev/null | head -1");
-                        if (libSub != null && !libSub.trim().isEmpty()) {
-                            gameNativeDir = libSub.trim();
-                        } else {
-                            gameNativeDir = apkDir + "/lib/arm64";
-                            rootExec("mkdir -p " + gameNativeDir);
-                        }
-                    }
-                }
-            }
-
-            // Metodo 3: fallback /data/data
-            if (gameNativeDir == null) {
-                gameNativeDir = "/data/data/" + GAME_PACKAGE;
-            }
-
-            final String gameHookPath = gameNativeDir + "/libgl2.so";
-
-            // Obter UID e contexto SELinux corretos a partir de arquivo existente no dir
-            String refFile = rootExec("ls " + gameNativeDir + "/ 2>/dev/null | head -1");
-            String seCtx = "u:object_r:apk_data_file:s0"; // default para /data/app libs
-            if (refFile != null && !refFile.trim().isEmpty()) {
-                String ctx = rootExec("ls -Z " + gameNativeDir + "/" + refFile.trim()
-                    + " 2>/dev/null | awk '{print $1}'");
-                if (ctx != null && ctx.trim().contains(":")) seCtx = ctx.trim();
-            }
-
-            rootExec("cp " + hookSrc + " " + gameHookPath
-                    + " ; chmod 755 " + gameHookPath
-                    + " ; chcon " + seCtx + " " + gameHookPath);
-
-            // Tambem manter copia em /data/local/tmp/ (para SHM e fallback)
-            rootExec("cp " + hookSrc + " " + tmpHook + " ; chmod 755 " + tmpHook);
-
-            // Validar copias
-            String checkInj = rootExec("ls -la " + tmpInjector + " 2>/dev/null");
-            String checkHook = rootExec("ls -laZ " + gameHookPath + " 2>/dev/null");
-            if (checkInj == null || !checkInj.contains("libinjector")
-                || checkHook == null || !checkHook.contains("libgl2")) {
-                updateStatus("Failed to copy files.\nCheck root access.\n"
-                    + "nativeDir: " + gameNativeDir + "\n"
-                    + "hook: " + (checkHook != null ? checkHook : "null"));
-                resetButton();
-                return;
-            }
-            updateStatus("Files ready:\n" + checkHook.trim());
-
-            // 3. Pre-criar SHM e SELinux (runtime — via supolicy se disponivel)
-            updateStatus("Setting up SHM...");
-            rootExec("rm -f /data/local/tmp/.gl_cache /data/local/tmp/.gl_log"
-                    + " ; rm -f /data/local/tmp/.esp_shm /data/local/tmp/.hook_log"
-                    + " ; dd if=/dev/zero of=/data/local/tmp/.gl_cache bs=4096 count=1 2>/dev/null"
-                    + " ; chmod 666 /data/local/tmp/.gl_cache"
-                    + " ; touch /data/local/tmp/.gl_log ; chmod 666 /data/local/tmp/.gl_log");
-
-            // SELinux: permitir acesso ao /data/local/tmp/ (SHM + hook log)
-            // CRITICO: incluir 'execute' e 'map' para dlopen funcionar!
-            rootExec("magiskpolicy --live 'allow untrusted_app shell_data_file dir { search read write open create add_name getattr }' 2>/dev/null;"
-                    + " magiskpolicy --live 'allow untrusted_app shell_data_file file { read write open create getattr setattr execute map }' 2>/dev/null;"
-                    + " magiskpolicy --live 'allow untrusted_app app_data_file file { read write open create getattr execute map }' 2>/dev/null;"
-                    + " supolicy --live 'allow untrusted_app shell_data_file dir { search read write open create add_name getattr }' 2>/dev/null;"
-                    + " supolicy --live 'allow untrusted_app shell_data_file file { read write open create getattr setattr execute map }' 2>/dev/null;"
-                    + " supolicy --live 'allow untrusted_app app_data_file file { read write open create getattr execute map }' 2>/dev/null");
-            // Permitir ptrace
-            rootExec("magiskpolicy --live 'allow shell untrusted_app process { ptrace }' 2>/dev/null;"
-                    + " magiskpolicy --live 'allow init untrusted_app process { ptrace }' 2>/dev/null;"
-                    + " supolicy --live 'allow shell untrusted_app process { ptrace }' 2>/dev/null;"
-                    + " supolicy --live 'allow init untrusted_app process { ptrace }' 2>/dev/null");
-
-            // 4. Fechar e reiniciar o jogo (limpo)
-            updateStatus("Starting Free Fire...");
-            rootExec("am force-stop " + GAME_PACKAGE + " 2>/dev/null");
-            Thread.sleep(1500);
-
-            String launcherActivity = getLauncherActivity(GAME_PACKAGE);
-            if (launcherActivity != null && launcherActivity.contains("/")) {
-                rootExec("am start -n " + GAME_PACKAGE + launcherActivity + " 2>/dev/null");
-            } else {
-                rootExec("monkey -p " + GAME_PACKAGE + " -c android.intent.category.LAUNCHER 1 2>/dev/null");
-            }
-
-            // 5. Esperar PID do jogo (max 25s)
-            updateStatus("Waiting for game PID...");
-            String gamePid = "";
-            for (int i = 0; i < 25; i++) {
-                Thread.sleep(1000);
-                gamePid = rootExec("pidof " + GAME_PACKAGE + " 2>/dev/null | awk '{print $1}'");
-                if (gamePid != null && !gamePid.trim().isEmpty()) {
-                    gamePid = gamePid.trim();
-                    break;
-                }
-                updateStatus("Waiting for game PID... (" + (i+1) + "s)");
-            }
-
-            if (gamePid == null || gamePid.trim().isEmpty()) {
-                updateStatus("Game did not start (no PID after 25s).\nTry opening the game manually.");
-                resetButton();
-                return;
-            }
-
-            // 6. Esperar il2cpp carregar (3-8s depois do PID)
-            // ptrace so funciona depois q jogo tem as libs carregadas
-            updateStatus("PID=" + gamePid + "\nWaiting for libil2cpp.so...");
-            boolean il2cppLoaded = false;
-            for (int i = 0; i < 15; i++) {
-                Thread.sleep(1000);
-                String mc = rootExec("grep -c 'libil2cpp.so' /proc/" + gamePid + "/maps 2>/dev/null");
-                int count = 0;
-                try { count = Integer.parseInt(mc != null ? mc.trim() : "0"); } catch (Exception e) {}
-                if (count > 0) {
-                    il2cppLoaded = true;
-                    break;
-                }
-                // Checar se PID mudou
-                String np = rootExec("pidof " + GAME_PACKAGE + " 2>/dev/null | awk '{print $1}'");
-                if (np != null && !np.trim().isEmpty() && !np.trim().equals(gamePid)) {
-                    gamePid = np.trim();
-                }
-                updateStatus("PID=" + gamePid + "\nWaiting for libil2cpp.so... (" + (i+1) + "s)");
-            }
-
-            if (!il2cppLoaded) {
-                updateStatus("libil2cpp.so not found in maps after 15s.\n"
-                    + "Game may not be Unity/il2cpp or is still loading.\n"
-                    + "PID=" + gamePid);
-                // Continuar mesmo assim — talvez demore mais
-            }
-
-            // 7. INJECAO VIA PTRACE (LD_PRELOAD + constructor)
-            updateStatus("INJECTING via ptrace...\nPID=" + gamePid);
-
-            // Iniciar overlay ANTES da injecao (pode demorar)
+            showLoading(false);
             runOnUi(new Runnable() {
                 @Override
                 public void run() {
-                    startService(new Intent(MainActivity.this, OverlayService.class));
+                    btnStart.setVisibility(View.VISIBLE);
+                    btnStart.setEnabled(true);
+                    btnStart.setText("START OVERLAY");
+                    injecting = false;
                 }
             });
 
-            // CRITICO: setenforce 0 ANTES da injecao
-            // __loader_dlopen precisa de SELinux permissive para carregar .so
-            // de /data/local/tmp/ (shell_data_file). Mesmo com supolicy,
-            // alguns devices bloqueiam execute/map em runtime.
-            // GameGuardian tambem faz setenforce 0.
-            String prevEnforce = rootExec("getenforce 2>/dev/null");
-            rootExec("setenforce 0 2>/dev/null");
-
-            // Escrever config file com path dentro do game dir
-            // (app_data_file context = permissao total para o jogo)
-            rootExec("printf '" + gamePid + "\\n" + gameHookPath + "\\n' > /data/local/tmp/.inject_config");
-
-            // Executar via LD_PRELOAD: carrega libinjector.so no shell root,
-            // constructor le o config, faz ptrace+dlopen, e _exit()
-            String injectResult = rootExec(
-                "LD_PRELOAD=" + tmpInjector + " /system/bin/cat /dev/null 2>&1");
-            updateStatus("Injector output:\n" + (injectResult != null ? injectResult.trim() : "(null)"));
-
-            // Restaurar SELinux
-            if (prevEnforce != null && prevEnforce.trim().equalsIgnoreCase("Enforcing")) {
-                rootExec("setenforce 1 2>/dev/null");
-            }
-
-            boolean injected = injectResult != null && injectResult.contains("SUCCESSFUL");
-            // Checar se .so foi encontrado nos maps (confirma dlopen real)
-            boolean inMaps = injectResult != null && injectResult.contains("Verified:");
-
-            if (!injected || !inMaps) {
-                // Verificar se falhou por qualquer motivo indicativo de path/permissao
-                boolean shouldRetry = injectResult != null
-                    && (injectResult.contains("Permission denied") || injectResult.contains("Operation not permitted")
-                        || injectResult.contains("NOT found in maps") || injectResult.contains("FAILED")
-                        || injectResult.contains("x0=path_addr"));
-
-                if (shouldRetry) {
-                    // Tentar com setenforce 0 mantido + path /data/local/tmp/
-                    updateStatus("Retrying with permissive + /data/local/tmp/ ...");
-                    rootExec("setenforce 0 2>/dev/null");
-                    Thread.sleep(500);
-
-                    // Re-pegar PID (pode ter crashado)
-                    String np = rootExec("pidof " + GAME_PACKAGE + " 2>/dev/null | awk '{print $1}'");
-                    if (np == null || np.trim().isEmpty()) {
-                        // Jogo crashou — reiniciar
-                        updateStatus("Game crashed. Restarting...");
-                        if (launcherActivity != null && launcherActivity.contains("/")) {
-                            rootExec("am start -n " + GAME_PACKAGE + launcherActivity + " 2>/dev/null");
-                        } else {
-                            rootExec("monkey -p " + GAME_PACKAGE + " -c android.intent.category.LAUNCHER 1 2>/dev/null");
+            // Substituir o listener do botÃ£o para sÃ³ iniciar overlay no prÃ³ximo clique
+            runOnUi(new Runnable() {
+                @Override
+                public void run() {
+                    btnStart.setOnClickListener(new View.OnClickListener() {
+                        @Override
+                        public void onClick(View v) {
+                            startOverlayOnly();
                         }
-                        for (int i = 0; i < 20; i++) {
-                            Thread.sleep(1000);
-                            np = rootExec("pidof " + GAME_PACKAGE + " 2>/dev/null | awk '{print $1}'");
-                            if (np != null && !np.trim().isEmpty()) break;
-                        }
-                        if (np != null && !np.trim().isEmpty()) {
-                            gamePid = np.trim();
-                            // Esperar il2cpp
-                            for (int i = 0; i < 10; i++) {
-                                Thread.sleep(1000);
-                                String mc = rootExec("grep -c 'libil2cpp.so' /proc/" + gamePid + "/maps 2>/dev/null");
-                                int c = 0;
-                                try { c = Integer.parseInt(mc != null ? mc.trim() : "0"); } catch (Exception e) {}
-                                if (c > 0) break;
-                            }
-                        }
-                    } else {
-                        gamePid = np.trim();
-                    }
-
-                    // Retry com /data/local/tmp path (setenforce 0 ativo)
-                    rootExec("printf '" + gamePid + "\\n" + tmpHook + "\\n' > /data/local/tmp/.inject_config");
-                    injectResult = rootExec(
-                        "LD_PRELOAD=" + tmpInjector + " /system/bin/cat /dev/null 2>&1");
-                    updateStatus("Retry output:\n" + (injectResult != null ? injectResult.trim() : "(null)"));
-                    injected = injectResult != null && injectResult.contains("SUCCESSFUL");
-                    inMaps = injectResult != null && injectResult.contains("Verified:");
-
-                    // Restaurar SELinux (apos jogo ja ter o .so carregado)
-                    rootExec("setenforce 1 2>/dev/null");
+                    });
                 }
-            }
-
-            // 8. Monitorar hook (20s)
-            boolean connected = false;
-            for (int i = 0; i < 20; i++) {
-                Thread.sleep(1000);
-
-                // Checar se PID vivo
-                String cp = rootExec("pidof " + GAME_PACKAGE + " 2>/dev/null | awk '{print $1}'");
-                if (cp == null || cp.trim().isEmpty()) {
-                    updateStatus("Game crashed after injection.\n"
-                        + (injectResult != null ? injectResult.trim() : ""));
-                    continue;
-                }
-                gamePid = cp.trim();
-
-                // Verificar SHM magic (0xDEADF00D = hook escreveu dados)
-                // Em modo stealth, maps e logcat nao mostram nada — SHM eh o unico sinal
-                String shmMagic = rootExec("od -A n -t x4 -N 4 /data/local/tmp/.gl_cache 2>/dev/null");
-                boolean shmActive = shmMagic != null && shmMagic.trim().contains("deadf00d");
-
-                // Fallback: hook log (so funciona se STEALTH_DEBUG ativo)
-                String hookLog = rootExec(
-                    "cat /data/local/tmp/.gl_log 2>/dev/null | tail -2;"
-                    + " cat /data/data/" + GAME_PACKAGE + "/.gl_log 2>/dev/null | tail -2");
-                boolean hookActive = hookLog != null && (hookLog.contains("HOOK ATIVO")
-                    || hookLog.contains("SHM OK") || hookLog.contains("VMT"));
-
-                if (shmActive || hookActive) {
-                    connected = true;
-                    updateStatus("HOOK ATIVO!" + (shmActive ? " (SHM OK)" : "")
-                        + "\n" + (hookLog != null ? hookLog.trim() : ""));
-                    break;
-                }
-
-                updateStatus("Waiting for hook... PID=" + gamePid
-                    + "\n(" + (i+1) + "/20s)"
-                    + (injected ? "\nInjection: OK" : "\nInjection: FAILED"));
-            }
-
-            showLoading(false);
-            if (connected) {
-                updateStatus("Conectado! Hook ativo via ptrace.");
-                runOnUi(new Runnable() {
-                    @Override
-                    public void run() {
-                        btnStop.setVisibility(View.VISIBLE);
-                    }
-                });
-            } else {
-                // Diagnostico
-                final String fPid = gamePid;
-                String finalDiag = rootExec(
-                    "echo '=== JAWMODS DIAG v17-stealth ===';"
-                    + " echo 'PID=" + fPid + "';"
-                    + " echo 'SELinux:'; getenforce 2>/dev/null;"
-                    + " echo 'SHM magic:'; od -A n -t x4 -N 4 /data/local/tmp/.gl_cache 2>/dev/null;"
-                    + " echo 'Logcat injector:';"
-                    + " logcat -d -s injector 2>/dev/null | tail -10;"
-                    + " echo 'HookLog:';"
-                    + " cat /data/local/tmp/.gl_log 2>/dev/null;"
-                    + " cat /data/data/" + GAME_PACKAGE + "/.gl_log 2>/dev/null;"
-                    + " echo 'Injector result: " + (injectResult != null ? injectResult.replace("'", "").replace("\n", " ") : "null") + "'"
-                );
-                rootExec("echo '" + (finalDiag != null ? finalDiag.replace("'", "'\\''") : "no diag")
-                    + "' > /sdcard/jawmods_diag.txt 2>/dev/null");
-
-                updateStatus("Hook did NOT connect.\n"
-                    + "Injection: " + (injected ? "OK (dlopen success)" : "FAILED") + "\n"
-                    + (injectResult != null ? injectResult.trim().substring(0, Math.min(injectResult.trim().length(), 200)) : "(null)")
-                    + "\n\nDiag saved: /sdcard/jawmods_diag.txt");
-                runOnUi(new Runnable() {
-                    @Override
-                    public void run() {
-                        btnStop.setVisibility(View.VISIBLE);
-                    }
-                });
-            }
-
-            resetButton();
+            });
+            return;
 
         } catch (final Exception e) {
             final String err = "Fatal error: " + e.getClass().getSimpleName() + ": " + e.getMessage();
@@ -524,6 +259,65 @@ public class MainActivity extends Activity {
             updateStatus(err);
             resetButton();
         }
+    }
+
+    // Chamado apÃ³s mÃ³dulo instalado + reboot: sÃ³ inicia o overlay e monitora SHM
+    private void startOverlayOnly() {
+        if (injecting) return;
+        injecting = true;
+        btnStart.setEnabled(false);
+        showLoading(true);
+        updateStatus("Iniciando overlay...");
+
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    // Iniciar overlay
+                    runOnUi(new Runnable() {
+                        @Override
+                        public void run() {
+                            startService(new Intent(MainActivity.this, OverlayService.class));
+                        }
+                    });
+
+                    // Aguardar SHM magic (hook Zygisk ativo = 0xDEADF00D)
+                    updateStatus("Aguardando hook Zygisk...\n(Abra o Free Fire se ainda nÃ£o abriu)");
+                    boolean connected = false;
+                    for (int i = 0; i < 60; i++) {
+                        Thread.sleep(1000);
+                        String shmMagic = rootExec("od -A n -t x4 -N 4 /data/local/tmp/.gl_cache 2>/dev/null");
+                        if (shmMagic != null && shmMagic.trim().contains("deadf00d")) {
+                            connected = true;
+                            break;
+                        }
+                        updateStatus("Aguardando SHM... (" + (i+1) + "/60s)\n"
+                            + "Abra o Free Fire e aguarde o carregamento completo.");
+                    }
+
+                    showLoading(false);
+                    if (connected) {
+                        updateStatus("HOOK ZYGISK ATIVO!\nESP funcionando.");
+                        runOnUi(new Runnable() {
+                            @Override
+                            public void run() {
+                                btnStop.setVisibility(View.VISIBLE);
+                            }
+                        });
+                    } else {
+                        updateStatus("Hook nÃ£o detectado apÃ³s 60s.\n"
+                            + "Verifique:\n"
+                            + "1. MÃ³dulo Zygisk ativo no Magisk\n"
+                            + "2. Reiniciou apÃ³s instalar?\n"
+                            + "3. SHM: od -A n -t x4 -N 4 /data/local/tmp/.gl_cache");
+                    }
+                    resetButton();
+                } catch (Exception e) {
+                    updateStatus("Erro: " + e.getMessage());
+                    resetButton();
+                }
+            }
+        }).start();
     }
 
     private void updateStatus(final String text) {
@@ -547,14 +341,14 @@ public class MainActivity extends Activity {
         });
     }
 
-    // ══════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     // Helpers
-    // ══════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     private String rootExec(String cmd) {
         Process su = null;
         try {
-            // su -c "cmd" é mais robusto que piping via stdin em dispositivos Android
+            // su -c "cmd" Ã© mais robusto que piping via stdin em dispositivos Android
             // Evita confusao do su ao spawnar muitos processos rapidamente
             su = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd});
 

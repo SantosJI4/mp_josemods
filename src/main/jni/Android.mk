@@ -60,10 +60,37 @@ LOCAL_SRC_FILES := $(HOOK_FILES:$(LOCAL_PATH)/%=%)
 include $(BUILD_SHARED_LIBRARY)
 
 # ============================================================
-# MODULE 3: libinjector.so — PTRACE INJECTOR (shared library)
-# Compilado como .so para o APK empacotar (Android só extrai lib*.so)
-# Invocado via LD_PRELOAD em shell root — constructor lê config
-# e faz ptrace+dlopen no processo do jogo
+# MODULE 3: libzygisk.so — ZYGISK MODULE (Magisk)
+# Carregado pelo Magisk antes do anti-cheat inicializar.
+# ZERO ptrace, ZERO arquivo externo no game dir.
+# Entry point: postAppSpecialize() em zygisk_main.cpp
+# Instalar em: /data/adb/modules/jawmods/zygisk/arm64-v8a.so
+# ============================================================
+
+include $(CLEAR_VARS)
+LOCAL_MODULE := zygisk
+
+LOCAL_CFLAGS   := -w -Wno-error=format-security -fvisibility=hidden -fpermissive -fexceptions -DZYGISK_BUILD
+LOCAL_CPPFLAGS := -w -Wno-error=format-security -fvisibility=hidden -Werror -std=c++17
+LOCAL_CPPFLAGS += -Wno-error=c++11-narrowing -fpermissive -Wall -fexceptions -DZYGISK_BUILD
+LOCAL_LDFLAGS  += -Wl,--gc-sections,--strip-debug
+LOCAL_LDLIBS   := -llog -landroid
+LOCAL_ARM_MODE := arm
+
+LOCAL_C_INCLUDES := $(LOCAL_PATH)
+LOCAL_C_INCLUDES += $(LOCAL_PATH)/include/Utils
+LOCAL_C_INCLUDES += $(LOCAL_PATH)/include/Utils/Unity
+
+# zygisk_main.cpp (Zygisk entry) + GameHook.cpp (hook logic)
+ZYGISK_FILES := $(LOCAL_PATH)/zygisk_main.cpp
+ZYGISK_FILES += $(LOCAL_PATH)/GameHook.cpp
+
+LOCAL_SRC_FILES := $(ZYGISK_FILES:$(LOCAL_PATH)/%=%)
+
+include $(BUILD_SHARED_LIBRARY)
+
+# ============================================================
+# MODULE 4: libinjector.so — PTRACE INJECTOR (fallback)
 # ============================================================
 
 include $(CLEAR_VARS)

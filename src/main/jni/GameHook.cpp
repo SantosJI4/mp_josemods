@@ -856,6 +856,9 @@ static void* hack_thread(void*) {
 
 static bool g_hookStarted = false;
 
+// lib_main() é o entry point para injeção via ptrace (libgl2.so).
+// Em modo Zygisk, o entry point é postAppSpecialize() em zygisk_main.cpp.
+#ifndef ZYGISK_BUILD
 __attribute__((constructor))
 void lib_main() {
     LOGI("lib_main() LOADED [%s] pid=%d uid=%d", HOOK_BUILD_VER, getpid(), getuid());
@@ -907,6 +910,7 @@ void lib_main() {
     pthread_create(&t, nullptr, hack_thread, nullptr);
     pthread_detach(t);
 }
+#endif // ZYGISK_BUILD
 
 // ============================================================
 // Agent_OnAttach — Fallback (mantido por compatibilidade)
