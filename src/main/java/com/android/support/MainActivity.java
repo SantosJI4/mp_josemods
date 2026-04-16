@@ -64,7 +64,7 @@ public class MainActivity extends Activity {
             }
         });
 
-        // Checar permissÃ£o de overlay
+        // Checar permissão de overlay
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
             setStatus("Requesting overlay permission...");
             Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -73,6 +73,29 @@ public class MainActivity extends Activity {
         } else {
             setStatus("Ready to inject");
         }
+
+        // Se o módulo já está instalado, ir direto para START OVERLAY
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final boolean moduleInstalled = isModuleInstalled();
+                if (moduleInstalled) {
+                    runOnUi(new Runnable() {
+                        @Override
+                        public void run() {
+                            setStatus("Módulo Zygisk instalado.\nInicie o Free Fire e clique START OVERLAY.");
+                            btnStart.setText("START OVERLAY");
+                            btnStart.setOnClickListener(new View.OnClickListener() {
+                                @Override
+                                public void onClick(View v) {
+                                    startOverlayOnly();
+                                }
+                            });
+                        }
+                    });
+                }
+            }
+        }).start();
     }
 
     @Override
@@ -342,6 +365,16 @@ public class MainActivity extends Activity {
                 injecting = false;
             }
         });
+    }
+
+    // Verifica se o módulo Zygisk já está instalado (sem precisar de root)
+    private boolean isModuleInstalled() {
+        // Tenta via root (mais confiável)
+        String result = rootExec("test -f /data/adb/modules/jawmods/zygisk/arm64-v8a.so"
+                + " && test ! -f /data/adb/modules/jawmods/disable"
+                + " && test ! -f /data/adb/modules/jawmods/remove"
+                + " && echo YES || echo NO");
+        return result != null && result.contains("YES");
     }
 
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
