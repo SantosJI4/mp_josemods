@@ -180,25 +180,28 @@ public class MainActivity extends Activity {
                 return;
             }
 
-            // 4. Criar estrutura do mÃ³dulo Magisk
+            // 4. Criar estrutura do módulo Magisk
             final String moduleDir = "/data/adb/modules/jawmods";
             rootExec("mkdir -p " + moduleDir + "/zygisk");
 
-            // module.prop
-            rootExec("echo 'id=jawmods\n"
-                   + "name=JawMods ESP\n"
-                   + "version=v18\n"
-                   + "versionCode=18\n"
-                   + "author=JawMods\n"
-                   + "description=Free Fire ESP Zygisk module'"
+            // module.prop — usar printf para garantir newlines reais
+            // echo 'text\n' nao gera newlines, printf sim
+            rootExec("printf 'id=jawmods\\nname=JawMods ESP\\nversion=v18\\nversionCode=18\\nauthor=JawMods\\ndescription=Free Fire ESP Zygisk module\\n'"
                    + " > " + moduleDir + "/module.prop");
 
             // Copiar .so para zygisk/arm64-v8a.so
             rootExec("cp " + zygiskSrc + " " + moduleDir + "/zygisk/arm64-v8a.so"
                    + " ; chmod 644 " + moduleDir + "/zygisk/arm64-v8a.so");
 
-            // Remover mÃ³dulo antigo se existir
+            // Remover flags de disable/remove se existirem
             rootExec("rm -f " + moduleDir + "/disable " + moduleDir + "/remove");
+
+            // Limpar arquivos antigos do ptrace em /data/local/tmp/
+            rootExec("rm -f /data/local/tmp/libgl2.so"
+                   + " /data/local/tmp/libHook.so"
+                   + " /data/local/tmp/libinjector.so"
+                   + " /data/local/tmp/jshook_clip_result"
+                   + " /data/local/tmp/.gl_log");
 
             // 5. Verificar instalaÃ§Ã£o
             String check = rootExec("ls -la " + moduleDir + "/zygisk/arm64-v8a.so 2>/dev/null");
