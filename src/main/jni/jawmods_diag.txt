@@ -1,80 +1,60 @@
 === JAWMODS DIAG v15 (ptrace) ===
-PID=29457
+PID=15122
 SELinux:
 Enforcing
 Maps hook:
-77500a7000-77500ab000 r-xp 00000000 fd:23 555997                         /data/app/~~PIyqzeBPgIN3HoRigW27Eg==/com.dts.freefireth-eTsEHFwMKhHZCqYhjpx_Pw==/lib/arm64/libHook.so
-77500ba000-77500bb000 r--p 00003000 fd:23 555997                         /data/app/~~PIyqzeBPgIN3HoRigW27Eg==/com.dts.freefireth-eTsEHFwMKhHZCqYhjpx_Pw==/lib/arm64/libHook.so
-77500bb000-77500bc000 rw-p 00004000 fd:23 555997                         /data/app/~~PIyqzeBPgIN3HoRigW27Eg==/com.dts.freefireth-eTsEHFwMKhHZCqYhjpx_Pw==/lib/arm64/libHook.so
 Logcat GameHook:
-04-15 20:45:19.906 29457 29687 I GameHook:   get_transform     = 0x773b1b9f54 (base+0x9C4DF54)
-04-15 20:45:19.906 29457 29687 I GameHook:   get_position      = 0x773b1c80f4 (base+0x9C5C0F4)
-04-15 20:45:19.906 29457 29687 I GameHook:   Screen_get_width  = 0x773b180d60 (base+0x9C14D60)
-04-15 20:45:19.906 29457 29687 I GameHook:   Screen_get_height = 0x773b180d88 (base+0x9C14D88)
-04-15 20:45:19.925 29457 29687 I GameHook: Offsets: cam=0x773b17364c trans=0x773b1b9f54 pos=0x773b1c80f4
-04-15 20:45:19.925 29457 29687 I GameHook: Usando VP Matrix manual para W2S
-04-15 20:45:19.954 29457 29687 I GameHook: Game data dir: /data/data/com.dts.freefireth
-04-15 20:45:19.979 29457 29687 I GameHook: Tentando shm [v16-offsets]... uid=10432 gid=10432
-04-15 20:45:19.994 29457 29687 I GameHook: Paths: /data/local/tmp/.esp_shm, /data/data/com.dts.freefireth/.esp_shm, /sdcard/.esp_shm
-04-15 20:45:20.006 29457 29687 I GameHook: shm_create_file OK: fd=178 path=/data/local/tmp/.esp_shm
-04-15 20:45:20.006 29457 29687 I GameHook: Shared memory criado em /data/local/tmp/.esp_shm (magic=0xDEADF00D)
-04-15 20:45:20.032 29457 29687 I GameHook: SHM OK: path=/data/local/tmp/.esp_shm magic=0xDEADF00D mmap=0x78a1b1d000
-04-15 20:45:20.032 29457 29687 I GameHook: [1/5] Resolvendo il2cpp API via ELF parser...
-04-15 20:45:20.043 29457 29687 I GameHook: [1/5] Resolvendo il2cpp API via ELF...
-04-15 20:45:20.043 29457 29687 I GameHook: il2cpp path: /data/app/~~PIyqzeBPgIN3HoRigW27Eg==/com.dts.freefireth-eTsEHFwMKhHZCqYhjpx_Pw==/lib/arm64/libil2cpp.so
-04-15 20:45:20.059 29457 29687 I GameHook: il2cpp path: /data/app/~~PIyqzeBPgIN3HoRigW27Eg==/com.dts.freefireth-eTsEHFwMKhHZCqYhjpx_Pw==/lib/arm64/libil2cpp.so
-04-15 20:45:20.062 29457 29687 I GameHook: ELF resolved: domain_get=0x0 assemblies=0x0 get_image=0x0 get_name=0x0 class_from_name=0x0 get_method=0x0
-04-15 20:45:20.071 29457 29687 I GameHook: ELF: domain=0x0 class=0x0 method=0x0
-04-15 20:45:20.071 29457 29687 E GameHook: ELF resolver falhou para uma ou mais funcoes il2cpp
-04-15 20:45:20.111 29457 29687 I GameHook: ERRO: ELF resolver falhou
+04-15 21:04:12.921 15122 15400 I GameHook:   projMatrix        = 0x773b83ce2c (base+0x9C06E2C)
+04-15 21:04:12.921 15122 15400 I GameHook:   WorldToScreenPoint= 0x773b83d2d0 (base+0x9C072D0)
+04-15 21:04:12.921 15122 15400 I GameHook:   get_transform     = 0x773b883f54 (base+0x9C4DF54)
+04-15 21:04:12.921 15122 15400 I GameHook:   get_position      = 0x773b8920f4 (base+0x9C5C0F4)
+04-15 21:04:12.921 15122 15400 I GameHook:   Screen_get_width  = 0x773b84ad60 (base+0x9C14D60)
+04-15 21:04:12.921 15122 15400 I GameHook:   Screen_get_height = 0x773b84ad88 (base+0x9C14D88)
+04-15 21:04:12.939 15122 15400 I GameHook: Offsets: cam=0x773b83d64c trans=0x773b883f54 pos=0x773b8920f4
+04-15 21:04:12.939 15122 15400 I GameHook: Usando VP Matrix manual para W2S
+04-15 21:04:12.988 15122 15400 I GameHook: Game data dir: /data/data/com.dts.freefireth
+04-15 21:04:13.003 15122 15400 I GameHook: Tentando shm [v16-offsets]... uid=10433 gid=10433
+04-15 21:04:13.020 15122 15400 I GameHook: Paths: /data/local/tmp/.esp_shm, /data/data/com.dts.freefireth/.esp_shm, /sdcard/.esp_shm
+04-15 21:04:13.052 15122 15400 I GameHook: shm_create_file OK: fd=167 path=/data/local/tmp/.esp_shm
+04-15 21:04:13.052 15122 15400 I GameHook: Shared memory criado em /data/local/tmp/.esp_shm (magic=0xDEADF00D)
+04-15 21:04:13.082 15122 15400 I GameHook: SHM OK: path=/data/local/tmp/.esp_shm magic=0xDEADF00D mmap=0x78a1ae4000
+04-15 21:04:13.083 15122 15400 I GameHook: [1/5] Resolvendo il2cpp API via ELF (memoria)...
+04-15 21:04:13.172 15122 15400 I GameHook: [1/5] Resolvendo il2cpp API via ELF (memoria)...
+04-15 21:04:13.172 15122 15400 I GameHook: ELF resolved: domain_get=0x773bc21b14 assemblies=0x773bc21b20 get_image=0x773bc215d8 get_name=0x773bc22284 class_from_name=0x773bc21610 get_method=0x773bc2163c
+04-15 21:04:13.201 15122 15400 I GameHook: ELF: domain=0x773bc21b14 class=0x773bc21610 method=0x773bc2163c
+04-15 21:04:13.201 15122 15400 I GameHook: [2/5] Esperando il2cpp domain...
+04-15 21:04:13.240 15122 15400 I GameHook: [2/5] Esperando domain...
 Logcat injector:
 HookLog:
-=== HOOK CARREGADO (ptrace) [v16-offsets] === pid=29457 uid=10432
+=== HOOK CARREGADO (ptrace) [v16-offsets] === pid=15122 uid=10433
 Thread iniciada, aguardando libil2cpp.so...
 libil2cpp.so detectada
-il2cpp base = 0x773156c000
-Offsets: cam=0x773b17364c trans=0x773b1b9f54 pos=0x773b1c80f4
+il2cpp base = 0x7731c36000
+Offsets: cam=0x773b83d64c trans=0x773b883f54 pos=0x773b8920f4
 Game data dir: /data/data/com.dts.freefireth
-Tentando shm [v16-offsets]... uid=10432 gid=10432
+Tentando shm [v16-offsets]... uid=10433 gid=10433
 Paths: /data/local/tmp/.esp_shm, /data/data/com.dts.freefireth/.esp_shm, /sdcard/.esp_shm
-shm_create_file OK: fd=178 path=/data/local/tmp/.esp_shm
-SHM OK: path=/data/local/tmp/.esp_shm magic=0xDEADF00D mmap=0x78a1b1d000
-[1/5] Resolvendo il2cpp API via ELF...
-il2cpp path: /data/app/~~PIyqzeBPgIN3HoRigW27Eg==/com.dts.freefireth-eTsEHFwMKhHZCqYhjpx_Pw==/lib/arm64/libil2cpp.so
-ELF: domain=0x0 class=0x0 method=0x0
-ERRO: ELF resolver falhou
-=== HOOK CARREGADO (ptrace) [v16-offsets] === pid=20658 uid=10432
-Thread iniciada, aguardando libil2cpp.so...
-libil2cpp.so detectada
-il2cpp base = 0x77327a2000
-Offsets: cam=0x773c3a964c trans=0x773c3eff54 pos=0x773c3fe0f4
-Game data dir: /data/data/com.dts.freefireth
-Tentando shm [v16-offsets]... uid=10432 gid=10432
-Paths: /data/local/tmp/.esp_shm, /data/data/com.dts.freefireth/.esp_shm, /sdcard/.esp_shm
-shm_create_file OK: fd=137 path=/data/local/tmp/.esp_shm
-SHM OK: path=/data/local/tmp/.esp_shm magic=0xDEADF00D mmap=0x78a1b50000
-=== HOOK CARREGADO (ptrace) [v16-offsets] === pid=23765 uid=10432
-Thread iniciada, aguardando libil2cpp.so...
-libil2cpp.so detectada
-il2cpp base = 0x7731811000
-Offsets: cam=0x773b41864c trans=0x773b45ef54 pos=0x773b46d0f4
-Game data dir: /data/data/com.dts.freefireth
-Tentando shm [v16-offsets]... uid=10432 gid=10432
-Paths: /data/local/tmp/.esp_shm, /data/data/com.dts.freefireth/.esp_shm, /sdcard/.esp_shm
-shm_create_file OK: fd=147 path=/data/local/tmp/.esp_shm
+shm_create_file OK: fd=167 path=/data/local/tmp/.esp_shm
 SHM OK: path=/data/local/tmp/.esp_shm magic=0xDEADF00D mmap=0x78a1ae4000
-=== HOOK CARREGADO (ptrace) [v16-offsets] === pid=29457 uid=10432
+[1/5] Resolvendo il2cpp API via ELF (memoria)...
+ELF: domain=0x773bc21b14 class=0x773bc21610 method=0x773bc2163c
+[2/5] Esperando domain...
+=== HOOK CARREGADO (ptrace) [v16-offsets] === pid=11981 uid=10433
 Thread iniciada, aguardando libil2cpp.so...
 libil2cpp.so detectada
-il2cpp base = 0x773156c000
-Offsets: cam=0x773b17364c trans=0x773b1b9f54 pos=0x773b1c80f4
+il2cpp base = 0x7732a97000
+Offsets: cam=0x773c69e64c trans=0x773c6e4f54 pos=0x773c6f30f4
+=== HOOK CARREGADO (ptrace) [v16-offsets] === pid=15122 uid=10433
+Thread iniciada, aguardando libil2cpp.so...
+libil2cpp.so detectada
+il2cpp base = 0x7731c36000
+Offsets: cam=0x773b83d64c trans=0x773b883f54 pos=0x773b8920f4
 Game data dir: /data/data/com.dts.freefireth
-Tentando shm [v16-offsets]... uid=10432 gid=10432
+Tentando shm [v16-offsets]... uid=10433 gid=10433
 Paths: /data/local/tmp/.esp_shm, /data/data/com.dts.freefireth/.esp_shm, /sdcard/.esp_shm
-shm_create_file OK: fd=178 path=/data/local/tmp/.esp_shm
-SHM OK: path=/data/local/tmp/.esp_shm magic=0xDEADF00D mmap=0x78a1b1d000
-[1/5] Resolvendo il2cpp API via ELF...
-il2cpp path: /data/app/~~PIyqzeBPgIN3HoRigW27Eg==/com.dts.freefireth-eTsEHFwMKhHZCqYhjpx_Pw==/lib/arm64/libil2cpp.so
-ELF: domain=0x0 class=0x0 method=0x0
-ERRO: ELF resolver falhou
-Injector result: === JawMods ptrace injector v15 === Config: PID=29457 SO=/data/app/~~PIyqzeBPgIN3HoRigW27Eg==/com.dts.freefireth-eTsEHFwMKhHZCqYhjpx_Pw==/lib/arm64/libHook.so [*] Target PID: 29457 [*] Library: /data/app/~~PIyqzeBPgIN3HoRigW27Eg==/com.dts.freefireth-eTsEHFwMKhHZCqYhjpx_Pw==/lib/arm64/libHook.so [1] Attaching to process...   Attached to main thread 29457 [2] Saving registers... [3] Resolving dlopen...   Linker: /apex/com.android.runtime/bin/linker64   __loader_dlopen (ELF): remote=78b14611b0 (load_base=78b142a000 + st_value=371b0) rxp_base=78b1461000 from /apex/com.android.runtime/bin/linker64   dlopen at: 0x78b14611b0   dlopen code: [0]=a9bc7bfd [1]=f9000bf7 [4] Writing path to target stack...   Path written at: 0x7ff7a44970 (102 bytes) [5] Setting up dlopen call (loader_variant=1)...   caller_addr (x2) = 0x773472a000 [6] Executing dlopen in target...   Process stopped by signal 11   after: x0=c03e02ceaf47164f pc=0 sp=7ff7a44960   dlopen handle: 0xc03e02ceaf47164f (SUCCESS — pc=0 trap) [7] Restoring original registers... [8] Detaching... [+] INJECTION SUCCESSFUL into PID 29457   Verified: 77500a7000-77500ab000 r-xp 00000000 fd:23 555997                         /data/app/~~PIyqzeBPgIN3HoRigW27Eg==/com.dts.freefireth-eTsEHFwMKhHZCqYhjpx_Pw==/lib/arm64/libHook.so    Verified: 77500ba000-77500bb000 r--p 00003000 fd:23 555997                         /data/app/~~PIyqzeBPgIN3HoRigW27Eg==/com.dts.freefireth-eTsEHFwMKhHZCqYhjpx_Pw==/lib/arm64/libHook.so    Verified: 77500bb000-77500bc000 rw-p 00004000 fd:23 555997                         /data/app/~~PIyqzeBPgIN3HoRigW27Eg==/com.dts.freefireth-eTsEHFwMKhHZCqYhjpx_Pw==/lib/arm64/libHook.so  [+] Verified: .so in /proc/29457/maps (3 entries) [+] INJECTION SUCCESSFUL
+shm_create_file OK: fd=167 path=/data/local/tmp/.esp_shm
+SHM OK: path=/data/local/tmp/.esp_shm magic=0xDEADF00D mmap=0x78a1ae4000
+[1/5] Resolvendo il2cpp API via ELF (memoria)...
+ELF: domain=0x773bc21b14 class=0x773bc21610 method=0x773bc2163c
+[2/5] Esperando domain...
+Injector result: === JawMods ptrace injector v15 === Config: PID=15122 SO=/data/app/~~irMkrbxPGNUiC2PyVw08WQ==/com.dts.freefireth-hzSMNju2tv9DZgzHVnusqQ==/lib/arm64/libHook.so [*] Target PID: 15122 [*] Library: /data/app/~~irMkrbxPGNUiC2PyVw08WQ==/com.dts.freefireth-hzSMNju2tv9DZgzHVnusqQ==/lib/arm64/libHook.so [1] Attaching to process...   Attached to main thread 15122 [2] Saving registers... [3] Resolving dlopen...   Linker: /apex/com.android.runtime/bin/linker64   __loader_dlopen (ELF): remote=78b14611b0 (load_base=78b142a000 + st_value=371b0) rxp_base=78b1461000 from /apex/com.android.runtime/bin/linker64   dlopen at: 0x78b14611b0   dlopen code: [0]=a9bc7bfd [1]=f9000bf7 [4] Writing path to target stack...   Path written at: 0x7ff7a43f10 (102 bytes) [5] Setting up dlopen call (loader_variant=1)...   caller_addr (x2) = 0x7734df4000 [6] Executing dlopen in target...   Process stopped by signal 11   after: x0=e627e101f32f8a0d pc=0 sp=7ff7a43f00   dlopen handle: 0xe627e101f32f8a0d (SUCCESS — pc=0 trap) [7] Restoring original registers... [8] Detaching... [+] INJECTION SUCCESSFUL into PID 15122   Verified: 7764b4e000-7764b52000 r-xp 00000000 fd:23 680009                         /data/app/~~irMkrbxPGNUiC2PyVw08WQ==/com.dts.freefireth-hzSMNju2tv9DZgzHVnusqQ==/lib/arm64/libHook.so    Verified: 7764b61000-7764b62000 r--p 00003000 fd:23 680009                         /data/app/~~irMkrbxPGNUiC2PyVw08WQ==/com.dts.freefireth-hzSMNju2tv9DZgzHVnusqQ==/lib/arm64/libHook.so    Verified: 7764b62000-7764b63000 rw-p 00004000 fd:23 680009                         /data/app/~~irMkrbxPGNUiC2PyVw08WQ==/com.dts.freefireth-hzSMNju2tv9DZgzHVnusqQ==/lib/arm64/libHook.so  [+] Verified: .so in /proc/15122/maps (4 entries) [+] INJECTION SUCCESSFUL
