@@ -335,6 +335,15 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 #define OFF_Transform_get_eulerAngles 0x9C5C2B4
 #define OFF_Transform_set_eulerAngles 0x9C5C33C
 
+// Animator.GetBoneTransform(HumanBodyBones) — para pegar o Transform do bone da cabeça
+// HumanBodyBones.Head = 10
+// Player layout: offset 0x700 = NewPlayerAnimationSystemComponent*
+// NewPlayerAnimationSystemComponent base (GCommon.AnimationSystemComponent): offset 0x28 = Animator*
+#define OFF_Animator_GetBoneTransform 0x9BEE970
+#define PLAYER_ANIM_COMPONENT_OFFSET  0x700  // campo HFKJCLHCBGB na classe Player
+#define ANIM_COMPONENT_ANIMATOR_OFFSET 0x28  // campo m_Animator na base GCommon.AnimationSystemComponent
+#define HUMAN_BODY_BONE_HEAD           10    // UnityEngine.HumanBodyBones.Head
+
 // ============================================================
 // Function Pointers — resolvidos via base + offset direto
 // ============================================================
@@ -369,6 +378,8 @@ static int  (*fn_get_MaxHP)(void* player, void* method) = nullptr;
 // Aim Assist — UnityEngine.Transform
 static Vector3 (*fn_get_eulerAngles)(void* transform, void* method) = nullptr;
 static void    (*fn_set_eulerAngles)(void* transform, Vector3 euler, void* method) = nullptr;
+// Animator.GetBoneTransform(HumanBodyBones) — retorna Transform do bone da cabeça
+static void*   (*fn_GetBoneTransform)(void* animator, int32_t boneId, void* method) = nullptr;
 
 // Original LateUpdate
 static void (*orig_OnUpdate)(void* self, void* methodInfo) = nullptr;
@@ -659,12 +670,34 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     // Sanity check
     if (std::isnan(worldPos.x) || std::isnan(worldPos.y) || std::isnan(worldPos.z)) return;
 
-    // Unity humanoid pivot pode ser nos pes OU no centro do capsule.
-    // Sniper3D PersonTarget: pivot nos pes (ground level).
-    // Pés = y, Cabeça = y + ~1.75m (humano medio)
-    // Adicionamos margem embaixo (-0.05) e em cima (+0.05) para cobrir modelo
+    // ── Posição real do bone da cabeça via Animator.GetBoneTransform ──────────
+    // Path: Player[0x700] → NewPlayerAnimationSystemComponent → [0x28] → Animator
+    // Animator.GetBoneTransform(HumanBodyBones.Head = 10) → Transform → position
+    // Fallback: worldPos.y + 1.75 se o Animator ainda não carregou
     Vector3 bottomWorld(worldPos.x, worldPos.y - 0.05f, worldPos.z);
-    Vector3 topWorld(worldPos.x, worldPos.y + 1.75f, worldPos.z);
+    Vector3 topWorld;
+
+    bool gotHeadBone = false;
+    if (fn_GetBoneTransform && fn_get_position) {
+        void* animComp = *(void**)((uint8_t*)self + PLAYER_ANIM_COMPONENT_OFFSET);
+        if (animComp) {
+            void* animator = *(void**)((uint8_t*)animComp + ANIM_COMPONENT_ANIMATOR_OFFSET);
+            if (animator) {
+                void* headTransform = fn_GetBoneTransform(animator, HUMAN_BODY_BONE_HEAD, nullptr);
+                if (headTransform) {
+                    Vector3 headPos = fn_get_position(headTransform, nullptr);
+                    if (!std::isnan(headPos.x) && !std::isnan(headPos.y) && !std::isnan(headPos.z)) {
+                        topWorld = headPos;
+                        gotHeadBone = true;
+                    }
+                }
+            }
+        }
+    }
+    if (!gotHeadBone) {
+        // Fallback: estimativa por altura fixa (menos precisa)
+        topWorld = Vector3(worldPos.x, worldPos.y + 1.75f, worldPos.z);
+    }
 
     Vector3 screenBottom, screenTop;
 
@@ -822,6 +855,7 @@ void* hack_thread(void*) {
     // Aim Assist
     fn_get_eulerAngles         = RESOLVE_OFFSET(Vector3(*)(void*, void*),           OFF_Transform_get_eulerAngles);
     fn_set_eulerAngles         = RESOLVE_OFFSET(void(*)(void*, Vector3, void*),     OFF_Transform_set_eulerAngles);
+    fn_GetBoneTransform        = RESOLVE_OFFSET(void*(*)(void*, int32_t, void*),    OFF_Animator_GetBoneTransform);
 
     LOGI("Offsets resolvidos:");
     LOGI("  get_main          = %p (base+0x%X)", fn_Camera_get_main, OFF_Camera_get_main);
