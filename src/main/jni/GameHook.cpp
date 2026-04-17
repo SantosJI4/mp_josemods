@@ -173,21 +173,39 @@ static void hideFromMaps() {
 
 // ============================================================
 // ELF Symbol Resolver — resolve symbols direto da MEMÓRIA
-// Usa Program Headers (PT_DYNAMIC → DT_SYMTAB/DT_STRTAB)
-// Funciona em .so STRIPPED (sem section headers)
+// Usa DT_HASH (SysV) ou DT_GNU_HASH com lookup O(1) correto.
+// Sem scan linear — não trava em libil2cpp com milhoes de simbolos.
 // ============================================================
 
 #ifndef DT_GNU_HASH
 #define DT_GNU_HASH 0x6ffffef5
 #endif
 
+// Função de hash ELF padrão (SysV)
+static uint32_t elf_sysv_hash(const char *name) {
+    uint32_t h = 0, g;
+    for (; *name; ++name) {
+        h = (h << 4) + (uint8_t)*name;
+        if ((g = h & 0xf0000000u)) h ^= g >> 24;
+        h &= ~g;
+    }
+    return h;
+}
+
+// Função de hash GNU (djb2 modificado)
+static uint32_t elf_gnu_hash(const char *name) {
+    uint32_t h = 5381;
+    for (; *name; ++name) h = h * 33 + (uint8_t)*name;
+    return h;
+}
+
 static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
     Elf64_Ehdr *ehdr = (Elf64_Ehdr *)loadBase;
 
-    // Validar ELF
+    // Validar ELF magic
     if (ehdr->e_ident[0] != 0x7f || ehdr->e_ident[1] != 'E' ||
         ehdr->e_ident[2] != 'L'  || ehdr->e_ident[3] != 'F') {
-        LOGE("resolveElfSymbol: invalid ELF at 0x%lx", (unsigned long)loadBase);
+        LOGE("resolveElfSymbol: ELF invalido em 0x%lx", (unsigned long)loadBase);
         return 0;
     }
 
@@ -196,45 +214,28 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
     // Calcular bias (loadBase - primeiro PT_LOAD vaddr)
     uintptr_t bias = loadBase;
     for (int i = 0; i < ehdr->e_phnum; i++) {
-        if (phdrs[i].p_type == PT_LOAD) {
-            bias = loadBase - phdrs[i].p_vaddr;
-            break;
-        }
+        if (phdrs[i].p_type == PT_LOAD) { bias = loadBase - phdrs[i].p_vaddr; break; }
     }
 
     // Achar PT_DYNAMIC
     Elf64_Dyn *dyn = nullptr;
     for (int i = 0; i < ehdr->e_phnum; i++) {
-        if (phdrs[i].p_type == PT_DYNAMIC) {
-            dyn = (Elf64_Dyn *)(bias + phdrs[i].p_vaddr);
-            break;
-        }
+        if (phdrs[i].p_type == PT_DYNAMIC) { dyn = (Elf64_Dyn*)(bias + phdrs[i].p_vaddr); break; }
     }
-    if (!dyn) {
-        LOGE("resolveElfSymbol: PT_DYNAMIC nao encontrado");
-        return 0;
-    }
+    if (!dyn) { LOGE("resolveElfSymbol: PT_DYNAMIC nao encontrado"); return 0; }
 
-    // Extrair DT_SYMTAB, DT_STRTAB, DT_HASH, DT_GNU_HASH
-    Elf64_Sym *symtab = nullptr;
-    const char *strtab = nullptr;
-    uint32_t *hashTab = nullptr;
-    uint32_t *gnuHash = nullptr;
+    // Extrair ponteiros da tabela dinâmica
+    Elf64_Sym  *symtab  = nullptr;
+    const char *strtab  = nullptr;
+    uint32_t   *hashTab = nullptr; // DT_HASH  (SysV)
+    uint32_t   *gnuHash = nullptr; // DT_GNU_HASH
 
     for (Elf64_Dyn *d = dyn; d->d_tag != DT_NULL; d++) {
         switch (d->d_tag) {
-            case DT_SYMTAB:
-                symtab = (Elf64_Sym *)(bias + d->d_un.d_ptr);
-                break;
-            case DT_STRTAB:
-                strtab = (const char *)(bias + d->d_un.d_ptr);
-                break;
-            case DT_HASH:
-                hashTab = (uint32_t *)(bias + d->d_un.d_ptr);
-                break;
-            case DT_GNU_HASH:
-                gnuHash = (uint32_t *)(bias + d->d_un.d_ptr);
-                break;
+            case DT_SYMTAB:   symtab  = (Elf64_Sym*)(bias + d->d_un.d_ptr);  break;
+            case DT_STRTAB:   strtab  = (const char*)(bias + d->d_un.d_ptr); break;
+            case DT_HASH:     hashTab = (uint32_t*)(bias + d->d_un.d_ptr);   break;
+            case DT_GNU_HASH: gnuHash = (uint32_t*)(bias + d->d_un.d_ptr);   break;
         }
     }
 
@@ -243,55 +244,71 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
         return 0;
     }
 
-    // Obter contagem de símbolos via DT_HASH ou DT_GNU_HASH
-    uint32_t nSyms = 0;
+    // ── Tentativa 1: SysV hash — O(1) lookup via chain ──
     if (hashTab) {
-        // SysV hash: { nbucket, nchain } — nchain = total symbols
-        nSyms = hashTab[1];
-    } else if (gnuHash) {
-        // GNU hash: percorre TODAS as chains de todos os buckets para achar
-        // o índice máximo real. A abordagem anterior (só a chain do bucket máximo)
-        // subestimava nSyms porque chains de outros buckets podem ter índices maiores.
-        uint32_t nbuckets   = gnuHash[0];
-        uint32_t symoffset  = gnuHash[1];
-        uint32_t bloom_size = gnuHash[2];
-        // 64-bit ELF: cada entrada do bloom filter é 8 bytes (Elf64_Xword)
-        uint32_t *buckets = (uint32_t *)((uint8_t *)gnuHash + 16 + (size_t)bloom_size * 8);
+        uint32_t nbuckets = hashTab[0];
+        uint32_t nchain   = hashTab[1];
+        uint32_t *buckets = hashTab + 2;
         uint32_t *chains  = buckets + nbuckets;
-
-        uint32_t maxSym = symoffset;
-        for (uint32_t i = 0; i < nbuckets; i++) {
-            uint32_t sym = buckets[i];
-            if (sym < symoffset) continue; // bucket vazio (0) ou inválido
-            uint32_t ci = sym - symoffset;
-            // Limite de segurança contra ELF corrompido
-            for (uint32_t guard = 0; guard < 200000; guard++) {
-                if (sym > maxSym) maxSym = sym;
-                if (chains[ci] & 1u) break; // fim desta chain
-                sym++;
-                ci++;
-            }
-        }
-        nSyms = maxSym + 1;
-        LOGI("resolveElfSymbol: GNU hash nSyms=%u symoffset=%u nbuckets=%u",
-             nSyms, symoffset, nbuckets);
-    }
-
-    if (nSyms == 0) {
-        LOGE("resolveElfSymbol: sem DT_HASH/DT_GNU_HASH, nSyms=0");
-        return 0;
-    }
-
-    // Buscar símbolo
-    for (uint32_t i = 0; i < nSyms; i++) {
-        if (symtab[i].st_name && symtab[i].st_value) {
-            if (strcmp(strtab + symtab[i].st_name, symName) == 0) {
+        uint32_t h = elf_sysv_hash(symName) % nbuckets;
+        for (uint32_t i = buckets[h]; i != 0 && i < nchain; i = chains[i]) {
+            if (symtab[i].st_value &&
+                strcmp(strtab + symtab[i].st_name, symName) == 0) {
+                LOGI("resolveElfSymbol: '%s' -> 0x%lx (SysV)", symName,
+                     (unsigned long)(bias + symtab[i].st_value));
                 return bias + symtab[i].st_value;
             }
         }
+        LOGE("resolveElfSymbol: '%s' nao encontrado via SysV (nbuckets=%u nchain=%u)",
+             symName, nbuckets, nchain);
+        // Nao retorna 0 aqui — tenta GNU hash se disponivel
     }
 
-    LOGE("resolveElfSymbol: '%s' nao encontrado (%u symbols)", symName, nSyms);
+    // ── Tentativa 2: GNU hash — O(1) lookup via bloom + chain ──
+    if (gnuHash) {
+        uint32_t nbuckets    = gnuHash[0];
+        uint32_t symoffset   = gnuHash[1];
+        uint32_t bloom_size  = gnuHash[2];
+        uint32_t bloom_shift = gnuHash[3];
+        // Bloom filter: array de uint64_t para Elf64 (8 bytes por entrada)
+        uint64_t *bloom  = (uint64_t*)((uint8_t*)gnuHash + 16);
+        uint32_t *bkts   = (uint32_t*)(bloom + bloom_size);
+        uint32_t *chains = bkts + nbuckets;
+
+        uint32_t h = elf_gnu_hash(symName);
+
+        // Bloom filter: descarta simbolos definitivamente ausentes
+        uint64_t bw   = bloom[(h >> 6) % bloom_size];
+        uint32_t bit1 = h & 63;
+        uint32_t bit2 = (h >> bloom_shift) & 63;
+        if (!((bw >> bit1) & 1u) || !((bw >> bit2) & 1u)) {
+            LOGE("resolveElfSymbol: '%s' rejeitado bloom GNU", symName);
+            return 0;
+        }
+
+        uint32_t symIdx = bkts[h % nbuckets];
+        if (symIdx < symoffset) {
+            LOGE("resolveElfSymbol: '%s' GNU bucket vazio (symIdx=%u off=%u)",
+                 symName, symIdx, symoffset);
+            return 0;
+        }
+
+        uint32_t *c = chains + (symIdx - symoffset);
+        for (uint32_t idx = symIdx; ; idx++, c++) {
+            if (((*c ^ h) & ~1u) == 0 &&
+                symtab[idx].st_value &&
+                strcmp(strtab + symtab[idx].st_name, symName) == 0) {
+                LOGI("resolveElfSymbol: '%s' -> 0x%lx (GNU)", symName,
+                     (unsigned long)(bias + symtab[idx].st_value));
+                return bias + symtab[idx].st_value;
+            }
+            if (*c & 1u) break; // fim da chain
+        }
+        LOGE("resolveElfSymbol: '%s' nao encontrado na GNU chain", symName);
+        return 0;
+    }
+
+    LOGE("resolveElfSymbol: '%s' sem DT_HASH nem DT_GNU_HASH", symName);
     return 0;
 }
 
