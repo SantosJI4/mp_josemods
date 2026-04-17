@@ -448,8 +448,6 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     g_lastCallMs = nowMs;
 
     if (newFrame) {
-        // Reset player count no HOOK, não depende do overlay
-        sharedData->playerCount = 0;
         g_frameId++;
         sharedData->debugLastCall = 10;
 
@@ -457,9 +455,19 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
         g_cachedCamera = fn_Camera_get_main ? fn_Camera_get_main(nullptr) : nullptr;
         sharedData->debugLastCall = 11;
 
+        // CRITICO: só resetar playerCount quando temos câmera válida.
+        // Se Camera.get_main retorna null neste frame, mantemos os dados
+        // do frame anterior visíveis no overlay em vez de zerar tudo.
+        if (g_cachedCamera) {
+            sharedData->playerCount = 0;
+        } else {
+            // sem câmera: retornar cedo, dados do frame anterior permanecem
+            return;
+        }
+
         // VP Matrix — SEMPRE atualiza (captura FOV atual: scope vs hip-fire)
         g_vpValid = false;
-        if (useManualW2S && g_cachedCamera && fn_get_worldToCameraMatrix && fn_get_projectionMatrix) {
+        if (useManualW2S && fn_get_worldToCameraMatrix && fn_get_projectionMatrix) {
             Matrix4x4 viewMat = fn_get_worldToCameraMatrix(g_cachedCamera, nullptr);
             sharedData->debugLastCall = 12;
             Matrix4x4 projMat = fn_get_projectionMatrix(g_cachedCamera, nullptr);
@@ -467,10 +475,6 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
             MultiplyMatrix(projMat, viewMat, g_vpMatrix);
             g_vpValid = true;
         }
-
-        // Tela: NÃO chamar fn_Screen_get_width/Height a cada frame —
-        // chamar il2cpp C# de dentro de um hook pode causar freeze.
-        // O tamanho já é setado uma vez em hack_thread após domain init.
     }
 
     int idx = sharedData->playerCount;
@@ -559,7 +563,8 @@ void* hack_thread(void*) {
             sharedData = shm_map(shmFd);
             if (sharedData) {
                 memset(sharedData, 0, sizeof(SharedESPData));
-                sharedData->magic = 0xDEADF00D;
+                sharedData->magic        = 0xDEADF00D;
+                sharedData->debugLastCall = 1; // stage 1: SHM criado, thread rodando
             } else {
                 close(shmFd);
             }
@@ -568,8 +573,6 @@ void* hack_thread(void*) {
 
     hookLogWrite("Thread iniciada, aguardando libil2cpp.so... shm=%p", sharedData);
     LOGI("Hook thread iniciada, aguardando libil2cpp.so...");
-
-    if (sharedData) sharedData->debugLastCall = 1; // stage 1: thread started
 
     // ── Aguardar il2cpp carregar ──
     while (!isLibraryLoaded("libil2cpp.so")) {
@@ -733,8 +736,9 @@ void* hack_thread(void*) {
 
     if (sharedData) sharedData->debugLastCall = 5; // stage 5: waiting metadata
     // Fase 1: Esperar global-metadata.dat em /proc/self/maps
+    // Timeout reduzido para 30s (era 60s) — FF carrega rapidamente
     bool metadataFound = false;
-    for (int i = 0; i < 60; i++) {
+    for (int i = 0; i < 30; i++) {
         FILE *maps = fopen("/proc/self/maps", "r");
         if (maps) {
             char line[1024];
@@ -751,26 +755,23 @@ void* hack_thread(void*) {
             hookLogWrite("metadata encontrado (tentativa %d)", i+1);
             break;
         }
-        if (i % 5 == 0) {
-            LOGI("  aguardando global-metadata.dat... (%d/60)", i+1);
-        }
+        LOGI("  aguardando global-metadata.dat... (%d/30)", i+1);
         sleep(1);
     }
     if (!metadataFound) {
         if (sharedData) sharedData->debugLastCall = 95; // stage 95: metadata timeout
-        LOGE("global-metadata.dat timeout 60s");
-        hookLogWrite("ERRO: metadata timeout");
+        LOGE("global-metadata.dat timeout 30s");
+        hookLogWrite("ERRO: metadata timeout 30s");
         return nullptr;
     }
     if (sharedData) sharedData->debugLastCall = 6; // stage 6: metadata found
 
-    // Fase 2: Esperar domain ficar pronto (metadata existe, mas init pode
-    // nao ter terminado ainda — domain_get agora eh seguro de chamar)
-    sleep(3); // margem de seguranca apos metadata aparecer
-    LOGI("  Metadata encontrado + 3s margem. Tentando domain_get...");
+    // Fase 2: Esperar domain ficar pronto.
+    // Sem sleep(3) fixo — verifica direto com retries curtos.
+    LOGI("  Metadata encontrado. Tentando domain_get...");
 
     void *domain = nullptr;
-    for (int i = 0; i < 30; i++) {
+    for (int i = 0; i < 15; i++) {
         domain = p_domain_get();
         if (domain) {
             size_t sz = 0;
@@ -782,13 +783,13 @@ void* hack_thread(void*) {
             }
         }
         if (sharedData) sharedData->debugLastCall = 7; // stage 7: waiting domain
-        if (i >= 29) {
+        if (i >= 14) {
             if (sharedData) sharedData->debugLastCall = 97; // stage 97: domain timeout
-            LOGE("il2cpp domain timeout (30s apos metadata)");
-            hookLogWrite("ERRO: domain timeout 30s");
+            LOGE("il2cpp domain timeout (15s apos metadata)");
+            hookLogWrite("ERRO: domain timeout 15s");
             return nullptr;
         }
-        LOGI("  domain wait... (%d/30)", i+1);
+        LOGI("  domain wait... (%d/15)", i+1);
         sleep(1);
     }
 
