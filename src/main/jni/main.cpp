@@ -59,9 +59,10 @@ static float linePositionX = 0.5f;
 // ============================================================
 // Aim Assist State
 // ============================================================
-static bool  aimAssist    = false;
-static float aimSmooth    = 0.15f;   // Velocidade de suavização (0.02–0.5)
-static float aimFovDeg    = 30.0f;   // Cone de ativação em graus
+static bool  aimAssist       = false;
+static float aimSpeed        = 2.5f;  // Graus por frame (sensi do aim)
+static float aimFovDeg       = 30.0f; // Cone de ativação em graus
+static float aimDeadzone     = 1.5f;  // Ângulo mínimo para ativar (anti-jitter)
 
 // SharedMemory (leitura do hook injetado no jogo)
 static SharedESPData* sharedData = nullptr;
@@ -192,9 +193,10 @@ void DrawESP(int screenW, int screenH) {
     sharedData->espEnabled = 1;
 
     // ── Sincronizar configurações do Aim Assist com o hook ──────────────────
-    sharedData->aimAssistEnabled = aimAssist ? 1 : 0;
-    sharedData->aimAssistSmooth  = aimSmooth;
-    sharedData->aimAssistFovDeg  = aimFovDeg;
+    sharedData->aimAssistEnabled  = aimAssist ? 1 : 0;
+    sharedData->aimAssistSpeed    = aimSpeed;
+    sharedData->aimAssistFovDeg   = aimFovDeg;
+    sharedData->aimAssistDeadzone = aimDeadzone;
     // ────────────────────────────────────────────────────────────────────────
 
     if (!esp) return;
@@ -501,21 +503,29 @@ void DrawMenu() {
         if (locked)
             ImGui::TextColored(green, "[HEAD LOCK]");
         else
-            ImGui::TextColored(textDim, "[procurando...]");
+            ImGui::TextColored(textDim, "[buscando...]");
 
         ImGui::Spacing();
         ImGui::PushItemWidth(-1);
 
-        if (ImGui::SliderFloat("##aimsmooth", &aimSmooth, 0.02f, 0.50f, "Smooth: %.2f")) {
-            if (sharedData) sharedData->aimAssistSmooth = aimSmooth;
+        // ── Sensi (velocidade do puxão em graus/frame) ──
+        if (ImGui::SliderFloat("##aimspeed", &aimSpeed, 0.5f, 8.0f, "Sensi: %.1f deg/frame")) {
+            if (sharedData) sharedData->aimAssistSpeed = aimSpeed;
         }
+
+        // ── Cone de FOV ──
         if (ImGui::SliderFloat("##aimfov", &aimFovDeg, 5.0f, 60.0f, "FOV Cone: %.0f deg")) {
             if (sharedData) sharedData->aimAssistFovDeg = aimFovDeg;
         }
 
+        // ── Deadzone (anti-jitter) ──
+        if (ImGui::SliderFloat("##aimdz", &aimDeadzone, 0.0f, 5.0f, "Deadzone: %.1f deg")) {
+            if (sharedData) sharedData->aimAssistDeadzone = aimDeadzone;
+        }
+
         ImGui::PopItemWidth();
         ImGui::Spacing();
-        ImGui::TextColored(textDim, "Smooth baixo = mais legit | FOV menor = mais preciso");
+        ImGui::TextColored(textDim, "Sensi baixa = mais suave | FOV menor = mais seletivo | Deadzone evita tremida");
     }
     // ────────────────────────────────────────────────────────────────────────
 

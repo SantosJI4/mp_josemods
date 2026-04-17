@@ -391,9 +391,9 @@ static void*   g_camTransform      = nullptr;  // Transform da câmera (atualiza
 static Vector3 g_aimTargetWorld{0.0f, 0.0f, 0.0f}; // Posição 3D da cabeça do melhor alvo
 static float   g_aimBestScreenDist = 1e9f;     // Distância de tela ao centro (menor = melhor)
 static bool    g_aimHasTarget      = false;    // Alvo válido neste frame
-static float   g_aimPitch          = 0.0f;     // Pitch suavizado atual (graus)
-static float   g_aimYaw            = 0.0f;     // Yaw suavizado atual (graus)
-static bool    g_aimInitialized    = false;    // Se já lemos a rotação inicial da câmera
+// NOTA: NÃO há estado acumulado de pitch/yaw.
+// Lemos os euler angles REAIS da câmera a cada frame e aplicamos apenas um delta.
+// Isso garante que o input do jogador nunca seja ignorado.
 // ───────────────────────────────────────────────────────────────────────────
 
 // ============================================================
@@ -547,62 +547,78 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
             g_vpValid = true;
         }
 
-        // ── Aim Assist: Aplicar rotação suave da câmera (dados do frame anterior) ──
-        // Roda em LateUpdate (depois do Update), então sobrescreve a câmera do jogo.
+        // ── Aim Assist: Aplicar correção de ângulo (dados do frame anterior) ──
+        // Roda em LateUpdate: o game controller já setou a câmera no Update.
+        // Lemos a rotação ATUAL (inclui input do jogador), calculamos um delta
+        // pequeno em direção à cabeça do alvo e escrevemos de volta.
+        // O jogador mantém controle total — apenas sentimos um "puxão" sutil.
         g_camTransform = fn_get_transform ? fn_get_transform(g_cachedCamera, nullptr) : nullptr;
 
         if (sharedData->aimAssistEnabled && g_camTransform &&
             g_aimHasTarget && fn_get_eulerAngles && fn_set_eulerAngles) {
 
-            Vector3 camPos = fn_get_position(g_camTransform, nullptr);
+            // 1. Ler rotação ATUAL da câmera (inclui input do jogador neste frame)
+            Vector3 curEuler = fn_get_eulerAngles(g_camTransform, nullptr);
+            Vector3 camPos   = fn_get_position(g_camTransform, nullptr);
 
             float dx = g_aimTargetWorld.x - camPos.x;
             float dy = g_aimTargetWorld.y - camPos.y;
             float dz = g_aimTargetWorld.z - camPos.z;
-            float horizDist = sqrtf(dx * dx + dz * dz);
+            float hd = sqrtf(dx * dx + dz * dz);
 
-            if (horizDist > 0.01f) {
+            if (hd > 0.01f) {
+                // 2. Calcular ângulos ideais para apontar à cabeça
                 float targetYaw   =  atan2f(dx, dz) * (180.0f / (float)M_PI);
-                float targetPitch = -atan2f(dy, horizDist) * (180.0f / (float)M_PI);
-
-                // Clampar pitch para evitar gimbal lock
+                float targetPitch = -atan2f(dy, hd)  * (180.0f / (float)M_PI);
                 if (targetPitch >  89.0f) targetPitch =  89.0f;
                 if (targetPitch < -89.0f) targetPitch = -89.0f;
 
-                if (!g_aimInitialized) {
-                    // Primeira ativação: ler rotação real da câmera para evitar salto
-                    Vector3 curEuler = fn_get_eulerAngles(g_camTransform, nullptr);
-                    g_aimPitch = curEuler.x;
-                    g_aimYaw   = curEuler.y;
-                    g_aimInitialized = true;
-                }
+                // 3. Normalizar pitch atual: Unity usa [0,360), precisamos de [-180,180)
+                float curPitch = curEuler.x;
+                if (curPitch > 180.0f) curPitch -= 360.0f;
+                float curYaw = curEuler.y;
 
-                // Normalizar yaw: garantir caminho mais curto (evitar rotação de 360°)
-                float yawDiff = targetYaw - g_aimYaw;
+                // 4. Calcular delta pelo caminho mais curto
+                float pitchDiff = targetPitch - curPitch;
+                float yawDiff   = targetYaw   - curYaw;
                 while (yawDiff >  180.0f) yawDiff -= 360.0f;
                 while (yawDiff < -180.0f) yawDiff += 360.0f;
 
-                float smooth = sharedData->aimAssistSmooth;
-                if (smooth < 0.01f) smooth = 0.01f;
-                if (smooth > 1.0f)  smooth = 1.0f;
+                // 5. Deadzone: se já está muito perto, não aplica (evita micro-jitter)
+                float dz_ang = sharedData->aimAssistDeadzone;
+                if (dz_ang < 0.0f) dz_ang = 0.0f;
+                bool inDeadzone = (fabsf(pitchDiff) < dz_ang && fabsf(yawDiff) < dz_ang);
 
-                // Interpolação suave (magnetismo de cabeça — não trava instantâneo)
-                g_aimPitch += (targetPitch - g_aimPitch) * smooth;
-                g_aimYaw   += yawDiff * smooth;
+                if (!inDeadzone) {
+                    // 6. Clamp: máximo de X graus por frame ("sensi" do aim)
+                    float maxDeg = sharedData->aimAssistSpeed;
+                    if (maxDeg < 0.1f)  maxDeg = 0.1f;
+                    if (maxDeg > 10.0f) maxDeg = 10.0f;
 
-                // Manter yaw no intervalo [0, 360)
-                while (g_aimYaw >= 360.0f) g_aimYaw -= 360.0f;
-                while (g_aimYaw <    0.0f) g_aimYaw += 360.0f;
+                    auto clampF = [](float v, float lim) -> float {
+                        return v > lim ? lim : (v < -lim ? -lim : v);
+                    };
 
-                Vector3 newEuler(g_aimPitch, g_aimYaw, 0.0f);
-                fn_set_eulerAngles(g_camTransform, newEuler, nullptr);
-                sharedData->aimAssistHasTarget = 1;
+                    float newPitch = curPitch + clampF(pitchDiff, maxDeg);
+                    float newYaw   = curYaw   + clampF(yawDiff,   maxDeg);
+
+                    // 7. Sanitizar
+                    if (newPitch >  89.0f) newPitch =  89.0f;
+                    if (newPitch < -89.0f) newPitch = -89.0f;
+                    while (newYaw >= 360.0f) newYaw -= 360.0f;
+                    while (newYaw <    0.0f) newYaw += 360.0f;
+
+                    // 8. Converter pitch de volta para [0,360) (convenção Unity)
+                    float outPitch = newPitch < 0.0f ? newPitch + 360.0f : newPitch;
+
+                    // 9. Preservar Z (roll) e escrever
+                    fn_set_eulerAngles(g_camTransform, Vector3(outPitch, newYaw, curEuler.z), nullptr);
+                    sharedData->aimAssistHasTarget = 1;
+                } else {
+                    sharedData->aimAssistHasTarget = 1; // dentro da cabeça = travado
+                }
             }
         } else {
-            // Sem alvo ou aim desativado: resetar estado de inicialização
-            if (!sharedData->aimAssistEnabled) {
-                g_aimInitialized = false;
-            }
             sharedData->aimAssistHasTarget = 0;
         }
 

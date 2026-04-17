@@ -53,8 +53,9 @@ struct SharedESPData {
     // ── Aim Assist (Head Magnetism) ──────────────────────────────────────────
     // Overlay escreve configurações → hook aplica rotação suave da câmera
     volatile int aimAssistEnabled;  // Toggle: 0 = off, 1 = on
-    float        aimAssistSmooth;   // Fator de interpolação por frame (0.02–0.5)
+    float        aimAssistSpeed;    // Máx graus por frame (0.1–8.0). "Sensi" do aim.
     float        aimAssistFovDeg;   // Cone de ativação em graus (ex: 30)
+    float        aimAssistDeadzone; // Ângulo mínimo para ativar correção (evita jitter)
     volatile int aimAssistHasTarget;// Hook escreve 1 quando há alvo no cone
     // ────────────────────────────────────────────────────────────────────────
 
