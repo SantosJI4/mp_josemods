@@ -682,9 +682,10 @@ void* hack_thread(void*) {
 
     #undef RESOLVE_OFFSET
 
-    // VP Matrix disponivel
-    useManualW2S = true;
-    LOGI("Usando VP Matrix manual para W2S");
+    // Usar WorldToScreenPoint direto (mais preciso — evita erro de VP matrix manual)
+    // Estamos na Unity thread (LateUpdate hook), sem risco de deadlock.
+    useManualW2S = false;
+    LOGI("Usando WorldToScreenPoint direto para W2S (posicionamento preciso)");
 
     // Verificar se tudo resolveu
     if (!fn_Camera_get_main || !fn_get_transform || !fn_get_position) {
@@ -728,34 +729,54 @@ void* hack_thread(void*) {
     LOGI("[1/5] Resolvendo il2cpp API via ELF (memoria)...");
     hookLogWrite("[1/5] Resolvendo il2cpp API via ELF (memoria)...");
 
-    // Resolver as funcoes il2cpp necessarias direto da memoria
-    // (PT_DYNAMIC → DT_SYMTAB/DT_STRTAB — funciona em .so stripped)
-    auto p_domain_get = (void*(*)())
-        resolveElfSymbol(il2cpp_base, "il2cpp_domain_get");
-    auto p_domain_get_assemblies = (void**(*)(const void*, size_t*))
-        resolveElfSymbol(il2cpp_base, "il2cpp_domain_get_assemblies");
-    auto p_assembly_get_image = (const void*(*)(const void*))
-        resolveElfSymbol(il2cpp_base, "il2cpp_assembly_get_image");
-    auto p_image_get_name = (const char*(*)(void*))
-        resolveElfSymbol(il2cpp_base, "il2cpp_image_get_name");
-    auto p_class_from_name = (void*(*)(const void*, const char*, const char*))
-        resolveElfSymbol(il2cpp_base, "il2cpp_class_from_name");
-    auto p_class_get_method = (void*(*)(void*, const char*, int))
-        resolveElfSymbol(il2cpp_base, "il2cpp_class_get_method_from_name");
+    // Resolver as funcoes il2cpp via ELF com retry.
+    // libil2cpp.so pode estar parcialmente mapeada logo apos ser detectada —
+    // o linker faz mmap lazy dos segmentos. Retentativas com sleep garantem
+    // que todas as paginas PT_DYNAMIC estao presentes antes da leitura.
+    uintptr_t addr_domain_get = 0, addr_assemblies = 0, addr_get_image = 0;
+    uintptr_t addr_image_name = 0, addr_class_from_name2 = 0, addr_class_method = 0;
 
-    LOGI("ELF resolved: domain_get=%p assemblies=%p get_image=%p get_name=%p class_from_name=%p get_method=%p",
-         (void*)p_domain_get, (void*)p_domain_get_assemblies,
-         (void*)p_assembly_get_image, (void*)p_image_get_name,
-         (void*)p_class_from_name, (void*)p_class_get_method);
-    hookLogWrite("ELF: domain=%p class=%p method=%p",
-         (void*)p_domain_get, (void*)p_class_from_name, (void*)p_class_get_method);
+    for (int elfTry = 0; elfTry < 6; elfTry++) {
+        if (elfTry > 0) {
+            LOGI("ELF retry %d/5 (aguardando mapeamento completo)...", elfTry);
+            hookLogWrite("ELF retry %d/5...", elfTry);
+            if (sharedData) sharedData->debugLastCall = 3; // volta a stage 3
+            sleep(2);
+            // Re-buscar base por seguranca
+            uintptr_t newBase = findLibrary("libil2cpp.so");
+            if (newBase) il2cpp_base = newBase;
+        }
+        addr_domain_get      = resolveElfSymbol(il2cpp_base, "il2cpp_domain_get");
+        addr_assemblies      = resolveElfSymbol(il2cpp_base, "il2cpp_domain_get_assemblies");
+        addr_get_image       = resolveElfSymbol(il2cpp_base, "il2cpp_assembly_get_image");
+        addr_image_name      = resolveElfSymbol(il2cpp_base, "il2cpp_image_get_name");
+        addr_class_from_name2= resolveElfSymbol(il2cpp_base, "il2cpp_class_from_name");
+        addr_class_method    = resolveElfSymbol(il2cpp_base, "il2cpp_class_get_method_from_name");
+
+        LOGI("ELF try %d: domain=%p asm=%p img=%p name=%p class=%p method=%p",
+             elfTry + 1,
+             (void*)addr_domain_get, (void*)addr_assemblies, (void*)addr_get_image,
+             (void*)addr_image_name, (void*)addr_class_from_name2, (void*)addr_class_method);
+        hookLogWrite("ELF try %d: domain=%p class=%p method=%p",
+             elfTry + 1, (void*)addr_domain_get, (void*)addr_class_from_name2, (void*)addr_class_method);
+
+        if (addr_domain_get && addr_assemblies && addr_get_image &&
+            addr_image_name && addr_class_from_name2 && addr_class_method) break;
+    }
+
+    auto p_domain_get            = (void*(*)())                              addr_domain_get;
+    auto p_domain_get_assemblies = (void**(*)(const void*, size_t*))         addr_assemblies;
+    auto p_assembly_get_image    = (const void*(*)(const void*))             addr_get_image;
+    auto p_image_get_name        = (const char*(*)(void*))                   addr_image_name;
+    auto p_class_from_name       = (void*(*)(const void*, const char*, const char*)) addr_class_from_name2;
+    auto p_class_get_method      = (void*(*)(void*, const char*, int))       addr_class_method;
 
     if (sharedData) sharedData->debugLastCall = 4; // stage 4: ELF resolve done
     if (!p_domain_get || !p_domain_get_assemblies || !p_assembly_get_image ||
         !p_image_get_name || !p_class_from_name || !p_class_get_method) {
         if (sharedData) sharedData->debugLastCall = 94; // stage 94: ELF resolve failed
         LOGE("ELF resolver falhou para uma ou mais funcoes il2cpp");
-        hookLogWrite("ERRO: ELF resolver falhou");
+        hookLogWrite("ERRO: ELF resolver falhou apos 6 tentativas");
         return nullptr;
     }
 
