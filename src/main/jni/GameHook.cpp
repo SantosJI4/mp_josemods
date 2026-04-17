@@ -349,19 +349,10 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 // List<ColliderInfo> layout IL2CPP: _items (array*) @ +0x10, _size @ +0x18
 // array de objetos: elemento[i] em _items[i] (ponteiro), cada objeto: m_collider@0x10, m_hitBoxType@0x18
 // HitPart.Head = 0
-#define OFF_get_HeadCollider          0x676FEB4
-#define OFF_Collider_get_bounds       0x9CB78E4
-#define BOUNDS_CENTER_OFFSET          0x10   // m_Center dentro de struct Bounds (retornado por valor em x1)
-#define LIST_ITEMS_OFFSET             0x10   // _items (array*) no List<T> IL2CPP
-#define LIST_SIZE_OFFSET              0x18   // _size no List<T> IL2CPP
-#define ARRAY_FIRST_ELEM_OFFSET       0x20   // primeiro elemento no array IL2CPP
-#define COLLIDER_INFO_COLLIDER_OFFSET 0x10   // m_collider no ColliderInfo
-#define COLLIDER_INFO_HITPART_OFFSET  0x18   // m_hitBoxType no ColliderInfo
-#define HITPART_HEAD                  0      // PlayerColliderChecker.HitPart.Head = 0
-// PlayerColliderChecker é MonoBehaviour: obtido via Component.GetComponent(Type)
-// Para simplificar, usamos fallback ao bone se o checker não estiver em cache ainda
-// O checker é encontrado percorrendo os components do gameObject do player
-// Offset do campo m_colliderInfoList no PlayerColliderChecker = 0x20
+#define OFF_get_HeadCollider               0x676FEB4
+// get_bounds() retorna Bounds (24 bytes) via SRET x8 — ABI incorreta para ponteiro direto.
+// get_bounds_Injected(out Bounds& ret) recebe o ponteiro em x1 como parâmetro normal → correto.
+#define OFF_Collider_get_bounds_Injected  0x9CB794C
 
 // ============================================================
 // Function Pointers — resolvidos via base + offset direto
@@ -402,7 +393,8 @@ static void*   (*fn_GetBoneTransform)(void* animator, int32_t boneId, void* meth
 // Collider.get_bounds() — retorna Bounds por valor (passado por ponteiro hidden em x8 na ABI ARM64)
 typedef struct { float cx, cy, cz; float ex, ey, ez; } BoundsVal;
 static void*   (*fn_get_HeadCollider)(void* player, void* method) = nullptr;
-static void    (*fn_Collider_get_bounds)(void* collider, BoundsVal* outBounds, void* method) = nullptr;
+// _Injected: assinatura nativa real — sem SRET, ponteiro de saída em x1
+static void    (*fn_Collider_get_bounds_Injected)(void* collider, BoundsVal* outBounds, void* method) = nullptr;
 
 // Original LateUpdate
 static void (*orig_OnUpdate)(void* self, void* methodInfo) = nullptr;
@@ -707,11 +699,12 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     // P3: worldPos.y + 1.75 (estimativa fixa — fallback de segurança)
 
     // ── P1: Head collider — hitbox real de colisão/dano ─────────────────────
-    if (!gotHead && fn_get_HeadCollider && fn_Collider_get_bounds) {
+    // Usa get_bounds_Injected (out Bounds& ret) — ponteiro de saída em x1, sem SRET.
+    if (!gotHead && fn_get_HeadCollider && fn_Collider_get_bounds_Injected) {
         void* headCollider = fn_get_HeadCollider(self, nullptr);
         if (headCollider) {
             BoundsVal bounds{};
-            fn_Collider_get_bounds(headCollider, &bounds, nullptr);
+            fn_Collider_get_bounds_Injected(headCollider, &bounds, nullptr);
             if (!std::isnan(bounds.cx) && !std::isnan(bounds.cy) && !std::isnan(bounds.cz) &&
                 (bounds.cx != 0.0f || bounds.cy != 0.0f || bounds.cz != 0.0f)) {
                 topWorld = Vector3(bounds.cx, bounds.cy, bounds.cz);
@@ -900,8 +893,8 @@ void* hack_thread(void*) {
     fn_get_eulerAngles         = RESOLVE_OFFSET(Vector3(*)(void*, void*),           OFF_Transform_get_eulerAngles);
     fn_set_eulerAngles         = RESOLVE_OFFSET(void(*)(void*, Vector3, void*),     OFF_Transform_set_eulerAngles);
     fn_GetBoneTransform        = RESOLVE_OFFSET(void*(*)(void*, int32_t, void*),    OFF_Animator_GetBoneTransform);
-    fn_get_HeadCollider        = RESOLVE_OFFSET(void*(*)(void*, void*),              OFF_get_HeadCollider);
-    fn_Collider_get_bounds     = RESOLVE_OFFSET(void(*)(void*, BoundsVal*, void*),  OFF_Collider_get_bounds);
+    fn_get_HeadCollider              = RESOLVE_OFFSET(void*(*)(void*, void*),             OFF_get_HeadCollider);
+    fn_Collider_get_bounds_Injected  = RESOLVE_OFFSET(void(*)(void*, BoundsVal*, void*),  OFF_Collider_get_bounds_Injected);
 
     LOGI("Offsets resolvidos:");
     LOGI("  get_main          = %p (base+0x%X)", fn_Camera_get_main, OFF_Camera_get_main);
