@@ -344,6 +344,25 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 #define ANIM_COMPONENT_ANIMATOR_OFFSET 0x28  // campo m_Animator na base GCommon.AnimationSystemComponent
 #define HUMAN_BODY_BONE_HEAD           10    // UnityEngine.HumanBodyBones.Head
 
+// PlayerColliderChecker — hitbox real da cabeça (igual o servidor usa para dano)
+// Collider.get_bounds() retorna Bounds por valor: { m_Center @ +0x10, m_Extents @ +0x1C }
+// List<ColliderInfo> layout IL2CPP: _items (array*) @ +0x10, _size @ +0x18
+// array de objetos: elemento[i] em _items[i] (ponteiro), cada objeto: m_collider@0x10, m_hitBoxType@0x18
+// HitPart.Head = 0
+#define OFF_get_HeadCollider          0x676FEB4
+#define OFF_Collider_get_bounds       0x9CB78E4
+#define BOUNDS_CENTER_OFFSET          0x10   // m_Center dentro de struct Bounds (retornado por valor em x1)
+#define LIST_ITEMS_OFFSET             0x10   // _items (array*) no List<T> IL2CPP
+#define LIST_SIZE_OFFSET              0x18   // _size no List<T> IL2CPP
+#define ARRAY_FIRST_ELEM_OFFSET       0x20   // primeiro elemento no array IL2CPP
+#define COLLIDER_INFO_COLLIDER_OFFSET 0x10   // m_collider no ColliderInfo
+#define COLLIDER_INFO_HITPART_OFFSET  0x18   // m_hitBoxType no ColliderInfo
+#define HITPART_HEAD                  0      // PlayerColliderChecker.HitPart.Head = 0
+// PlayerColliderChecker é MonoBehaviour: obtido via Component.GetComponent(Type)
+// Para simplificar, usamos fallback ao bone se o checker não estiver em cache ainda
+// O checker é encontrado percorrendo os components do gameObject do player
+// Offset do campo m_colliderInfoList no PlayerColliderChecker = 0x20
+
 // ============================================================
 // Function Pointers — resolvidos via base + offset direto
 // ============================================================
@@ -380,6 +399,10 @@ static Vector3 (*fn_get_eulerAngles)(void* transform, void* method) = nullptr;
 static void    (*fn_set_eulerAngles)(void* transform, Vector3 euler, void* method) = nullptr;
 // Animator.GetBoneTransform(HumanBodyBones) — retorna Transform do bone da cabeça
 static void*   (*fn_GetBoneTransform)(void* animator, int32_t boneId, void* method) = nullptr;
+// Collider.get_bounds() — retorna Bounds por valor (passado por ponteiro hidden em x8 na ABI ARM64)
+typedef struct { float cx, cy, cz; float ex, ey, ez; } BoundsVal;
+static void*   (*fn_get_HeadCollider)(void* player, void* method) = nullptr;
+static void    (*fn_Collider_get_bounds)(void* collider, BoundsVal* outBounds, void* method) = nullptr;
 
 // Original LateUpdate
 static void (*orig_OnUpdate)(void* self, void* methodInfo) = nullptr;
@@ -670,15 +693,35 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     // Sanity check
     if (std::isnan(worldPos.x) || std::isnan(worldPos.y) || std::isnan(worldPos.z)) return;
 
-    // ── Posição real do bone da cabeça via Animator.GetBoneTransform ──────────
-    // Path: Player[0x700] → NewPlayerAnimationSystemComponent → [0x28] → Animator
-    // Animator.GetBoneTransform(HumanBodyBones.Head = 10) → Transform → position
-    // Fallback: worldPos.y + 1.75 se o Animator ainda não carregou
+    // ── Posição real da cabeça: 3 camadas de fallback ────────────────────────
+    // Prioridade 1: PlayerColliderChecker — hitbox exata que o servidor usa para headshot
+    // Prioridade 2: Animator.GetBoneTransform(Head) — bone visual
+    // Prioridade 3: worldPos.y + 1.75 — estimativa fixa
     Vector3 bottomWorld(worldPos.x, worldPos.y - 0.05f, worldPos.z);
     Vector3 topWorld;
+    bool gotHead = false;
 
-    bool gotHeadBone = false;
-    if (fn_GetBoneTransform && fn_get_position) {
+    // ── Posição da cabeça: 3 camadas de precisão ─────────────────────────────
+    // P1: get_HeadCollider() → bounds.center  (hitbox exata registrada pelo servidor)
+    // P2: Animator.GetBoneTransform(Head=10) → position (bone visual, muito preciso)
+    // P3: worldPos.y + 1.75 (estimativa fixa — fallback de segurança)
+
+    // ── P1: Head collider — hitbox real de colisão/dano ─────────────────────
+    if (!gotHead && fn_get_HeadCollider && fn_Collider_get_bounds) {
+        void* headCollider = fn_get_HeadCollider(self, nullptr);
+        if (headCollider) {
+            BoundsVal bounds{};
+            fn_Collider_get_bounds(headCollider, &bounds, nullptr);
+            if (!std::isnan(bounds.cx) && !std::isnan(bounds.cy) && !std::isnan(bounds.cz) &&
+                (bounds.cx != 0.0f || bounds.cy != 0.0f || bounds.cz != 0.0f)) {
+                topWorld = Vector3(bounds.cx, bounds.cy, bounds.cz);
+                gotHead = true;
+            }
+        }
+    }
+
+    // ── P2: Head bone via Animator (bone visual, fallback do collider) ───────
+    if (!gotHead && fn_GetBoneTransform && fn_get_position) {
         void* animComp = *(void**)((uint8_t*)self + PLAYER_ANIM_COMPONENT_OFFSET);
         if (animComp) {
             void* animator = *(void**)((uint8_t*)animComp + ANIM_COMPONENT_ANIMATOR_OFFSET);
@@ -688,14 +731,15 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
                     Vector3 headPos = fn_get_position(headTransform, nullptr);
                     if (!std::isnan(headPos.x) && !std::isnan(headPos.y) && !std::isnan(headPos.z)) {
                         topWorld = headPos;
-                        gotHeadBone = true;
+                        gotHead = true;
                     }
                 }
             }
         }
     }
-    if (!gotHeadBone) {
-        // Fallback: estimativa por altura fixa (menos precisa)
+
+    if (!gotHead) {
+        // ── P3: Estimativa fixa ─────────────────────────────────────────────
         topWorld = Vector3(worldPos.x, worldPos.y + 1.75f, worldPos.z);
     }
 
@@ -856,6 +900,8 @@ void* hack_thread(void*) {
     fn_get_eulerAngles         = RESOLVE_OFFSET(Vector3(*)(void*, void*),           OFF_Transform_get_eulerAngles);
     fn_set_eulerAngles         = RESOLVE_OFFSET(void(*)(void*, Vector3, void*),     OFF_Transform_set_eulerAngles);
     fn_GetBoneTransform        = RESOLVE_OFFSET(void*(*)(void*, int32_t, void*),    OFF_Animator_GetBoneTransform);
+    fn_get_HeadCollider        = RESOLVE_OFFSET(void*(*)(void*, void*),              OFF_get_HeadCollider);
+    fn_Collider_get_bounds     = RESOLVE_OFFSET(void(*)(void*, BoundsVal*, void*),  OFF_Collider_get_bounds);
 
     LOGI("Offsets resolvidos:");
     LOGI("  get_main          = %p (base+0x%X)", fn_Camera_get_main, OFF_Camera_get_main);
