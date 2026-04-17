@@ -208,9 +208,24 @@ void DrawESP(int screenW, int screenH) {
     ImVec2 screenTopLine = ImVec2(screenW * linePositionX, 0.0f);
     auto* draw = ImGui::GetBackgroundDrawList();
 
+    // Verificar se há pelo menos um alvo válido na tela
+    bool hasTarget = false;
+    for (int i = 0; i < count; i++) {
+        const ESPEntry& e = sharedData->players[i];
+        if (!e.valid) continue;
+        if (e.distance > espMaxDistance) continue;
+        if (e.curHp <= 0) continue;  // morto
+        hasTarget = true;
+        break;
+    }
+    if (!hasTarget) return;
+
     for (int i = 0; i < count; i++) {
         const ESPEntry& entry = sharedData->players[i];
         if (!entry.valid) continue;
+
+        // Ignorar players mortos (HP <= 0)
+        if (entry.curHp <= 0) continue;
 
         // Filtro de distância
         if (entry.distance > espMaxDistance) continue;
