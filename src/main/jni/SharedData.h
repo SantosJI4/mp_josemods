@@ -32,8 +32,11 @@ struct ESPEntry {
     float bottomX, bottomY, bottomZ; // Posição de tela da base do player
     float distance;               // Distância do player
     int   team;                   // ID do time
-    float health;                 // Vida
+    float health;                 // Vida (legado)
     bool  valid;                  // Entrada válida
+    int   curHp;                  // HP atual
+    int   maxHp;                  // HP máximo
+    bool  knocked;                // Player está derrubado/sangrando
 };
 
 struct SharedESPData {

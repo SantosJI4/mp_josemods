@@ -195,6 +195,15 @@ void DrawESP(int screenW, int screenH) {
 
     if (count <= 0 || count > MAX_ESP_PLAYERS) return;
 
+    // Escala de resolução: o hook usa Screen.width/height do jogo (pode ser 720p)
+    // enquanto o overlay desenha na surface nativa do device (ex: 1080p).
+    // Sem scaling, as caixas aparecem ao lado/fora dos players.
+    int gameW = sharedData->screenW;
+    int gameH = sharedData->screenH;
+    if (gameW <= 0 || gameH <= 0) return;
+    float scaleX = (float)screenW / (float)gameW;
+    float scaleY = (float)screenH / (float)gameH;
+
     ImU32 color = ImGui::ColorConvertFloat4ToU32(espLineColor);
     ImVec2 screenTopLine = ImVec2(screenW * linePositionX, 0.0f);
     auto* draw = ImGui::GetBackgroundDrawList();
@@ -206,10 +215,16 @@ void DrawESP(int screenW, int screenH) {
         // Filtro de distância
         if (entry.distance > espMaxDistance) continue;
 
+        // Escalar coordenadas do espaço do jogo para o espaço do overlay
+        float rawTopX    = entry.topX    * scaleX;
+        float rawTopY    = entry.topY    * scaleY;
+        float rawBottomX = entry.bottomX * scaleX;
+        float rawBottomY = entry.bottomY * scaleY;
+
         // topY = screen Y da cabeca, bottomY = screen Y dos pes
         // Em screen coords: topY < bottomY (Y cresce pra baixo)
-        float top = fminf(entry.topY, entry.bottomY);
-        float bot = fmaxf(entry.topY, entry.bottomY);
+        float top = fminf(rawTopY, rawBottomY);
+        float bot = fmaxf(rawTopY, rawBottomY);
         float boxHeight = bot - top;
         if (boxHeight < 2.0f) continue;
 
@@ -217,7 +232,7 @@ void DrawESP(int screenW, int screenH) {
         float boxWidth = boxHeight * 0.45f;
 
         // Centro X: media entre top e bottom (perspectiva)
-        float centerX = (entry.topX + entry.bottomX) * 0.5f;
+        float centerX = (rawTopX + rawBottomX) * 0.5f;
 
         // Box com margem minima
         float padY = boxHeight * 0.03f;
@@ -225,23 +240,63 @@ void DrawESP(int screenW, int screenH) {
         ImVec2 boxMin = ImVec2(centerX - halfW, top - padY);
         ImVec2 boxMax = ImVec2(centerX + halfW, bot + padY);
 
+        // Cor: vermelho se knocked, branco se normal
+        ImU32 boxColor = entry.knocked
+            ? IM_COL32(255, 0, 0, 255)
+            : color;
+
         // Box
         if (drawEnemyBox) {
-            draw->AddRect(boxMin, boxMax, color, 1.0f, 15, 1.5f);
+            draw->AddRect(boxMin, boxMax, boxColor, 1.0f, 15, 1.5f);
+        }
+
+        // Barra de HP: lado esquerdo do box, vertical
+        {
+            float hpRatio = (entry.maxHp > 0)
+                ? (float)entry.curHp / (float)entry.maxHp
+                : 1.0f;
+            if (hpRatio < 0.0f) hpRatio = 0.0f;
+            if (hpRatio > 1.0f) hpRatio = 1.0f;
+
+            float barX   = boxMin.x - 4.0f;
+            float barTop = boxMin.y;
+            float barBot = boxMax.y;
+            float barH   = barBot - barTop;
+
+            // Fundo da barra (cinza escuro)
+            draw->AddRectFilled(
+                ImVec2(barX - 2.0f, barTop),
+                ImVec2(barX,        barBot),
+                IM_COL32(40, 40, 40, 200));
+
+            // Preenchimento: verde → amarelo → vermelho por ratio
+            ImU32 hpColor;
+            if (hpRatio > 0.5f)
+                hpColor = IM_COL32(
+                    (int)((1.0f - hpRatio) * 2.0f * 255), 255, 0, 220);
+            else
+                hpColor = IM_COL32(
+                    255, (int)(hpRatio * 2.0f * 255), 0, 220);
+
+            float fillTop = barTop + barH * (1.0f - hpRatio);
+            draw->AddRectFilled(
+                ImVec2(barX - 2.0f, fillTop),
+                ImVec2(barX,        barBot),
+                hpColor);
         }
 
         // Snap line: from top-center of screen to center of body
         if (drawSnapLine) {
             float bodyCenterY = (top + bot) * 0.5f;
             draw->AddLine(screenTopLine,
-                         ImVec2(centerX, bodyCenterY), color, 1.2f);
+                         ImVec2(centerX, bodyCenterY), boxColor, 1.2f);
         }
 
         // Distancia embaixo do box
         if (drawDistance) {
             char distText[16];
             snprintf(distText, sizeof(distText), "%.0fm", entry.distance);
-            draw->AddText(ImVec2(centerX - 12, bot + padY + 2), color, distText);
+            draw->AddText(ImVec2(centerX - 12, bot + padY + 2), boxColor, distText);
         }
     }
 
@@ -387,10 +442,12 @@ void DrawMenu() {
 // Overlay Draw Callback - Chamado a cada frame pelo Overlay
 // ============================================================
 void onOverlayDraw(int screenW, int screenH) {
-    // Escrever dimensoes de tela no SHM — fonte confiavel (Android window system).
-    // O hook nao pode chamar Screen.get_width/height com seguranca de thread.
-    // O overlay ja sabe o tamanho real da tela e repassa para o hook via SHM.
-    if (sharedData && shmConnected.load()) {
+    // Gravar dimensoes como fallback SOMENTE se o hook ainda nao inicializou.
+    // Quando o hook esta ativo, ele sobrescreve screenW/H com a resolucao
+    // interna do jogo (Screen.width/height), que pode ser menor que a surface
+    // do overlay (ex: jogo em 720p, overlay em 1080p).
+    // Assim o overlay pode escalar corretamente as coordenadas W2S.
+    if (sharedData && shmConnected.load() && sharedData->screenW <= 0) {
         sharedData->screenW = screenW;
         sharedData->screenH = screenH;
     }

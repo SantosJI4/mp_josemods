@@ -327,6 +327,9 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 #define OFF_Screen_get_height       0x9C14D88
 #define OFF_IsLocalPlayer           0x67558A4
 #define OFF_IsLocalTeammate         0x6789BF8
+#define OFF_get_CurHP               0x67CDD24
+#define OFF_get_MaxHP               0x67CDE1C
+#define OFF_IsKnockedDownBleed      0x1150  // offset do campo bool no objeto Player
 
 // ============================================================
 // Function Pointers — resolvidos via base + offset direto
@@ -356,6 +359,8 @@ static bool (*fn_IsLocalPlayer)(void* player, void* method) = nullptr;
 // IsLocalTeammate(bool includeLocalPlayer) — true = e aliado (ou o proprio player se bool=true)
 // Offset: COW.GamePlay.Player::IsLocalTeammate(bool) = 0x6789BF8
 static bool (*fn_IsLocalTeammate)(void* player, bool includeLocal, void* method) = nullptr;
+static int  (*fn_get_CurHP)(void* player, void* method) = nullptr;
+static int  (*fn_get_MaxHP)(void* player, void* method) = nullptr;
 
 // Original LateUpdate
 static void (*orig_OnUpdate)(void* self, void* methodInfo) = nullptr;
@@ -501,6 +506,18 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
             return;
         }
 
+        // Resolução interna do jogo — pode ser menor que a surface do overlay
+        // (Free Fire reduz res interna em grafico baixo/medio)
+        // Atualiza sharedData->screenW/H para o overlay escalar as coordenadas W2S
+        if (fn_Screen_get_width && fn_Screen_get_height) {
+            int gw = fn_Screen_get_width(nullptr);
+            int gh = fn_Screen_get_height(nullptr);
+            if (gw > 0 && gh > 0) {
+                sharedData->screenW = gw;
+                sharedData->screenH = gh;
+            }
+        }
+
         // VP Matrix — SEMPRE atualiza (captura FOV atual: scope vs hip-fire)
         g_vpValid = false;
         if (useManualW2S && fn_get_worldToCameraMatrix && fn_get_projectionMatrix) {
@@ -585,6 +602,16 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     entry.health = 100.0f;
     entry.valid = true;
 
+    // HP via chamada direta il2cpp
+    int curHp = fn_get_CurHP ? fn_get_CurHP(self, nullptr) : 100;
+    int maxHp = fn_get_MaxHP ? fn_get_MaxHP(self, nullptr) : 100;
+    if (maxHp <= 0) maxHp = 100;
+    entry.curHp  = curHp;
+    entry.maxHp  = maxHp;
+
+    // Knocked: campo bool IsKnockedDownBleed a offset 0x1150 do objeto Player
+    entry.knocked = *(bool*)((uint8_t*)self + OFF_IsKnockedDownBleed);
+
     sharedData->playerCount = idx + 1;
     sharedData->magic = 0xDEADF00D;
     sharedData->writeSeq.fetch_add(1, std::memory_order_release);
@@ -668,6 +695,8 @@ void* hack_thread(void*) {
     fn_Screen_get_height       = RESOLVE_OFFSET(int(*)(void*),                     OFF_Screen_get_height);
     fn_IsLocalPlayer           = RESOLVE_OFFSET(bool(*)(void*, void*),             OFF_IsLocalPlayer);
     fn_IsLocalTeammate         = RESOLVE_OFFSET(bool(*)(void*, bool, void*),        OFF_IsLocalTeammate);
+    fn_get_CurHP               = RESOLVE_OFFSET(int(*)(void*, void*),               OFF_get_CurHP);
+    fn_get_MaxHP               = RESOLVE_OFFSET(int(*)(void*, void*),               OFF_get_MaxHP);
 
     LOGI("Offsets resolvidos:");
     LOGI("  get_main          = %p (base+0x%X)", fn_Camera_get_main, OFF_Camera_get_main);
