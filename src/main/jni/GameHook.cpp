@@ -47,7 +47,7 @@
 // STEALTH CONFIG — desativar logging e traces em release
 // Comentar a linha abaixo para build de RELEASE (sem log)
 // ============================================================
-//#define STEALTH_DEBUG  // ← DESCOMENTADO = modo debug com logs
+#define STEALTH_DEBUG  // ← DESCOMENTADO = modo debug com logs
 
 #ifdef STEALTH_DEBUG
   #define HOOK_TAG "GameHook"
