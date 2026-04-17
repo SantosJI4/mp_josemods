@@ -300,7 +300,7 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 #define OFF_Screen_get_width        0x9C14D60
 #define OFF_Screen_get_height       0x9C14D88
 #define OFF_IsLocalPlayer           0x67558A4
-#define OFF_get_TeamIndex           0x676CC94
+#define OFF_IsLocalTeammate         0x6789BF8
 
 // ============================================================
 // Function Pointers — resolvidos via base + offset direto
@@ -327,11 +327,9 @@ static bool useManualW2S = true;
 
 // IsLocalPlayer — filtra o proprio jogador do ESP
 static bool (*fn_IsLocalPlayer)(void* player, void* method) = nullptr;
-// get_TeamIndex — retorna indice do time do player (mesmo time = aliado)
-static int  (*fn_get_TeamIndex)(void* player, void* method) = nullptr;
-// Cache do teamIndex do local player (setado na primeira chamada IsLocalPlayer=true)
-// INT_MIN = nao inicializado (evita colisao com teamIndex real que pode ser 0 ou negativo)
-static int  g_localTeamIndex = INT_MIN;
+// IsLocalTeammate(bool includeLocalPlayer) — true = e aliado (ou o proprio player se bool=true)
+// Offset: COW.GamePlay.Player::IsLocalTeammate(bool) = 0x6789BF8
+static bool (*fn_IsLocalTeammate)(void* player, bool includeLocal, void* method) = nullptr;
 
 // Original LateUpdate
 static void (*orig_OnUpdate)(void* self, void* methodInfo) = nullptr;
@@ -444,12 +442,7 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     // Sempre manter magic ativo para overlay detectar
     sharedData->magic = 0xDEADF00D;
 
-    // Reset team cache (pedido pelo overlay via botão "Reset Self")
-    if (sharedData->resetSelf) {
-        g_localTeamIndex = INT_MIN;
-        sharedData->resetSelf = 0;
-        LOGI("Team cache resetado pelo overlay");
-    }
+    // resetSelf reservado (nao necessario com IsLocalTeammate)
 
     // espEnabled reservado para futuro; hook sempre processa players
 
@@ -507,19 +500,12 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     int screenW = sharedData->screenW;
     if (screenW <= 0 || screenH <= 0) return;
 
-    // ── Filtrar local player (eu mesmo) + teammates ──
-    if (fn_IsLocalPlayer && fn_IsLocalPlayer(self, nullptr)) {
-        // Aproveitar para cachear o teamIndex do local player
-        if (g_localTeamIndex == INT_MIN && fn_get_TeamIndex) {
-            g_localTeamIndex = fn_get_TeamIndex(self, nullptr);
-        }
-        return; // nunca desenhar ESP em si mesmo
-    }
-    // Filtrar teammates: mesmo teamIndex que o local player = aliado, skip
-    if (g_localTeamIndex != INT_MIN && fn_get_TeamIndex) {
-        int myTeam = fn_get_TeamIndex(self, nullptr);
-        if (myTeam == g_localTeamIndex) return;
-    }
+    // ── Filtrar eu mesmo + aliados ──
+    // IsLocalTeammate(true) = inclui o proprio jogador + todos os aliados
+    // Uma unica chamada, sem cache, sem race condition
+    if (fn_IsLocalTeammate && fn_IsLocalTeammate(self, true, nullptr)) return;
+    // Fallback: se IsLocalTeammate nao estiver disponivel, pelo menos filtra self
+    if (!fn_IsLocalTeammate && fn_IsLocalPlayer && fn_IsLocalPlayer(self, nullptr)) return;
 
     // ── Pegar transform do player ──
     sharedData->debugLastCall = 20 + idx;
@@ -655,7 +641,7 @@ void* hack_thread(void*) {
     fn_Screen_get_width        = RESOLVE_OFFSET(int(*)(void*),                     OFF_Screen_get_width);
     fn_Screen_get_height       = RESOLVE_OFFSET(int(*)(void*),                     OFF_Screen_get_height);
     fn_IsLocalPlayer           = RESOLVE_OFFSET(bool(*)(void*, void*),             OFF_IsLocalPlayer);
-    fn_get_TeamIndex           = RESOLVE_OFFSET(int(*)(void*, void*),              OFF_get_TeamIndex);
+    fn_IsLocalTeammate         = RESOLVE_OFFSET(bool(*)(void*, bool, void*),        OFF_IsLocalTeammate);
 
     LOGI("Offsets resolvidos:");
     LOGI("  get_main          = %p (base+0x%X)", fn_Camera_get_main, OFF_Camera_get_main);
