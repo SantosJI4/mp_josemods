@@ -5,12 +5,13 @@ import string
 import hashlib
 import time
 from datetime import datetime, timedelta
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 
 app = Flask(__name__)
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "keys.db")
+DB_PATH   = os.path.join(os.path.dirname(__file__), "keys.db")
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "jawmods-admin-2026")
+PANEL_DIR   = os.path.dirname(__file__)
 
 # ══════════════════════════════════════
 # Database
@@ -32,9 +33,16 @@ def init_db():
             created_at TEXT NOT NULL,
             expires_at TEXT NOT NULL,
             used INTEGER DEFAULT 0,
+            paused INTEGER DEFAULT 0,
             note TEXT DEFAULT ''
         )
     """)
+    # Migração: adicionar coluna paused se não existir (banco antigo)
+    try:
+        conn.execute("ALTER TABLE keys ADD COLUMN paused INTEGER DEFAULT 0")
+        conn.commit()
+    except Exception:
+        pass
     conn.commit()
     conn.close()
 
@@ -78,6 +86,11 @@ def validate_key():
     if not row:
         conn.close()
         return jsonify({"valid": False, "error": "Key not found"})
+
+    # Check paused
+    if row["paused"]:
+        conn.close()
+        return jsonify({"valid": False, "error": "Key is paused"})
 
     # Check expiration
     expires_at = datetime.fromisoformat(row["expires_at"])
@@ -144,10 +157,134 @@ def admin_list():
         return jsonify({"error": "Unauthorized"}), 401
 
     conn = get_db()
-    rows = conn.execute("SELECT key_value, hwid, duration_hours, created_at, expires_at, used, note FROM keys ORDER BY id DESC LIMIT 100").fetchall()
+    rows = conn.execute("SELECT key_value, hwid, duration_hours, created_at, expires_at, used, paused, note FROM keys ORDER BY id DESC LIMIT 500").fetchall()
     conn.close()
 
-    return jsonify({"keys": [dict(r) for r in rows]})
+    now = datetime.utcnow()
+    result = []
+    for r in rows:
+        d = dict(r)
+        expires = datetime.fromisoformat(d["expires_at"])
+        if d["paused"]:
+            d["status"] = "paused"
+        elif now > expires:
+            d["status"] = "expired"
+        else:
+            d["status"] = "active"
+        d["remaining_seconds"] = max(0, int((expires - now).total_seconds())) if d["status"] == "active" else 0
+        result.append(d)
+
+    return jsonify({"keys": result})
+
+
+@app.route("/admin/delete", methods=["POST"])
+def admin_delete():
+    auth = request.headers.get("Authorization", "")
+    if auth != "Bearer " + ADMIN_TOKEN:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    data = request.get_json(silent=True) or {}
+    key_value = data.get("key", "").strip().upper()
+    if not key_value:
+        return jsonify({"error": "Missing key"}), 400
+
+    conn = get_db()
+    conn.execute("DELETE FROM keys WHERE key_value = ?", (key_value,))
+    conn.commit()
+    conn.close()
+    return jsonify({"deleted": True, "key": key_value})
+
+
+@app.route("/admin/pause", methods=["POST"])
+def admin_pause():
+    auth = request.headers.get("Authorization", "")
+    if auth != "Bearer " + ADMIN_TOKEN:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    data = request.get_json(silent=True) or {}
+    key_value = data.get("key", "").strip().upper()
+    if not key_value:
+        return jsonify({"error": "Missing key"}), 400
+
+    conn = get_db()
+    conn.execute("UPDATE keys SET paused = 1 WHERE key_value = ?", (key_value,))
+    conn.commit()
+    conn.close()
+    return jsonify({"paused": True, "key": key_value})
+
+
+@app.route("/admin/resume", methods=["POST"])
+def admin_resume():
+    auth = request.headers.get("Authorization", "")
+    if auth != "Bearer " + ADMIN_TOKEN:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    data = request.get_json(silent=True) or {}
+    key_value = data.get("key", "").strip().upper()
+    if not key_value:
+        return jsonify({"error": "Missing key"}), 400
+
+    conn = get_db()
+    conn.execute("UPDATE keys SET paused = 0 WHERE key_value = ?", (key_value,))
+    conn.commit()
+    conn.close()
+    return jsonify({"resumed": True, "key": key_value})
+
+
+@app.route("/admin/extend", methods=["POST"])
+def admin_extend():
+    """Adiciona ou define horas de duração a uma key existente."""
+    auth = request.headers.get("Authorization", "")
+    if auth != "Bearer " + ADMIN_TOKEN:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    data = request.get_json(silent=True) or {}
+    key_value = data.get("key", "").strip().upper()
+    hours     = int(data.get("hours", 0))
+    if not key_value or hours == 0:
+        return jsonify({"error": "Missing key or hours"}), 400
+
+    conn = get_db()
+    row = conn.execute("SELECT expires_at FROM keys WHERE key_value = ?", (key_value,)).fetchone()
+    if not row:
+        conn.close()
+        return jsonify({"error": "Key not found"}), 404
+
+    now      = datetime.utcnow()
+    current  = datetime.fromisoformat(row["expires_at"])
+    # Se a key já expirou, extende a partir de agora
+    base     = current if current > now else now
+    new_exp  = base + timedelta(hours=hours)
+
+    conn.execute("UPDATE keys SET expires_at = ?, paused = 0 WHERE key_value = ?",
+                 (new_exp.isoformat(), key_value))
+    conn.commit()
+    conn.close()
+    return jsonify({"extended": True, "key": key_value, "new_expires_at": new_exp.isoformat()})
+
+
+@app.route("/admin/reset_hwid", methods=["POST"])
+def admin_reset_hwid():
+    auth = request.headers.get("Authorization", "")
+    if auth != "Bearer " + ADMIN_TOKEN:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    data = request.get_json(silent=True) or {}
+    key_value = data.get("key", "").strip().upper()
+    if not key_value:
+        return jsonify({"error": "Missing key"}), 400
+
+    conn = get_db()
+    conn.execute("UPDATE keys SET hwid = NULL, used = 0 WHERE key_value = ?", (key_value,))
+    conn.commit()
+    conn.close()
+    return jsonify({"hwid_reset": True, "key": key_value})
+
+
+# ── Painel Web ──────────────────────────────────────────────────────────────
+@app.route("/admin/panel")
+def admin_panel():
+    return send_from_directory(PANEL_DIR, "panel.html")
 
 @app.route("/admin/revoke", methods=["POST"])
 def admin_revoke():
