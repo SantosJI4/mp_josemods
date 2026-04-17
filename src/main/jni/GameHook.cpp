@@ -249,23 +249,32 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
         // SysV hash: { nbucket, nchain } — nchain = total symbols
         nSyms = hashTab[1];
     } else if (gnuHash) {
-        // GNU hash: precisa calcular o índice máximo
-        uint32_t nbuckets = gnuHash[0];
-        uint32_t symoffset = gnuHash[1];
+        // GNU hash: percorre TODAS as chains de todos os buckets para achar
+        // o índice máximo real. A abordagem anterior (só a chain do bucket máximo)
+        // subestimava nSyms porque chains de outros buckets podem ter índices maiores.
+        uint32_t nbuckets   = gnuHash[0];
+        uint32_t symoffset  = gnuHash[1];
         uint32_t bloom_size = gnuHash[2];
-        // bloom array: bloom_size * 8 bytes (64-bit ELF)
-        uint32_t *buckets = (uint32_t *)((uint8_t *)gnuHash + 16 + bloom_size * 8);
-        uint32_t *chain = buckets + nbuckets;
+        // 64-bit ELF: cada entrada do bloom filter é 8 bytes (Elf64_Xword)
+        uint32_t *buckets = (uint32_t *)((uint8_t *)gnuHash + 16 + (size_t)bloom_size * 8);
+        uint32_t *chains  = buckets + nbuckets;
 
-        uint32_t lastSym = 0;
+        uint32_t maxSym = symoffset;
         for (uint32_t i = 0; i < nbuckets; i++) {
-            if (buckets[i] > lastSym) lastSym = buckets[i];
+            uint32_t sym = buckets[i];
+            if (sym < symoffset) continue; // bucket vazio (0) ou inválido
+            uint32_t ci = sym - symoffset;
+            // Limite de segurança contra ELF corrompido
+            for (uint32_t guard = 0; guard < 200000; guard++) {
+                if (sym > maxSym) maxSym = sym;
+                if (chains[ci] & 1u) break; // fim desta chain
+                sym++;
+                ci++;
+            }
         }
-        if (lastSym >= symoffset) {
-            uint32_t ci = lastSym - symoffset;
-            while (!(chain[ci] & 1)) { lastSym++; ci++; }
-        }
-        nSyms = lastSym + 1;
+        nSyms = maxSym + 1;
+        LOGI("resolveElfSymbol: GNU hash nSyms=%u symoffset=%u nbuckets=%u",
+             nSyms, symoffset, nbuckets);
     }
 
     if (nSyms == 0) {
