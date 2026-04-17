@@ -45,6 +45,7 @@ struct SharedESPData {
     int playerCount;
     volatile int espEnabled;      // Overlay seta 1/0 → hook verifica
     volatile int debugLastCall;   // Diagnóstico: último il2cpp call completado
+    volatile int resetSelf;       // Overlay seta 1 → hook reseta cache do self player
     ESPEntry players[MAX_ESP_PLAYERS];
 };
 

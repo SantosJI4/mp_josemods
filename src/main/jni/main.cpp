@@ -305,7 +305,7 @@ void DrawMenu() {
     if (vmtApplied) {
         ImGui::TextColored(green, "Connected");
         ImGui::SameLine();
-        ImGui::TextColored(textDim, "| %d targets", sharedData->playerCount);
+        ImGui::TextColored(textDim, "| %d inimigos", sharedData->playerCount);
     } else if (shmReady) {
         // SHM criado mas VmtHook ainda nao aplicado (aguardando domain/init)
         ImGui::TextColored(ImVec4(1.0f,0.65f,0.0f,1.0f), "Hook iniciando...");
@@ -321,6 +321,25 @@ void DrawMenu() {
         ImGui::TextColored(textDim, " dbg=%d %dx%d",
             sharedData->debugLastCall, sharedData->screenW, sharedData->screenH);
     }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // ── Filtros ──
+    ImGui::TextColored(textDim, "FILTROS");
+    ImGui::Spacing();
+    ImGui::TextColored(green, "[ON]");
+    ImGui::SameLine();
+    ImGui::Text("Self filter (auto)");
+    ImGui::SameLine(0, 10);
+    // Botao de reset do cache do self player (util se cachear errado)
+    if (ImGui::SmallButton("Reset Self")) {
+        if (sharedData) sharedData->resetSelf = 1;
+    }
+    ImGui::TextColored(textDim, "[OFF]");
+    ImGui::SameLine();
+    ImGui::Text("Team filter (aguardando offset do dump)");
 
     ImGui::Spacing();
     ImGui::Separator();
