@@ -299,6 +299,7 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 #define OFF_get_position            0x9C5C0F4
 #define OFF_Screen_get_width        0x9C14D60
 #define OFF_Screen_get_height       0x9C14D88
+#define OFF_IsLocalPlayer           0x67558A4
 
 // ============================================================
 // Function Pointers — resolvidos via base + offset direto
@@ -323,6 +324,9 @@ static Matrix4x4 (*fn_get_projectionMatrix)(void* camera, void* method) = nullpt
 static Vector3 (*fn_WorldToScreenPoint)(void* camera, Vector3 pos, void* method) = nullptr;
 static bool useManualW2S = true;
 
+// IsLocalPlayer — filtra o proprio jogador do ESP
+static bool (*fn_IsLocalPlayer)(void* player, void* method) = nullptr;
+
 // Original LateUpdate
 static void (*orig_OnUpdate)(void* self, void* methodInfo) = nullptr;
 
@@ -338,6 +342,21 @@ static void* g_cachedCamera = nullptr;
 static Matrix4x4 g_vpMatrix;
 static bool g_vpValid = false;
 static int g_frameId = 0;
+
+// ============================================================
+// FILTRO: Self player + Teammates
+// ============================================================
+// Self: detectado automaticamente por proximidade da câmera (< 2.5m)
+// Team: requer offset do campo camp/teamId do Player no dump il2cpp
+//   Exemplo no dump: "private int camp; // 0x????"  →  #define OFF_Player_camp 0x????
+//   Quando disponível, descomentar e setar o offset correto.
+// ============================================================
+static void* g_localPlayer   = nullptr; // ponteiro do Player local (auto-detectado)
+static int   g_localCamp     = -1;      // camp do jogador local (-1 = desconhecido)
+
+// Offset do campo camp no Player (0 = desabilitado, aguardando dump)
+// Quando tiver: #define OFF_Player_camp 0xSEUOFFSET
+#define OFF_Player_camp 0  // TODO: preencher com offset do dump
 
 // ============================================================
 // VMT HOOK — Troca methodPointer no MethodInfo
@@ -434,6 +453,14 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     // Sempre manter magic ativo para overlay detectar
     sharedData->magic = 0xDEADF00D;
 
+    // Reset self cache (pedido pelo overlay via botão "Reset Self")
+    if (sharedData->resetSelf) {
+        g_localPlayer = nullptr;
+        g_localCamp   = -1;
+        sharedData->resetSelf = 0;
+        LOGI("Self player cache resetado pelo overlay");
+    }
+
     // espEnabled reservado para futuro; hook sempre processa players
 
     // ── Detectar início de novo frame por tempo ──
@@ -490,6 +517,10 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     int screenW = sharedData->screenW;
     if (screenW <= 0 || screenH <= 0) return;
 
+    // ── Filtrar local player (eu mesmo) ──
+    // IsLocalPlayer() retorna true para o proprio jogador — nunca desenhar ESP em si mesmo.
+    if (fn_IsLocalPlayer && fn_IsLocalPlayer(self, nullptr)) return;
+
     // ── Pegar transform do player ──
     sharedData->debugLastCall = 20 + idx;
     void* transform = fn_get_transform ? fn_get_transform(self, nullptr) : nullptr;
@@ -528,6 +559,27 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
 
     // Verificar se está na frente da câmera
     if (screenBottom.z < 0.1f || screenTop.z < 0.1f) return;
+
+    // ── Filtro: Self player ──
+    // Local player está sempre a < 2.5m da câmera em 3rd person.
+    // Na primeira vez que vemos alguém nessa distância, cacheamos o ponteiro.
+    if (!g_localPlayer && screenBottom.z < 2.5f) {
+        g_localPlayer = self;
+        LOGI("Self player detectado e cacheado: %p (dist=%.2f)", self, screenBottom.z);
+    }
+    if (self == g_localPlayer) return; // nunca desenhar o proprio jogador
+
+    // ── Filtro: Teammates (requer OFF_Player_camp do dump) ──
+#if OFF_Player_camp != 0
+    int playerCamp = *(int*)((uintptr_t)self + OFF_Player_camp);
+    // Cachear camp do local player na primeira vez
+    if (g_localCamp == -1 && g_localPlayer) {
+        g_localCamp = *(int*)((uintptr_t)g_localPlayer + OFF_Player_camp);
+        LOGI("Local camp = %d", g_localCamp);
+    }
+    // Pular aliados (mesmo camp que o jogador local)
+    if (g_localCamp != -1 && playerCamp == g_localCamp) return;
+#endif
 
     // ── Escrever no SharedMemory ──
     ESPEntry& entry = sharedData->players[idx];
@@ -623,6 +675,7 @@ void* hack_thread(void*) {
     fn_get_position            = RESOLVE_OFFSET(Vector3(*)(void*, void*),          OFF_get_position);
     fn_Screen_get_width        = RESOLVE_OFFSET(int(*)(void*),                     OFF_Screen_get_width);
     fn_Screen_get_height       = RESOLVE_OFFSET(int(*)(void*),                     OFF_Screen_get_height);
+    fn_IsLocalPlayer           = RESOLVE_OFFSET(bool(*)(void*, void*),             OFF_IsLocalPlayer);
 
     LOGI("Offsets resolvidos:");
     LOGI("  get_main          = %p (base+0x%X)", fn_Camera_get_main, OFF_Camera_get_main);

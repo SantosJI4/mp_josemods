@@ -1,6 +1,7 @@
 namespace: Assembly-CSharp.dll
 class: COW.GamePlay.Player
 private System.Void LateUpdate(); // 0x67BE774
+public System.Boolean IsLocalPlayer(); // 0x67558A4
 //update players
 
 namespace: UnityEngine.CoreModule.dll
@@ -36,4 +37,6 @@ namespace UnityEngine.CoreModule.dll
 class UnityEngine.Screen
 
 public static System.Int32 get_width(); // 0x9C14D60
-	public static System.Int32 get_height(); // 0x9C14D88
+	public static System.Int32 get_height(); // 
+	
+	public System.Boolean IsLocalPlayer(); // 0x67558A4
