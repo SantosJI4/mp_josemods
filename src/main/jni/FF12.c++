@@ -2,6 +2,7 @@ namespace: Assembly-CSharp.dll
 class: COW.GamePlay.Player
 private System.Void LateUpdate(); // 0x67BE774
 public System.Boolean IsLocalPlayer(); // 0x67558A4
+public System.Int32 get_TeamIndex(); // 0x676CC94
 //update players
 
 namespace: UnityEngine.CoreModule.dll

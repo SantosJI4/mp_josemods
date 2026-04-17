@@ -300,6 +300,7 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 #define OFF_Screen_get_width        0x9C14D60
 #define OFF_Screen_get_height       0x9C14D88
 #define OFF_IsLocalPlayer           0x67558A4
+#define OFF_get_TeamIndex           0x676CC94
 
 // ============================================================
 // Function Pointers — resolvidos via base + offset direto
@@ -326,6 +327,10 @@ static bool useManualW2S = true;
 
 // IsLocalPlayer — filtra o proprio jogador do ESP
 static bool (*fn_IsLocalPlayer)(void* player, void* method) = nullptr;
+// get_TeamIndex — retorna indice do time do player (mesmo time = aliado)
+static int  (*fn_get_TeamIndex)(void* player, void* method) = nullptr;
+// Cache do teamIndex do local player (setado na primeira chamada IsLocalPlayer=true)
+static int  g_localTeamIndex = -1;
 
 // Original LateUpdate
 static void (*orig_OnUpdate)(void* self, void* methodInfo) = nullptr;
@@ -517,9 +522,19 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     int screenW = sharedData->screenW;
     if (screenW <= 0 || screenH <= 0) return;
 
-    // ── Filtrar local player (eu mesmo) ──
-    // IsLocalPlayer() retorna true para o proprio jogador — nunca desenhar ESP em si mesmo.
-    if (fn_IsLocalPlayer && fn_IsLocalPlayer(self, nullptr)) return;
+    // ── Filtrar local player (eu mesmo) + teammates ──
+    if (fn_IsLocalPlayer && fn_IsLocalPlayer(self, nullptr)) {
+        // Aproveitar para cachear o teamIndex do local player
+        if (g_localTeamIndex == -1 && fn_get_TeamIndex) {
+            g_localTeamIndex = fn_get_TeamIndex(self, nullptr);
+        }
+        return; // nunca desenhar ESP em si mesmo
+    }
+    // Filtrar teammates: mesmo teamIndex que o local player = aliado, skip
+    if (g_localTeamIndex != -1 && fn_get_TeamIndex) {
+        int myTeam = fn_get_TeamIndex(self, nullptr);
+        if (myTeam == g_localTeamIndex) return;
+    }
 
     // ── Pegar transform do player ──
     sharedData->debugLastCall = 20 + idx;
@@ -676,6 +691,7 @@ void* hack_thread(void*) {
     fn_Screen_get_width        = RESOLVE_OFFSET(int(*)(void*),                     OFF_Screen_get_width);
     fn_Screen_get_height       = RESOLVE_OFFSET(int(*)(void*),                     OFF_Screen_get_height);
     fn_IsLocalPlayer           = RESOLVE_OFFSET(bool(*)(void*, void*),             OFF_IsLocalPlayer);
+    fn_get_TeamIndex           = RESOLVE_OFFSET(int(*)(void*, void*),              OFF_get_TeamIndex);
 
     LOGI("Offsets resolvidos:");
     LOGI("  get_main          = %p (base+0x%X)", fn_Camera_get_main, OFF_Camera_get_main);
