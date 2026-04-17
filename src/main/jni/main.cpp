@@ -56,6 +56,13 @@ static ImVec4 espLineColor = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
 static float espMaxDistance = 999.0f;
 static float linePositionX = 0.5f;
 
+// ============================================================
+// Aim Assist State
+// ============================================================
+static bool  aimAssist    = false;
+static float aimSmooth    = 0.15f;   // Velocidade de suavização (0.02–0.5)
+static float aimFovDeg    = 30.0f;   // Cone de ativação em graus
+
 // SharedMemory (leitura do hook injetado no jogo)
 static SharedESPData* sharedData = nullptr;
 static int shmFd = -1;
@@ -183,6 +190,12 @@ void DrawESP(int screenW, int screenH) {
 
     // Hook SEMPRE coleta players (espEnabled=1 fixo) — draw controlado pelo toggle
     sharedData->espEnabled = 1;
+
+    // ── Sincronizar configurações do Aim Assist com o hook ──────────────────
+    sharedData->aimAssistEnabled = aimAssist ? 1 : 0;
+    sharedData->aimAssistSmooth  = aimSmooth;
+    sharedData->aimAssistFovDeg  = aimFovDeg;
+    // ────────────────────────────────────────────────────────────────────────
 
     if (!esp) return;
 
@@ -314,6 +327,19 @@ void DrawESP(int screenW, int screenH) {
             draw->AddText(ImVec2(centerX - 12, bot + padY + 2), boxColor, distText);
         }
     }
+
+    // ── Aim Assist: círculo de FOV visual ────────────────────────────────────
+    if (aimAssist) {
+        float fovRadiusPx = (float)screenW * (aimFovDeg / 90.0f) * 0.5f;
+        bool  locked      = sharedData && sharedData->aimAssistHasTarget;
+        ImU32 circleColor = locked
+            ? IM_COL32(0, 230, 100, 140)   // verde quando travado
+            : IM_COL32(255, 255, 255, 55);  // branco tênue quando procurando
+        draw->AddCircle(
+            ImVec2(screenW * 0.5f, screenH * 0.5f),
+            fovRadiusPx, circleColor, 64, 1.2f);
+    }
+    // ────────────────────────────────────────────────────────────────────────
 
     // Hook gerencia playerCount reset por frame (detecao por tempo)
     lastWriteSeq = seq;
@@ -449,6 +475,49 @@ void DrawMenu() {
         ImGui::SliderFloat("##line", &linePositionX, 0.0f, 1.0f, "Line Origin: %.2f");
         ImGui::PopItemWidth();
     }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // ── Aim Assist ──────────────────────────────────────────────────────────
+    ImGui::TextColored(textDim, "AIM ASSIST");
+    ImGui::Spacing();
+
+    bool prevAim = aimAssist;
+    ImGui::PushStyleColor(ImGuiCol_CheckMark, green);
+    ImGui::Checkbox("  Head Magnetism", &aimAssist);
+    ImGui::PopStyleColor();
+
+    if (aimAssist != prevAim && sharedData) {
+        sharedData->aimAssistEnabled = aimAssist ? 1 : 0;
+        if (!aimAssist) sharedData->aimAssistHasTarget = 0;
+    }
+
+    if (aimAssist) {
+        // Indicador de alvo travado
+        bool locked = sharedData && sharedData->aimAssistHasTarget;
+        ImGui::SameLine(0, 12);
+        if (locked)
+            ImGui::TextColored(green, "[HEAD LOCK]");
+        else
+            ImGui::TextColored(textDim, "[procurando...]");
+
+        ImGui::Spacing();
+        ImGui::PushItemWidth(-1);
+
+        if (ImGui::SliderFloat("##aimsmooth", &aimSmooth, 0.02f, 0.50f, "Smooth: %.2f")) {
+            if (sharedData) sharedData->aimAssistSmooth = aimSmooth;
+        }
+        if (ImGui::SliderFloat("##aimfov", &aimFovDeg, 5.0f, 60.0f, "FOV Cone: %.0f deg")) {
+            if (sharedData) sharedData->aimAssistFovDeg = aimFovDeg;
+        }
+
+        ImGui::PopItemWidth();
+        ImGui::Spacing();
+        ImGui::TextColored(textDim, "Smooth baixo = mais legit | FOV menor = mais preciso");
+    }
+    // ────────────────────────────────────────────────────────────────────────
 
     ImGui::End();
 }

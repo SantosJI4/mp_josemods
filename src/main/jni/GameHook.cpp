@@ -331,6 +331,10 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 #define OFF_get_MaxHP               0x67CDE1C
 #define OFF_IsKnockedDownBleed      0x1150  // offset do campo bool no objeto Player
 
+// Aim Assist — UnityEngine.Transform (mesma classe de get_position)
+#define OFF_Transform_get_eulerAngles 0x9C5C2B4
+#define OFF_Transform_set_eulerAngles 0x9C5C33C
+
 // ============================================================
 // Function Pointers — resolvidos via base + offset direto
 // ============================================================
@@ -362,6 +366,10 @@ static bool (*fn_IsLocalTeammate)(void* player, bool includeLocal, void* method)
 static int  (*fn_get_CurHP)(void* player, void* method) = nullptr;
 static int  (*fn_get_MaxHP)(void* player, void* method) = nullptr;
 
+// Aim Assist — UnityEngine.Transform
+static Vector3 (*fn_get_eulerAngles)(void* transform, void* method) = nullptr;
+static void    (*fn_set_eulerAngles)(void* transform, Vector3 euler, void* method) = nullptr;
+
 // Original LateUpdate
 static void (*orig_OnUpdate)(void* self, void* methodInfo) = nullptr;
 
@@ -377,6 +385,16 @@ static void* g_cachedCamera = nullptr;
 static Matrix4x4 g_vpMatrix;
 static bool g_vpValid = false;
 static int g_frameId = 0;
+
+// ── Aim Assist — estado por frame ──────────────────────────────────────────
+static void*   g_camTransform      = nullptr;  // Transform da câmera (atualizado por frame)
+static Vector3 g_aimTargetWorld{0.0f, 0.0f, 0.0f}; // Posição 3D da cabeça do melhor alvo
+static float   g_aimBestScreenDist = 1e9f;     // Distância de tela ao centro (menor = melhor)
+static bool    g_aimHasTarget      = false;    // Alvo válido neste frame
+static float   g_aimPitch          = 0.0f;     // Pitch suavizado atual (graus)
+static float   g_aimYaw            = 0.0f;     // Yaw suavizado atual (graus)
+static bool    g_aimInitialized    = false;    // Se já lemos a rotação inicial da câmera
+// ───────────────────────────────────────────────────────────────────────────
 
 // ============================================================
 // VMT HOOK — Troca methodPointer no MethodInfo
@@ -528,6 +546,69 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
             MultiplyMatrix(projMat, viewMat, g_vpMatrix);
             g_vpValid = true;
         }
+
+        // ── Aim Assist: Aplicar rotação suave da câmera (dados do frame anterior) ──
+        // Roda em LateUpdate (depois do Update), então sobrescreve a câmera do jogo.
+        g_camTransform = fn_get_transform ? fn_get_transform(g_cachedCamera, nullptr) : nullptr;
+
+        if (sharedData->aimAssistEnabled && g_camTransform &&
+            g_aimHasTarget && fn_get_eulerAngles && fn_set_eulerAngles) {
+
+            Vector3 camPos = fn_get_position(g_camTransform, nullptr);
+
+            float dx = g_aimTargetWorld.x - camPos.x;
+            float dy = g_aimTargetWorld.y - camPos.y;
+            float dz = g_aimTargetWorld.z - camPos.z;
+            float horizDist = sqrtf(dx * dx + dz * dz);
+
+            if (horizDist > 0.01f) {
+                float targetYaw   =  atan2f(dx, dz) * (180.0f / (float)M_PI);
+                float targetPitch = -atan2f(dy, horizDist) * (180.0f / (float)M_PI);
+
+                // Clampar pitch para evitar gimbal lock
+                if (targetPitch >  89.0f) targetPitch =  89.0f;
+                if (targetPitch < -89.0f) targetPitch = -89.0f;
+
+                if (!g_aimInitialized) {
+                    // Primeira ativação: ler rotação real da câmera para evitar salto
+                    Vector3 curEuler = fn_get_eulerAngles(g_camTransform, nullptr);
+                    g_aimPitch = curEuler.x;
+                    g_aimYaw   = curEuler.y;
+                    g_aimInitialized = true;
+                }
+
+                // Normalizar yaw: garantir caminho mais curto (evitar rotação de 360°)
+                float yawDiff = targetYaw - g_aimYaw;
+                while (yawDiff >  180.0f) yawDiff -= 360.0f;
+                while (yawDiff < -180.0f) yawDiff += 360.0f;
+
+                float smooth = sharedData->aimAssistSmooth;
+                if (smooth < 0.01f) smooth = 0.01f;
+                if (smooth > 1.0f)  smooth = 1.0f;
+
+                // Interpolação suave (magnetismo de cabeça — não trava instantâneo)
+                g_aimPitch += (targetPitch - g_aimPitch) * smooth;
+                g_aimYaw   += yawDiff * smooth;
+
+                // Manter yaw no intervalo [0, 360)
+                while (g_aimYaw >= 360.0f) g_aimYaw -= 360.0f;
+                while (g_aimYaw <    0.0f) g_aimYaw += 360.0f;
+
+                Vector3 newEuler(g_aimPitch, g_aimYaw, 0.0f);
+                fn_set_eulerAngles(g_camTransform, newEuler, nullptr);
+                sharedData->aimAssistHasTarget = 1;
+            }
+        } else {
+            // Sem alvo ou aim desativado: resetar estado de inicialização
+            if (!sharedData->aimAssistEnabled) {
+                g_aimInitialized = false;
+            }
+            sharedData->aimAssistHasTarget = 0;
+        }
+
+        // Resetar candidatos de aim para o novo frame
+        g_aimHasTarget      = false;
+        g_aimBestScreenDist = 1e9f;
     }
 
     int idx = sharedData->playerCount;
@@ -588,6 +669,31 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
 
     // Verificar se está na frente da câmera
     if (screenBottom.z < 0.1f || screenTop.z < 0.1f) return;
+
+    // ── Aim Assist: registrar candidato ao alvo ──────────────────────────────
+    // Somente inimigos vivos visíveis dentro do cone de FOV configurado
+    if (sharedData->aimAssistEnabled) {
+        float fovDeg = sharedData->aimAssistFovDeg;
+        if (fovDeg < 1.0f || fovDeg > 90.0f) fovDeg = 30.0f;
+
+        // Converter FOV graus em raio de pixels (estimativa proporcional à tela)
+        float fovRadiusPx = (float)screenW * (fovDeg / 90.0f) * 0.5f;
+
+        float dX = screenTop.x - screenW * 0.5f;
+        float dY = screenTop.y - screenH * 0.5f;
+        float screenDist = sqrtf(dX * dX + dY * dY);
+
+        if (screenDist < fovRadiusPx && screenDist < g_aimBestScreenDist) {
+            // HP check: não mirar em player já morto/derrubado
+            int chp = fn_get_CurHP ? fn_get_CurHP(self, nullptr) : 1;
+            if (chp > 0) {
+                g_aimBestScreenDist = screenDist;
+                g_aimTargetWorld    = topWorld;   // posição 3D da cabeça
+                g_aimHasTarget      = true;
+            }
+        }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
 
     // ── Escrever no SharedMemory ──
     ESPEntry& entry = sharedData->players[idx];
@@ -697,6 +803,9 @@ void* hack_thread(void*) {
     fn_IsLocalTeammate         = RESOLVE_OFFSET(bool(*)(void*, bool, void*),        OFF_IsLocalTeammate);
     fn_get_CurHP               = RESOLVE_OFFSET(int(*)(void*, void*),               OFF_get_CurHP);
     fn_get_MaxHP               = RESOLVE_OFFSET(int(*)(void*, void*),               OFF_get_MaxHP);
+    // Aim Assist
+    fn_get_eulerAngles         = RESOLVE_OFFSET(Vector3(*)(void*, void*),           OFF_Transform_get_eulerAngles);
+    fn_set_eulerAngles         = RESOLVE_OFFSET(void(*)(void*, Vector3, void*),     OFF_Transform_set_eulerAngles);
 
     LOGI("Offsets resolvidos:");
     LOGI("  get_main          = %p (base+0x%X)", fn_Camera_get_main, OFF_Camera_get_main);

@@ -49,6 +49,15 @@ struct SharedESPData {
     volatile int espEnabled;      // Overlay seta 1/0 → hook verifica
     volatile int debugLastCall;   // Diagnóstico: último il2cpp call completado
     volatile int resetSelf;       // Overlay seta 1 → hook reseta cache do self player
+
+    // ── Aim Assist (Head Magnetism) ──────────────────────────────────────────
+    // Overlay escreve configurações → hook aplica rotação suave da câmera
+    volatile int aimAssistEnabled;  // Toggle: 0 = off, 1 = on
+    float        aimAssistSmooth;   // Fator de interpolação por frame (0.02–0.5)
+    float        aimAssistFovDeg;   // Cone de ativação em graus (ex: 30)
+    volatile int aimAssistHasTarget;// Hook escreve 1 quando há alvo no cone
+    // ────────────────────────────────────────────────────────────────────────
+
     ESPEntry players[MAX_ESP_PLAYERS];
 };
 
