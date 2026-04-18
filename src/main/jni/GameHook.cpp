@@ -58,7 +58,7 @@
   #define LOGE(...) ((void)0)
 #endif
 
-#define HOOK_BUILD_VER "v18-stealth"
+#define HOOK_BUILD_VER "v19-stealth"
 
 // ============================================================
 // Hook Log File — SOMENTE em modo debug
@@ -356,10 +356,11 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 
 // (offsets GetPartByCollider e IsHeadShotCheck removidos em v31 — server-side validates)
 
-// Speed Hack — COW.GamePlay.Player::set_MoveSpeed(float)
-// Velocidade normal do personagem: ~6.5. set_MoveSpeed define a velocidade base.
-#define OFF_get_MoveSpeed  0x69128F8
-#define OFF_set_MoveSpeed  0x691299C
+// Speed Hack — campo público Player.Speed (offset 0x500 no objeto Player)
+// ATENÇÃO: OFF_get_MoveSpeed/OFF_set_MoveSpeed (0x69128F8/0x691299C) são da FreeViewCamera, NÃO do Player!
+// A abordagem correta é escrever diretamente no campo Speed do Player.
+// Player.Speed é lido pelo sistema de movimento a cada frame como velocidade-alvo.
+#define PLAYER_SPEED_FIELD_OFFSET  0x500  // public System.Single Speed; @ Player+0x500
 
 // Camera Controller — CameraControllerBase::LateUpdate
 // Hookeado para aplicar aimbot/anti-recoil DEPOIS que o controlador posiciona a câmera.
@@ -408,9 +409,8 @@ static void*   (*fn_get_HeadCollider)(void* player, void* method) = nullptr;
 // _Injected: assinatura nativa real — sem SRET, ponteiro de saída em x1
 static void    (*fn_Collider_get_bounds_Injected)(void* collider, BoundsVal* outBounds, void* method) = nullptr;
 
-// Speed Hack — player local
-static float   (*fn_get_MoveSpeed)(void* player, void* method) = nullptr;
-static void    (*fn_set_MoveSpeed)(void* player, float speed, void* method) = nullptr;
+// Speed Hack — escrita direta no campo Player.Speed (0x500)
+// Não usa function pointer — é um campo público, acesso direto é mais rápido e correto.
 
 // ============================================================
 // Aimbot state (v31: direct aim, camera moves visibly to enemy head)
@@ -721,11 +721,10 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     int screenW = sharedData->screenW;
     if (screenW <= 0 || screenH <= 0) return;
 
-    // ── Speed Hack: aplica só no player local ────────────────────────────────
+    // ── Speed Hack: escreve direto no campo Player.Speed (offset 0x500) ────────
     if (fn_IsLocalPlayer && fn_IsLocalPlayer(self, nullptr)) {
-        if (sharedData && sharedData->speedEnabled &&
-            fn_set_MoveSpeed && sharedData->speedValue > 0.5f) {
-            fn_set_MoveSpeed(self, sharedData->speedValue, nullptr);
+        if (sharedData && sharedData->speedEnabled && sharedData->speedValue > 0.5f) {
+            *(float*)((uint8_t*)self + PLAYER_SPEED_FIELD_OFFSET) = sharedData->speedValue;
         }
     }
 
@@ -975,9 +974,7 @@ void* hack_thread(void*) {
     fn_GetBoneTransform        = RESOLVE_OFFSET(void*(*)(void*, int32_t, void*),    OFF_Animator_GetBoneTransform);
     fn_get_HeadCollider              = RESOLVE_OFFSET(void*(*)(void*, void*),             OFF_get_HeadCollider);
     fn_Collider_get_bounds_Injected  = RESOLVE_OFFSET(void(*)(void*, BoundsVal*, void*),  OFF_Collider_get_bounds_Injected);
-    // Speed Hack
-    fn_get_MoveSpeed = RESOLVE_OFFSET(float(*)(void*, void*),        OFF_get_MoveSpeed);
-    fn_set_MoveSpeed = RESOLVE_OFFSET(void(*)(void*, float, void*),  OFF_set_MoveSpeed);
+    // Speed Hack — sem function pointer (escrita direta no campo Player.Speed 0x500)
 
     LOGI("Offsets resolvidos:");
     LOGI("  get_main          = %p (base+0x%X)", fn_Camera_get_main, OFF_Camera_get_main);
