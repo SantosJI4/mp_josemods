@@ -58,7 +58,7 @@
   #define LOGE(...) ((void)0)
 #endif
 
-#define HOOK_BUILD_VER "v26-setaim"
+#define HOOK_BUILD_VER "v27-playerattr"
 
 // ============================================================
 // Hook Log File — SOMENTE em modo debug
@@ -356,10 +356,20 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 
 // (offsets GetPartByCollider e IsHeadShotCheck removidos em v31 — server-side validates)
 
-// Speed Hack — hook em Player::GetMoveSpeedForFPPMode (offset 0x6857498)
-// Getter chamado pelo sistema de locomoção a cada frame para obter a velocidade atual.
-// Retornamos speedValue diretamente quando speedEnabled e localPlayer.
-#define OFF_GetMoveSpeedForFPPMode  0x6857498  // Player::GetMoveSpeedForFPPMode()
+// Speed Hack — hook em PlayerAttributes::GetWeaponRunSpeedScale(int) (v41)
+// Controla o multiplicador de velocidade ao segurar arma. Mais correto que GetMoveSpeedForFPPMode.
+// Dump L714386: public System.Single GetWeaponRunSpeedScale(System.Int32) // 0x725EE1C
+#define OFF_GetWeaponRunSpeedScale  0x725EE1C  // PlayerAttributes::GetWeaponRunSpeedScale(int)
+
+// Recoil — hook em PlayerAttributes::GetScatterRate() (v41)
+// Controla o spread/scatter das balas (recoil da arma). Retornar 0 = sem recoil.
+// Dump L714459: public System.Single GetScatterRate() // 0x7261F4C
+#define OFF_GetScatterRate          0x7261F4C  // PlayerAttributes::GetScatterRate()
+
+// Player::get_Attributes() — retorna o PlayerAttributes do player (usado para cache)
+// Dump L651529: public COW.GamePlay.PlayerAttributes get_Attributes() // 0x6752B38
+// Offset do campo PlayerAttributes dentro de Player (para cache do local player attr):
+#define OFF_PlayerAttributes_field  0x708      // Player.JKPFFNEMJIF (protected PlayerAttributes)
 
 // Aimbot — Player::SetAimRotation(Quaternion q, bool forceUpdate) (v40)
 // Método oficial do jogo para definir para onde o player mira.
@@ -415,8 +425,12 @@ static void*   (*fn_get_HeadCollider)(void* player, void* method) = nullptr;
 // _Injected: assinatura nativa real — sem SRET, ponteiro de saída em x1
 static void    (*fn_Collider_get_bounds_Injected)(void* collider, BoundsVal* outBounds, void* method) = nullptr;
 
-// Speed Hack — hook em GetMoveSpeedForFPPMode
-static float (*orig_GetMoveSpeedForFPPMode)(void* self, void* methodInfo) = nullptr;
+// Speed hack — PlayerAttributes::GetWeaponRunSpeedScale(int) (v41)
+static float (*orig_GetWeaponRunSpeedScale)(void* self, int32_t weaponType, void* method) = nullptr;
+// Recoil — PlayerAttributes::GetScatterRate() (v41)
+static float (*orig_GetScatterRate)(void* self, void* method) = nullptr;
+// Cache do ponteiro PlayerAttributes do player local (para filtrar no hook)
+static void* g_localPlayerAttr = nullptr;
 
 // Aimbot — Player::SetAimRotation
 struct Quaternion { float x, y, z, w; };
@@ -607,20 +621,31 @@ static void*   g_localPlayer  = nullptr;  // ponteiro do player local (cache por
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ============================================================
-// HOOK DE VELOCIDADE — Player::GetMoveSpeedForFPPMode (v35)
-// Getter chamado pelo sistema de locomoção para obter a velocidade de movimento.
-// Retornamos speedValue diretamente quando speedEnabled e localPlayer.
+// HOOK DE VELOCIDADE — PlayerAttributes::GetWeaponRunSpeedScale(int) (v41)
+// Retorna multiplicador de velocidade ao segurar arma.
+// Filtramos pelo ponteiro PlayerAttributes do player local (g_localPlayerAttr).
 // ============================================================
-static float Hook_GetMoveSpeedForFPPMode(void* self, void* methodInfo) {
-    float result = orig_GetMoveSpeedForFPPMode
-        ? orig_GetMoveSpeedForFPPMode(self, methodInfo)
-        : 6.5f;
-    if (sharedData && sharedData->speedEnabled && sharedData->speedValue > 0.5f) {
-        if (fn_IsLocalPlayer && fn_IsLocalPlayer(self, nullptr)) {
-            return sharedData->speedValue;
-        }
+static float Hook_GetWeaponRunSpeedScale(void* self, int32_t weaponType, void* method) {
+    float result = orig_GetWeaponRunSpeedScale
+        ? orig_GetWeaponRunSpeedScale(self, weaponType, method)
+        : 1.0f;
+    if (sharedData && sharedData->speedEnabled && sharedData->speedValue > 0.5f &&
+        g_localPlayerAttr && self == g_localPlayerAttr) {
+        return sharedData->speedValue;
     }
     return result;
+}
+
+// ============================================================
+// HOOK DE RECOIL — PlayerAttributes::GetScatterRate() (v41)
+// Controla o spread/scatter das balas. Retornar 0 = sem espalhamento.
+// ============================================================
+static float Hook_GetScatterRate(void* self, void* method) {
+    if (sharedData && sharedData->recoilEnabled &&
+        g_localPlayerAttr && self == g_localPlayerAttr) {
+        return 0.0f;
+    }
+    return orig_GetScatterRate ? orig_GetScatterRate(self, method) : 1.0f;
 }
 
 // ============================================================
@@ -656,6 +681,9 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     if (self && sharedData && hookActive.load() &&
         fn_IsLocalPlayer && fn_IsLocalPlayer(self, nullptr)) {
         g_localPlayer = self;
+        // Cachear PlayerAttributes do player local para filtro nos hooks de speed/recoil
+        void* attrPtr = *(void**)((uint8_t*)self + OFF_PlayerAttributes_field);
+        if (attrPtr && (uintptr_t)attrPtr > 0x1000) g_localPlayerAttr = attrPtr;
         if (sharedData->silentAimEnabled && g_aimCandValid &&
             fn_SetAimRotation && g_camTransform && fn_get_position) {
             Vector3 camPos = fn_get_position(g_camTransform, nullptr);
@@ -1383,22 +1411,48 @@ void* hack_thread(void*) {
         hookLogWrite("ERRO: CameraControllerBase nao encontrada");
     }
 
-    // ── Hook Player::GetMoveSpeedForFPPMode (speed hack v35) ────────────────────
-    // Nome não obfuscado → p_class_get_method por nome, 0 parâmetros.
-    // playerClass já está resolvido acima (onUpdateMethodInfo).
-    void* speedMethodInfo = p_class_get_method(playerClass, "GetMoveSpeedForFPPMode", 0);
-    if (speedMethodInfo) {
-        if (VmtHook(speedMethodInfo, (void*)Hook_GetMoveSpeedForFPPMode,
-                    (void**)&orig_GetMoveSpeedForFPPMode)) {
-            LOGI("VMT Hook Player::GetMoveSpeedForFPPMode aplicado: orig=%p", orig_GetMoveSpeedForFPPMode);
-            hookLogWrite("VMT GetMoveSpeedForFPPMode: orig=%p", orig_GetMoveSpeedForFPPMode);
+    // ── Hook PlayerAttributes::GetWeaponRunSpeedScale + GetScatterRate (v41) ──
+    LOGI("[+] Buscando PlayerAttributes class...");
+    hookLogWrite("Buscando PlayerAttributes...");
+    void* playerAttrClass = p_class_from_name(cs_image, "COW.GamePlay", "PlayerAttributes");
+    if (playerAttrClass) {
+        LOGI("playerAttrClass = %p", playerAttrClass);
+        hookLogWrite("playerAttrClass = %p", playerAttrClass);
+
+        // Speed hack: GetWeaponRunSpeedScale(int) — 1 parametro
+        void* speedMI = p_class_get_method(playerAttrClass, "GetWeaponRunSpeedScale", 1);
+        if (speedMI) {
+            if (VmtHook(speedMI, (void*)Hook_GetWeaponRunSpeedScale,
+                        (void**)&orig_GetWeaponRunSpeedScale)) {
+                LOGI("VMT Hook PlayerAttributes::GetWeaponRunSpeedScale: orig=%p", orig_GetWeaponRunSpeedScale);
+                hookLogWrite("VMT GetWeaponRunSpeedScale: orig=%p", orig_GetWeaponRunSpeedScale);
+            } else {
+                LOGE("VMT Hook GetWeaponRunSpeedScale FALHOU");
+                hookLogWrite("ERRO: VMT GetWeaponRunSpeedScale falhou");
+            }
         } else {
-            LOGE("VMT Hook GetMoveSpeedForFPPMode FALHOU");
-            hookLogWrite("ERRO: VMT GetMoveSpeedForFPPMode falhou");
+            LOGE("GetWeaponRunSpeedScale nao encontrado em PlayerAttributes");
+            hookLogWrite("ERRO: GetWeaponRunSpeedScale nao encontrado");
+        }
+
+        // Recoil: GetScatterRate() — 0 parametros
+        void* scatterMI = p_class_get_method(playerAttrClass, "GetScatterRate", 0);
+        if (scatterMI) {
+            if (VmtHook(scatterMI, (void*)Hook_GetScatterRate,
+                        (void**)&orig_GetScatterRate)) {
+                LOGI("VMT Hook PlayerAttributes::GetScatterRate: orig=%p", orig_GetScatterRate);
+                hookLogWrite("VMT GetScatterRate: orig=%p", orig_GetScatterRate);
+            } else {
+                LOGE("VMT Hook GetScatterRate FALHOU");
+                hookLogWrite("ERRO: VMT GetScatterRate falhou");
+            }
+        } else {
+            LOGE("GetScatterRate nao encontrado em PlayerAttributes");
+            hookLogWrite("ERRO: GetScatterRate nao encontrado");
         }
     } else {
-        LOGE("GetMoveSpeedForFPPMode nao encontrado em Player");
-        hookLogWrite("ERRO: GetMoveSpeedForFPPMode nao encontrado");
+        LOGE("Classe PlayerAttributes nao encontrada");
+        hookLogWrite("ERRO: PlayerAttributes nao encontrada");
     }
 
     return nullptr;
