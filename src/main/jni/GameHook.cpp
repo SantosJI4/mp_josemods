@@ -58,7 +58,7 @@
   #define LOGE(...) ((void)0)
 #endif
 
-#define HOOK_BUILD_VER "v25-euler"
+#define HOOK_BUILD_VER "v26-setaim"
 
 // ============================================================
 // Hook Log File — SOMENTE em modo debug
@@ -361,6 +361,13 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 // Retornamos speedValue diretamente quando speedEnabled e localPlayer.
 #define OFF_GetMoveSpeedForFPPMode  0x6857498  // Player::GetMoveSpeedForFPPMode()
 
+// Aimbot — Player::SetAimRotation(Quaternion q, bool forceUpdate) (v40)
+// Método oficial do jogo para definir para onde o player mira.
+// Dump L651569: public System.Void SetAimRotation(Quaternion, bool) // 0x67718B8
+#define OFF_SetAimRotation          0x67718B8
+// m_CurrentAimRotation @ 0x1834 — Quaternion atual (para smooth/slerp)
+#define OFF_m_CurrentAimRotation    0x1834
+
 // Camera Controller — CameraControllerBase::LateUpdate
 // Hookeado para aplicar aimbot/anti-recoil DEPOIS que o controlador posiciona a câmera.
 // Offset é o RVA do código da função (como OFF_LateUpdate).
@@ -410,6 +417,48 @@ static void    (*fn_Collider_get_bounds_Injected)(void* collider, BoundsVal* out
 
 // Speed Hack — hook em GetMoveSpeedForFPPMode
 static float (*orig_GetMoveSpeedForFPPMode)(void* self, void* methodInfo) = nullptr;
+
+// Aimbot — Player::SetAimRotation
+struct Quaternion { float x, y, z, w; };
+typedef void (*SetAimRotationFn)(void* self, Quaternion q, bool forceUpdate, void* method);
+static SetAimRotationFn fn_SetAimRotation = nullptr;
+
+// Converte vetor de direção (não normalizado) em Quaternion LookRotation (Unity: Y-up, Z-forward)
+static Quaternion DirectionToQuat(float dx, float dy, float dz) {
+    float len = sqrtf(dx*dx + dy*dy + dz*dz);
+    if (len < 0.0001f) return {0.0f, 0.0f, 0.0f, 1.0f};
+    dx /= len; dy /= len; dz /= len;
+    // up = Y axis, mas evita degenerado quando olhando direto para cima/baixo
+    float ux = 0.0f, uy = 1.0f, uz = 0.0f;
+    if (fabsf(dy) > 0.999f) { ux = 0.0f; uy = 0.0f; uz = (dy > 0) ? -1.0f : 1.0f; }
+    // right = normalize(cross(up, forward))
+    float rx = uy*dz - uz*dy, ry = uz*dx - ux*dz, rz = ux*dy - uy*dx;
+    float rlen = sqrtf(rx*rx + ry*ry + rz*rz);
+    if (rlen < 0.0001f) return {0.0f, 0.0f, 0.0f, 1.0f};
+    rx /= rlen; ry /= rlen; rz /= rlen;
+    // newUp = cross(forward, right)
+    float nx = dy*rz - dz*ry, ny = dz*rx - dx*rz, nz = dx*ry - dy*rx;
+    // rotation matrix → quaternion
+    float m00=rx, m01=ry, m02=rz;
+    float m10=nx, m11=ny, m12=nz;
+    float m20=dx, m21=dy, m22=dz;
+    float trace = m00+m11+m22;
+    Quaternion q;
+    if (trace > 0.0f) {
+        float s = 0.5f / sqrtf(trace + 1.0f);
+        q.w = 0.25f / s; q.x = (m12-m21)*s; q.y = (m20-m02)*s; q.z = (m01-m10)*s;
+    } else if (m00 > m11 && m00 > m22) {
+        float s = 2.0f * sqrtf(1.0f + m00 - m11 - m22);
+        q.w = (m12-m21)/s; q.x = 0.25f*s; q.y = (m01+m10)/s; q.z = (m20+m02)/s;
+    } else if (m11 > m22) {
+        float s = 2.0f * sqrtf(1.0f + m11 - m00 - m22);
+        q.w = (m20-m02)/s; q.x = (m01+m10)/s; q.y = 0.25f*s; q.z = (m12+m21)/s;
+    } else {
+        float s = 2.0f * sqrtf(1.0f + m22 - m00 - m11);
+        q.w = (m01-m10)/s; q.x = (m20+m02)/s; q.y = (m12+m21)/s; q.z = 0.25f*s;
+    }
+    return q;
+}
 
 // ============================================================
 // Aimbot state (v31: direct aim, camera moves visibly to enemy head)
@@ -592,35 +641,6 @@ static void Hook_CameraLateUpdate(void* self, void* methodInfo) {
     if (!hookActive.load() || !sharedData || !g_camTransform ||
         !fn_get_eulerAngles || !fn_set_eulerAngles) return;
 
-    // ── Aimbot: camera euler snap para a cabeça do alvo (v36 approach) ───────────
-    if (sharedData->silentAimEnabled && g_aimCandValid &&
-        g_camTransform && fn_get_position) {
-        Vector3 camPos = fn_get_position(g_camTransform, nullptr);
-        if (!std::isnan(camPos.x) && !std::isnan(camPos.y) && !std::isnan(camPos.z)) {
-            Angles ang = CalculateViewAngle(camPos, g_aimCandTarget);
-            Vector3 curEuler = fn_get_eulerAngles(g_camTransform, nullptr);
-            if (!std::isnan(curEuler.x) && !std::isnan(curEuler.y) && !std::isnan(curEuler.z)) {
-                float smooth = sharedData->aimbotSmooth;
-                float tPitch = ang.pitch;
-                float tYaw   = ang.yaw;
-                if (smooth > 0.01f && smooth < 0.95f) {
-                    float t = 1.0f - smooth;
-                    float dp = tPitch - curEuler.x;
-                    if (dp >  180.0f) dp -= 360.0f;
-                    if (dp < -180.0f) dp += 360.0f;
-                    float dy = tYaw - curEuler.y;
-                    if (dy >  180.0f) dy -= 360.0f;
-                    if (dy < -180.0f) dy += 360.0f;
-                    tPitch = curEuler.x + dp * t;
-                    tYaw   = curEuler.y + dy * t;
-                }
-                fn_set_eulerAngles(g_camTransform,
-                    Vector3(tPitch, tYaw, curEuler.z), nullptr);
-            }
-        }
-        return; // aimbot rodou: pular anti-recoil neste frame
-    }
-
     // Anti-recoil SÓ quando disparando (triggerHeld==1).
     if (sharedData->recoilEnabled && g_camEulerValid &&
         sharedData->triggerHeld == 1) {
@@ -632,13 +652,38 @@ static void Hook_CameraLateUpdate(void* self, void* methodInfo) {
 }
 
 static void Hook_OnUpdate(void* self, void* methodInfo) {
-    // Player local: chamar orig diretamente (sem lookDir write — v39)
+    // ── Player local: SetAimRotation (v40) ───────────────────────────────────
     if (self && sharedData && hookActive.load() &&
         fn_IsLocalPlayer && fn_IsLocalPlayer(self, nullptr)) {
         g_localPlayer = self;
+        if (sharedData->silentAimEnabled && g_aimCandValid &&
+            fn_SetAimRotation && g_camTransform && fn_get_position) {
+            Vector3 camPos = fn_get_position(g_camTransform, nullptr);
+            if (!std::isnan(camPos.x) && !std::isnan(camPos.y) && !std::isnan(camPos.z)) {
+                float dx = g_aimCandTarget.x - camPos.x;
+                float dy = g_aimCandTarget.y - camPos.y;
+                float dz = g_aimCandTarget.z - camPos.z;
+                Quaternion aimQ = DirectionToQuat(dx, dy, dz);
+                float smooth = sharedData->aimbotSmooth;
+                if (smooth > 0.01f && smooth < 0.95f) {
+                    // Lerp suave com m_CurrentAimRotation
+                    Quaternion curQ = *(Quaternion*)((uint8_t*)self + OFF_m_CurrentAimRotation);
+                    float t = 1.0f - smooth;
+                    aimQ.x = curQ.x + (aimQ.x - curQ.x) * t;
+                    aimQ.y = curQ.y + (aimQ.y - curQ.y) * t;
+                    aimQ.z = curQ.z + (aimQ.z - curQ.z) * t;
+                    aimQ.w = curQ.w + (aimQ.w - curQ.w) * t;
+                    // normalizar
+                    float qlen = sqrtf(aimQ.x*aimQ.x + aimQ.y*aimQ.y + aimQ.z*aimQ.z + aimQ.w*aimQ.w);
+                    if (qlen > 0.0001f) { aimQ.x/=qlen; aimQ.y/=qlen; aimQ.z/=qlen; aimQ.w/=qlen; }
+                }
+                fn_SetAimRotation(self, aimQ, false, nullptr);
+            }
+        }
         if (orig_OnUpdate) orig_OnUpdate(self, methodInfo);
         return;
     }
+    // ─────────────────────────────────────────────────────────────────────────
 
     // Chamar original (jogo processa lógica, física) para não-local players
     if (orig_OnUpdate) {
@@ -999,6 +1044,8 @@ void* hack_thread(void*) {
     fn_GetBoneTransform        = RESOLVE_OFFSET(void*(*)(void*, int32_t, void*),    OFF_Animator_GetBoneTransform);
     fn_get_HeadCollider              = RESOLVE_OFFSET(void*(*)(void*, void*),             OFF_get_HeadCollider);
     fn_Collider_get_bounds_Injected  = RESOLVE_OFFSET(void(*)(void*, BoundsVal*, void*),  OFF_Collider_get_bounds_Injected);
+    // Aimbot SetAimRotation
+    fn_SetAimRotation = RESOLVE_OFFSET(SetAimRotationFn, OFF_SetAimRotation);
     // Speed Hack — resolvido via VmtHook em UpdateVelocity (ver adiante)
 
     LOGI("Offsets resolvidos:");
