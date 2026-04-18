@@ -702,6 +702,8 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
         // Resetar candidatos de aim para o novo frame
         g_aimHasTarget      = false;
         g_aimBestScreenDist = 1e9f;
+        g_aimBestHp         = 0x7fffffff;
+        g_aimBestDepth      = 1e9f;
         // Silent Aim: commit CAND → SNAP (alvo do frame atual vira alvo do próximo)
         g_silentSnapTarget = g_silentCandTarget;
         g_silentSnapValid  = g_silentCandValid;
@@ -824,13 +826,29 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     if (sharedData->aimAssistEnabled && chp > 0) {
         float fovDeg = sharedData->aimAssistFovDeg;
         if (fovDeg < 1.0f || fovDeg > 90.0f) fovDeg = 30.0f;
-
         float fovRadiusPx = (float)screenW * (fovDeg / 90.0f) * 0.5f;
 
-        if (screenDist < fovRadiusPx && screenDist < g_aimBestScreenDist) {
-            g_aimBestScreenDist = screenDist;
-            g_aimTargetWorld    = topWorld;
-            g_aimHasTarget      = true;
+        if (screenDist < fovRadiusPx) {
+            int  priority = sharedData->aimTargetPriority;
+            bool isBetter = false;
+            if (priority == 1) {
+                // Lowest HP
+                isBetter = (chp < g_aimBestHp);
+            } else if (priority == 2) {
+                // Nearest Distance (clipW da cabeça = profundidade de câmera)
+                float depth = screenTop.z;
+                isBetter = (depth < g_aimBestDepth);
+            } else {
+                // Nearest Center Screen (padrão)
+                isBetter = (screenDist < g_aimBestScreenDist);
+            }
+            if (isBetter) {
+                g_aimBestScreenDist = screenDist;
+                g_aimBestHp         = chp;
+                g_aimBestDepth      = screenTop.z;
+                g_aimTargetWorld    = topWorld;
+                g_aimHasTarget      = true;
+            }
         }
     }
 

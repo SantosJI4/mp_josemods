@@ -63,6 +63,12 @@ struct SharedESPData {
     // depois restaura. O tiro registra na cabeça sem o jogador ver a câmera mover.
     // Sem restrição de FOV: qualquer inimigo visível na tela é headshot.
     volatile int silentAimEnabled;  // Toggle: 0 = off, 1 = on
+
+    // ── Aim Target Priority ──────────────────────────────────────────────────
+    // 0 = Nearest (Center Screen) — menor distância ao centro da tela
+    // 1 = Lowest HP — inimigo com menor HP dentro do FOV
+    // 2 = Nearest Distance — menor profundidade de câmera (clipW)
+    volatile int aimTargetPriority;
     // ────────────────────────────────────────────────────────────────────────
 
     ESPEntry players[MAX_ESP_PLAYERS];
