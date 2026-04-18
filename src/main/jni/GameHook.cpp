@@ -58,7 +58,7 @@
   #define LOGE(...) ((void)0)
 #endif
 
-#define HOOK_BUILD_VER "v19-stealth"
+#define HOOK_BUILD_VER "v20-stealth"
 
 // ============================================================
 // Hook Log File — SOMENTE em modo debug
@@ -356,11 +356,11 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 
 // (offsets GetPartByCollider e IsHeadShotCheck removidos em v31 — server-side validates)
 
-// Speed Hack — campo público Player.Speed (offset 0x500 no objeto Player)
-// ATENÇÃO: OFF_get_MoveSpeed/OFF_set_MoveSpeed (0x69128F8/0x691299C) são da FreeViewCamera, NÃO do Player!
-// A abordagem correta é escrever diretamente no campo Speed do Player.
-// Player.Speed é lido pelo sistema de movimento a cada frame como velocidade-alvo.
-#define PLAYER_SPEED_FIELD_OFFSET  0x500  // public System.Single Speed; @ Player+0x500
+// Speed Hack — hook em Player::IPhysicalCharacter.UpdateVelocity (offset 0x676789C)
+// Interceptamos o vetor de velocidade calculado pelo jogo ANTES de ser passado à física.
+// Escalamos X e Z pelo fator (speedValue / 6.5), deixando Y intacto (anti-fly).
+// Só aplica ao jogador local (fn_IsLocalPlayer).
+#define OFF_UpdateVelocity  0x676789C  // Player::IPhysicalCharacter.UpdateVelocity
 
 // Camera Controller — CameraControllerBase::LateUpdate
 // Hookeado para aplicar aimbot/anti-recoil DEPOIS que o controlador posiciona a câmera.
@@ -409,8 +409,8 @@ static void*   (*fn_get_HeadCollider)(void* player, void* method) = nullptr;
 // _Injected: assinatura nativa real — sem SRET, ponteiro de saída em x1
 static void    (*fn_Collider_get_bounds_Injected)(void* collider, BoundsVal* outBounds, void* method) = nullptr;
 
-// Speed Hack — escrita direta no campo Player.Speed (0x500)
-// Não usa function pointer — é um campo público, acesso direto é mais rápido e correto.
+// Speed Hack — hook em UpdateVelocity (orig + escala X/Z)
+static Vector3 (*orig_UpdateVelocity)(void* self, Vector3 baseVelocity, float gameTime, float deltaTime, void* methodInfo) = nullptr;
 
 // ============================================================
 // Aimbot state (v31: direct aim, camera moves visibly to enemy head)
@@ -548,6 +548,24 @@ static Vector3 g_silentCandTarget{0.0f, 0.0f, 0.0f};  // candidato atual (próxi
 static float   g_silentCandDist   = 1e9f;
 static bool    g_silentCandValid  = false;
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ============================================================
+// HOOK DE VELOCIDADE — Player::IPhysicalCharacter.UpdateVelocity (v35)
+// Chamado pelo engine de física a cada FixedUpdate com a velocidade calculada.
+// Retornamos a velocidade escalada em X/Z (não Y — evita fly/gravidade).
+// ARM64 HFA: Vector3 passado/retornado em s0-s2 sem ponteiro oculto.
+// ============================================================
+static Vector3 Hook_UpdateVelocity(void* self, Vector3 baseVelocity, float gameTime, float deltaTime, void* methodInfo) {
+    Vector3 result = orig_UpdateVelocity(self, baseVelocity, gameTime, deltaTime, methodInfo);
+    if (sharedData && sharedData->speedEnabled && sharedData->speedValue > 0.5f) {
+        if (fn_IsLocalPlayer && fn_IsLocalPlayer(self, nullptr)) {
+            float factor = sharedData->speedValue / 6.5f;
+            result.x *= factor;
+            result.z *= factor;
+        }
+    }
+    return result;
+}
 
 // ============================================================
 // HOOK DA CÂMERA — CameraControllerBase::LateUpdate
@@ -720,13 +738,6 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     int screenH = sharedData->screenH;
     int screenW = sharedData->screenW;
     if (screenW <= 0 || screenH <= 0) return;
-
-    // ── Speed Hack: escreve direto no campo Player.Speed (offset 0x500) ────────
-    if (fn_IsLocalPlayer && fn_IsLocalPlayer(self, nullptr)) {
-        if (sharedData && sharedData->speedEnabled && sharedData->speedValue > 0.5f) {
-            *(float*)((uint8_t*)self + PLAYER_SPEED_FIELD_OFFSET) = sharedData->speedValue;
-        }
-    }
 
     // ── Filtrar eu mesmo + aliados ──
     // IsLocalTeammate(true) = inclui o proprio jogador + todos os aliados
@@ -974,7 +985,7 @@ void* hack_thread(void*) {
     fn_GetBoneTransform        = RESOLVE_OFFSET(void*(*)(void*, int32_t, void*),    OFF_Animator_GetBoneTransform);
     fn_get_HeadCollider              = RESOLVE_OFFSET(void*(*)(void*, void*),             OFF_get_HeadCollider);
     fn_Collider_get_bounds_Injected  = RESOLVE_OFFSET(void(*)(void*, BoundsVal*, void*),  OFF_Collider_get_bounds_Injected);
-    // Speed Hack — sem function pointer (escrita direta no campo Player.Speed 0x500)
+    // Speed Hack — resolvido via VmtHook em UpdateVelocity (ver adiante)
 
     LOGI("Offsets resolvidos:");
     LOGI("  get_main          = %p (base+0x%X)", fn_Camera_get_main, OFF_Camera_get_main);
@@ -1042,6 +1053,7 @@ void* hack_thread(void*) {
     // que todas as paginas PT_DYNAMIC estao presentes antes da leitura.
     uintptr_t addr_domain_get = 0, addr_assemblies = 0, addr_get_image = 0;
     uintptr_t addr_image_name = 0, addr_class_from_name2 = 0, addr_class_method = 0;
+    uintptr_t addr_class_get_methods = 0;
 
     for (int elfTry = 0; elfTry < 6; elfTry++) {
         if (elfTry > 0) {
@@ -1059,6 +1071,7 @@ void* hack_thread(void*) {
         addr_image_name      = resolveElfSymbol(il2cpp_base, "il2cpp_image_get_name");
         addr_class_from_name2= resolveElfSymbol(il2cpp_base, "il2cpp_class_from_name");
         addr_class_method    = resolveElfSymbol(il2cpp_base, "il2cpp_class_get_method_from_name");
+        addr_class_get_methods = resolveElfSymbol(il2cpp_base, "il2cpp_class_get_methods");
 
         LOGI("ELF try %d: domain=%p asm=%p img=%p name=%p class=%p method=%p",
              elfTry + 1,
@@ -1077,6 +1090,8 @@ void* hack_thread(void*) {
     auto p_image_get_name        = (const char*(*)(void*))                   addr_image_name;
     auto p_class_from_name       = (void*(*)(const void*, const char*, const char*)) addr_class_from_name2;
     auto p_class_get_method      = (void*(*)(void*, const char*, int))       addr_class_method;
+    // il2cpp_class_get_methods(class, &iter) — itera metodos; iter=nullptr inicia
+    auto p_class_get_methods     = (void*(*)(void*, void**))                 addr_class_get_methods;
 
     if (sharedData) sharedData->debugLastCall = 4; // stage 4: ELF resolve done
     if (!p_domain_get || !p_domain_get_assemblies || !p_assembly_get_image ||
@@ -1269,6 +1284,38 @@ void* hack_thread(void*) {
     } else {
         LOGE("CameraControllerBase nao encontrada");
         hookLogWrite("ERRO: CameraControllerBase nao encontrada");
+    }
+
+    // ── Hook Player::IPhysicalCharacter.UpdateVelocity (speed hack v35) ──────
+    // É uma implementação explícita de interface → p_class_get_method("UpdateVelocity",3)
+    // pode não encontrar pelo nome qualificado. Usamos p_class_get_methods para
+    // iterar todos os métodos do Player e achar o que tem methodPointer == nosso offset.
+    void* playerClass2 = p_class_from_name(cs_image, "COW.GamePlay", "Player");
+    if (playerClass2 && p_class_get_methods) {
+        void*    updateVelMethodInfo = nullptr;
+        void*    iter                = nullptr;
+        void*    mi                  = nullptr;
+        uintptr_t targetAddr         = il2cpp_base + OFF_UpdateVelocity;
+        while ((mi = p_class_get_methods(playerClass2, &iter)) != nullptr) {
+            if ((uintptr_t)*(void**)mi == targetAddr) {
+                updateVelMethodInfo = mi;
+                break;
+            }
+        }
+        if (updateVelMethodInfo) {
+            if (VmtHook(updateVelMethodInfo, (void*)Hook_UpdateVelocity, (void**)&orig_UpdateVelocity)) {
+                LOGI("VMT Hook Player::UpdateVelocity aplicado: orig=%p", orig_UpdateVelocity);
+                hookLogWrite("VMT UpdateVelocity: orig=%p", orig_UpdateVelocity);
+            } else {
+                LOGE("VMT Hook Player::UpdateVelocity FALHOU");
+                hookLogWrite("ERRO: VMT UpdateVelocity falhou");
+            }
+        } else {
+            LOGE("Player::UpdateVelocity (0x%lX) nao encontrado nos metodos", (unsigned long)targetAddr);
+            hookLogWrite("ERRO: UpdateVelocity nao encontrado em Player");
+        }
+    } else {
+        LOGE("Player class ou p_class_get_methods nao disponivel para UpdateVelocity hook");
     }
 
     return nullptr;

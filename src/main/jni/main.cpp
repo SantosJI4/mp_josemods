@@ -800,7 +800,7 @@ void DrawMenu() {
         ImGui::PopStyleColor(3);
     }
 
-    const char* verStr = menuMinimized ? "v34" : "v34  FF1.123";
+    const char* verStr = menuMinimized ? "v35" : "v35  FF1.123";
     float verW = ImGui::CalcTextSize(verStr).x;
     ImGui::SetCursorPos(ImVec2(W - verW - 108.0f, (HDR_H - textLineH) * 0.5f));
     ImGui::TextColored(cDimText, "%s", verStr);
