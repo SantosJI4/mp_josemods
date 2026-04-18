@@ -1177,8 +1177,13 @@ void* hack_thread(void*) {
     if (sharedData) sharedData->debugLastCall = 6; // stage 6: metadata found
 
     // Fase 2: Esperar domain ficar pronto.
-    // Sem sleep(3) fixo — verifica direto com retries curtos.
-    LOGI("  Metadata encontrado. Tentando domain_get...");
+    // FIX stage-6 crash: metadata mapeado != runtime inicializado.
+    // p_domain_get() chamado cedo demais crashava dentro do il2cpp.
+    // Aguarda 3s fixo para dar tempo ao runtime completar a init.
+    LOGI("  Metadata encontrado. Aguardando runtime init (3s)...");
+    hookLogWrite("metadata ok — aguardando runtime 3s...");
+    sleep(3);
+    LOGI("  Tentando domain_get...");
 
     void *domain = nullptr;
     for (int i = 0; i < 15; i++) {
@@ -1262,12 +1267,43 @@ void* hack_thread(void*) {
     LOGI("LateUpdate MethodInfo = %p", onUpdateMethodInfo);
     hookLogWrite("LateUpdate MethodInfo = %p", onUpdateMethodInfo);
 
-    // Verificar que methodPointer bate com nosso offset
+    // CRÍTICO: verificar que methodPointer bate com nosso offset.
+    // p_class_get_method pode retornar um LateUpdate errado (há vários no dump).
+    // Se não bater, itera todos os métodos para achar o correto.
+    // Hooking o método errado = Hook_OnUpdate recebe self inválido = crash.
     void *currentMethodPtr = *(void**)onUpdateMethodInfo;
     void *expectedPtr = (void*)(il2cpp_base + OFF_LateUpdate);
     LOGI("  methodPointer atual = %p, esperado (base+off) = %p, match=%s",
          currentMethodPtr, expectedPtr,
          (currentMethodPtr == expectedPtr) ? "SIM" : "NAO");
+    hookLogWrite("LateUpdate ptr=%p expected=%p match=%s",
+         currentMethodPtr, expectedPtr,
+         (currentMethodPtr == expectedPtr) ? "SIM" : "NAO");
+
+    if (currentMethodPtr != expectedPtr) {
+        LOGE("  MISMATCH — iterando metodos do Player para achar OFF_LateUpdate...");
+        hookLogWrite("MISMATCH — buscando LateUpdate por endereco...");
+        void *correctMethodInfo = nullptr;
+        if (p_class_get_methods) {
+            void *iter2 = nullptr;
+            void *mi2   = nullptr;
+            while ((mi2 = p_class_get_methods(playerClass, &iter2)) != nullptr) {
+                if ((uintptr_t)*(void**)mi2 == (uintptr_t)expectedPtr) {
+                    correctMethodInfo = mi2;
+                    break;
+                }
+            }
+        }
+        if (!correctMethodInfo) {
+            if (sharedData) sharedData->debugLastCall = 99;
+            LOGE("  LateUpdate correto nao encontrado! Abortando hook.");
+            hookLogWrite("ERRO: LateUpdate correto nao encontrado");
+            return nullptr;
+        }
+        onUpdateMethodInfo = correctMethodInfo;
+        LOGI("  LateUpdate correto encontrado via iteracao: %p", onUpdateMethodInfo);
+        hookLogWrite("LateUpdate correto: %p", onUpdateMethodInfo);
+    }
 
     // Aplicar VMT Hook
     LOGI("[5/5] Aplicando VMT Hook...");
