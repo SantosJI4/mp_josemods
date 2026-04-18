@@ -442,6 +442,10 @@ static float   g_aimBestScreenDist = 1e9f;         // prioridade 0: menor distâ
 static int     g_aimBestHp         = 0x7fffffff;   // prioridade 1: menor HP (Lowest HP mode)
 static float   g_aimBestDepth      = 1e9f;         // prioridade 2: menor clipW (Nearest Distance)
 static bool    g_aimHasTarget      = false;        // alvo válido neste frame
+// Euler da câmera lido no início de cada frame (em Hook_OnUpdate/newFrame).
+// Usado pelo anti-recoil em Hook_CameraLateUpdate sem precisar ler antes do orig.
+static Vector3 g_cachedCamEuler{0.0f, 0.0f, 0.0f};
+static bool    g_camEulerValid  = false;
 // NOTA: NÃO há estado acumulado de pitch/yaw.
 // Lemos os euler angles REAIS da câmera a cada frame e aplicamos apenas um delta.
 // Isso garante que o input do jogador nunca seja ignorado.
@@ -570,31 +574,30 @@ static Vector3 Hook_UpdateVelocity(void* self, Vector3 baseVelocity, float gameT
 // ============================================================
 // HOOK DA CÂMERA — CameraControllerBase::LateUpdate
 // Aplicado DEPOIS que o controlador posiciona a câmera.
-// Aimbot e anti-recoil agora correm aqui (v33).
+// Aimbot e anti-recoil correm aqui (v33).
+//
+// FIX v33-crash: orig é chamado PRIMEIRO (seguro) e os euler angles
+// pré-frame vêm de g_cachedCamEuler (setado em Hook_OnUpdate/newFrame),
+// eliminando a leitura de g_camTransform antes do orig que causava crash
+// quando o ponteiro estava inválido/stale. Guards NaN adicionados.
 // ============================================================
 static void Hook_CameraLateUpdate(void* self, void* methodInfo) {
-    // Salva euler pré-orig para anti-recoil
-    Vector3 eulerPre{0.0f, 0.0f, 0.0f};
-    bool hasCam       = g_camTransform && fn_get_eulerAngles && fn_set_eulerAngles;
-    bool doAimbot     = hasCam && sharedData && sharedData->silentAimEnabled &&
-                        g_silentSnapValid && fn_get_position;
-    bool doAntiRecoil = hasCam && sharedData && sharedData->recoilEnabled;
-
-    if ((doAimbot || doAntiRecoil) && hasCam) {
-        eulerPre = fn_get_eulerAngles(g_camTransform, nullptr);
-    }
-
-    // Chamar original: controlador posiciona câmera corretamente
+    // Chamar original PRIMEIRO — câmera posicionada corretamente antes de qualquer manipulação
     if (orig_CameraLateUpdate)
         orig_CameraLateUpdate(self, methodInfo);
 
-    if (!hasCam) return;
+    // Guards: hook inativo, SHM ausente ou transform inválido
+    if (!hookActive.load() || !sharedData || !g_camTransform ||
+        !fn_get_eulerAngles || !fn_set_eulerAngles) return;
 
-    bool triggerOk = !sharedData ||
-                     (sharedData->triggerKey == 0) ||
-                     (sharedData->triggerHeld == 1);
+    bool triggerOk    = (sharedData->triggerKey == 0) || (sharedData->triggerHeld == 1);
+    bool doAimbot     = sharedData->silentAimEnabled && g_silentSnapValid &&
+                        fn_get_position && triggerOk;
+    bool doAntiRecoil = sharedData->recoilEnabled && g_camEulerValid;
 
-    if (doAimbot && triggerOk) {
+    if (!doAimbot && !doAntiRecoil) return;
+
+    if (doAimbot) {
         // Aimbot: aponta câmera para cabeça do alvo (DEPOIS do controlador)
         Vector3 camPos = fn_get_position(g_camTransform, nullptr);
         float dx = g_silentSnapTarget.x - camPos.x;
@@ -608,7 +611,11 @@ static void Hook_CameraLateUpdate(void* self, void* methodInfo) {
             if (tPitch < -89.0f) tPitch = -89.0f;
             float tPitchOut = tPitch < 0.0f ? tPitch + 360.0f : tPitch;
 
+            // Ler euler APÓS orig (câmera já posicionada)
             Vector3 curEuler = fn_get_eulerAngles(g_camTransform, nullptr);
+            // Guard NaN — câmera não inicializada ou inválida
+            if (std::isnan(curEuler.x) || std::isnan(curEuler.y) || std::isnan(curEuler.z)) return;
+
             float smooth = sharedData->aimbotSmooth;
             smooth = smooth < 0.0f ? 0.0f : (smooth > 0.95f ? 0.95f : smooth);
             float t = 1.0f - smooth;
@@ -630,11 +637,14 @@ static void Hook_CameraLateUpdate(void* self, void* methodInfo) {
             }
             fn_set_eulerAngles(g_camTransform, Vector3(newPitch, newYaw, curEuler.z), nullptr);
         }
-    } else if (doAntiRecoil) {
-        // Anti-recoil sem aimbot: restaura euler pré-orig (cancela recoil do controlador)
+    } else {
+        // Anti-recoil: restaura euler pré-frame (g_cachedCamEuler = euler no início do frame,
+        // antes do camera controller rodar). Cancela qualquer recoil que o controlador aplicou.
         Vector3 postOrig = fn_get_eulerAngles(g_camTransform, nullptr);
+        // Guard NaN no postOrig (usamos .z do post-orig para manter roll correto)
+        if (std::isnan(postOrig.z)) return;
         fn_set_eulerAngles(g_camTransform,
-            Vector3(eulerPre.x, eulerPre.y, postOrig.z), nullptr);
+            Vector3(g_cachedCamEuler.x, g_cachedCamEuler.y, postOrig.z), nullptr);
     }
 }
 
@@ -708,6 +718,18 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
 
         // ── Aim: g_camTransform (necessário para silentAim no próximo frame) ───
         g_camTransform = fn_get_transform ? fn_get_transform(g_cachedCamera, nullptr) : nullptr;
+
+        // Cache euler pré-frame para anti-recoil em Hook_CameraLateUpdate.
+        // Lido AQUI (antes do camera controller rodar) para capturar o estado
+        // sem recoil. Guard NaN: se inválido, anti-recoil fica desativado neste frame.
+        g_camEulerValid = false;
+        if (g_camTransform && fn_get_eulerAngles) {
+            Vector3 e = fn_get_eulerAngles(g_camTransform, nullptr);
+            if (!std::isnan(e.x) && !std::isnan(e.y) && !std::isnan(e.z)) {
+                g_cachedCamEuler = e;
+                g_camEulerValid  = true;
+            }
+        }
 
         // Camera-moving aimbot REMOVIDO (v29).
         // silentAim é o único aimbot: snap pré-orig, restore pós-orig, câmera não mexe.
