@@ -76,6 +76,8 @@ static float aimDeadzone     = 1.5f;  // Ângulo mínimo para ativar (anti-jitte
 static bool  silentAim      = false;
 static bool  recoilEnabled  = false;  // v31: anti-recoil
 static float aimbotSmooth   = 0.0f;   // 0.0=snap instant, 0.0-0.95=lerp suave
+static bool  speedEnabled   = false;  // v32: speed hack
+static float speedValue     = 13.0f;  // velocidade (normal ~6.5)
 
 // ============================================================
 // Aim Target Priority
@@ -236,6 +238,8 @@ void DrawESP(int screenW, int screenH) {
     sharedData->triggerKey         = triggerKey;
     sharedData->recoilEnabled      = recoilEnabled ? 1 : 0;
     sharedData->aimbotSmooth       = aimbotSmooth;
+    sharedData->speedEnabled       = speedEnabled ? 1 : 0;
+    sharedData->speedValue         = speedValue;
     // triggerHeld é gerenciado exclusivamente pelo hotkeyThread
     // ────────────────────────────────────────────────────────────────────────
 
@@ -429,7 +433,7 @@ static void readHookLog() {
 // Config — persiste em /data/local/tmp/.jawmods_cfg
 // ============================================================
 #define JAW_CONFIG_PATH  "/data/local/tmp/.jawmods_cfg"
-#define JAW_CONFIG_MAGIC 0x4A415707u  // "JAW" v7
+#define JAW_CONFIG_MAGIC 0x4A415708u  // "JAW" v8
 
 #pragma pack(push, 1)
 struct JawConfig {
@@ -450,6 +454,9 @@ struct JawConfig {
     // v7 fields
     uint8_t  recoilEnabled;
     float    aimbotSmooth;
+    // v8 fields
+    uint8_t  speedEnabled;
+    float    speedValue;
 };
 #pragma pack(pop)
 
@@ -483,6 +490,9 @@ static void saveConfig() {
     // v7
     c.recoilEnabled      = recoilEnabled;
     c.aimbotSmooth       = aimbotSmooth;
+    // v8
+    c.speedEnabled       = speedEnabled;
+    c.speedValue         = speedValue;
     int fd = open(JAW_CONFIG_PATH, O_CREAT | O_WRONLY | O_TRUNC, 0666);
     if (fd >= 0) { write(fd, &c, sizeof(c)); close(fd); }
 }
@@ -518,6 +528,9 @@ static void loadConfig() {
     // v7
     recoilEnabled      = c.recoilEnabled;
     aimbotSmooth       = c.aimbotSmooth;
+    // v8
+    speedEnabled       = c.speedEnabled;
+    speedValue         = c.speedValue;
 }
 
 // ============================================================
@@ -787,7 +800,7 @@ void DrawMenu() {
         ImGui::PopStyleColor(3);
     }
 
-    const char* verStr = menuMinimized ? "v31" : "v31  FF1.123";
+    const char* verStr = menuMinimized ? "v32" : "v32  FF1.123";
     float verW = ImGui::CalcTextSize(verStr).x;
     ImGui::SetCursorPos(ImVec2(W - verW - 108.0f, (HDR_H - textLineH) * 0.5f));
     ImGui::TextColored(cDimText, "%s", verStr);
@@ -1005,6 +1018,25 @@ void DrawMenu() {
                 float tw = ImGui::CalcTextSize("SEM RECUO").x;
                 ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (rw - tw) * 0.5f);
                 ImGui::TextColored(cGreen, "SEM RECUO");
+            }
+            Sep();
+
+            // Speed Hack
+            bool prevSP = speedEnabled;
+            ToggleRow("Speed", &speedEnabled);
+            if (speedEnabled != prevSP && sharedData)
+                sharedData->speedEnabled = speedEnabled ? 1 : 0;
+            if (speedEnabled) {
+                ImGui::Spacing();
+                ValueLabel("Velocidade", "%.1f", speedValue);
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::SliderFloat("##spd", &speedValue, 6.5f, 30.0f, ""))
+                    if (sharedData) sharedData->speedValue = speedValue;
+                ImGui::Spacing();
+                float rw = ImGui::GetContentRegionAvail().x;
+                float tw = ImGui::CalcTextSize("SPEED ON").x;
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (rw - tw) * 0.5f);
+                ImGui::TextColored(cGreen, "SPEED ON");
             }
             ImGui::EndTabItem();
         }

@@ -89,6 +89,12 @@ struct SharedESPData {
     // Funciona independente do aimbot.
     volatile int recoilEnabled; // 1 = ativo, 0 = desativado
 
+    // ── Speed Hack ─────────────────────────────────────────────────────
+    // Chama set_MoveSpeed(player, speedValue) no player local a cada frame.
+    // speedValue normal: ~6.5. Valores acima aceleram o personagem.
+    volatile int speedEnabled; // 1 = ativo, 0 = desativado
+    float        speedValue;   // velocidade alvo (ex: 15.0 = ~2x normal)
+
     ESPEntry players[MAX_ESP_PLAYERS];
 };
 
