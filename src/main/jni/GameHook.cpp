@@ -809,11 +809,13 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     }
 
     // ── P2: Head bone via Animator (bone visual, fallback do collider) ───────
+    // Guard: validar que animComp parece um ponteiro heap válido (> 0x1000)
+    // antes de desreferenciar — offset 0x700 pode estar errado para alguns players.
     if (!gotHead && fn_GetBoneTransform && fn_get_position) {
         void* animComp = *(void**)((uint8_t*)self + PLAYER_ANIM_COMPONENT_OFFSET);
-        if (animComp) {
+        if (animComp && (uintptr_t)animComp > 0x1000) {
             void* animator = *(void**)((uint8_t*)animComp + ANIM_COMPONENT_ANIMATOR_OFFSET);
-            if (animator) {
+            if (animator && (uintptr_t)animator > 0x1000) {
                 void* headTransform = fn_GetBoneTransform(animator, HUMAN_BODY_BONE_HEAD, nullptr);
                 if (headTransform) {
                     Vector3 headPos = fn_get_position(headTransform, nullptr);
