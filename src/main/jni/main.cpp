@@ -692,9 +692,13 @@ void DrawMenu() {
     const float FULL_H = 490.0f;
     const float MINI_H = 44.0f;
     float targetH = menuMinimized ? MINI_H : FULL_H;
+    // Largura do menu: 3 tamanhos ciclados pelo botão [P/M/G]
+    static const float kMenuWidths[] = { 300.0f, 360.0f, 420.0f };
+    static int menuSizeLevel = 1; // 0=Pequeno, 1=Médio(default), 2=Grande
+    float menuW = kMenuWidths[menuSizeLevel];
     // Posição inicial: canto superior esquerdo (só na primeira vez que o ImGui cria a janela)
     ImGui::SetNextWindowPos(ImVec2(8.0f, 8.0f), ImGuiCond_Once);
-    ImGui::SetNextWindowSize(ImVec2(310.0f, targetH), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(menuW, targetH), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.96f * fadeAlpha);
     ImGui::Begin("##jw", nullptr,
         ImGuiWindowFlags_NoTitleBar      |
@@ -733,25 +737,33 @@ void DrawMenu() {
     ImGui::SetCursorPos(ImVec2(26.0f, (HDR_H - textLineH) * 0.5f));
     ImGui::TextColored(cGreen, "JAWMODS");
 
-    // Botão minimizar/restaurar no canto direito do header
+    // Botões do header: [P/M/G] tamanho  e  [-/+] minimizar
     {
         const float BTN_W = 22.0f;
         const float BTN_H = 17.0f;
-        ImVec2 btnPos = ImVec2(W - BTN_W - 8.0f, (HDR_H - BTN_H) * 0.5f);
-        ImGui::SetCursorPos(btnPos);
         ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.0f, 0.55f, 0.28f, 0.40f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.0f, 0.80f, 0.42f, 0.55f));
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+
+        // Botão de tamanho: cicla P→M→G
+        const char* szLabels[] = { "P##sz", "M##sz", "G##sz" };
+        ImGui::SetCursorPos(ImVec2(W - BTN_W * 2.0f - 12.0f, (HDR_H - BTN_H) * 0.5f));
+        if (ImGui::Button(szLabels[menuSizeLevel], ImVec2(BTN_W, BTN_H)))
+            menuSizeLevel = (menuSizeLevel + 1) % 3;
+
+        // Botão minimizar/restaurar
+        ImGui::SetCursorPos(ImVec2(W - BTN_W - 6.0f, (HDR_H - BTN_H) * 0.5f));
         if (ImGui::Button(menuMinimized ? "+##min" : "-##min", ImVec2(BTN_W, BTN_H)))
             menuMinimized = !menuMinimized;
+
         ImGui::PopStyleVar();
         ImGui::PopStyleColor(3);
     }
 
     const char* verStr = menuMinimized ? "v29" : "v29  FF1.123";
     float verW = ImGui::CalcTextSize(verStr).x;
-    ImGui::SetCursorPos(ImVec2(W - verW - 36.0f, (HDR_H - textLineH) * 0.5f));
+    ImGui::SetCursorPos(ImVec2(W - verW - 64.0f, (HDR_H - textLineH) * 0.5f));
     ImGui::TextColored(cDimText, "%s", verStr);
     ImGui::SetCursorPosY(HDR_H + 2.0f);
 
