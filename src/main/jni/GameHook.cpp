@@ -58,7 +58,7 @@
   #define LOGE(...) ((void)0)
 #endif
 
-#define HOOK_BUILD_VER "v21-stealth"
+#define HOOK_BUILD_VER "v22-stealth"
 
 // ============================================================
 // Hook Log File — SOMENTE em modo debug
@@ -533,23 +533,14 @@ static Vector3 ManualWorldToScreen(Vector3 world, const Matrix4x4& vp, int sw, i
 // HOOK DO OnUpdate — Chamado pelo jogo para CADA player
 // ============================================================
 
-// ── Aimbot — estado entre frames ────────────────────────────────────────────
-// SNAP: alvo travado do frame ANTERIOR (commit no newFrame).
-// CAND: candidato sendo construído neste frame → vira SNAP no próximo.
-//
-// Fluxo (v33 — aimbot via CameraControllerBase::LateUpdate):
-//   Player::LateUpdate: coleta dados ESP + seleciona candidato ao alvo
-//   CameraControllerBase::LateUpdate:
-//     1. orig roda (controlador posiciona câmera corretamente relativo ao player)
-//     2. Aimbot: seta euler da câmera para apontar na cabeça do alvo (DEPOIS do orig)
-//        → câmera NÃO se desacopla (controlador já correu, nossa rotação persiste)
-//        → next-frame: shooting system lê camera.forward = direção do alvo → balas acertam
-//     3. Anti-recoil: restaura euler pré-orig se só anti-recoil ativo
-static Vector3 g_silentSnapTarget{0.0f, 0.0f, 0.0f};  // alvo travado (frame anterior)
-static bool    g_silentSnapValid  = false;
-static Vector3 g_silentCandTarget{0.0f, 0.0f, 0.0f};  // candidato atual (próximo frame)
-static float   g_silentCandDist   = 1e9f;
-static bool    g_silentCandValid  = false;
+// ── Aimbot tradicional — alvo do frame atual ──────────────────────────────────────
+// Player::LateUpdate roda para cada inimigo e constrói g_aimCandTarget.
+// CameraControllerBase::LateUpdate roda DEPOIS de todos os Players no mesmo frame.
+// Nesse ponto g_aimCandTarget já tem o melhor alvo deste frame → usamos direto.
+// Resultado: câmera segue a cabeça do inimigo a cada frame de forma visível.
+static Vector3 g_aimCandTarget{0.0f, 0.0f, 0.0f};  // melhor alvo deste frame
+static float   g_aimCandDist  = 1e9f;
+static bool    g_aimCandValid = false;
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ============================================================
@@ -588,11 +579,9 @@ static void Hook_CameraLateUpdate(void* self, void* methodInfo) {
     if (!hookActive.load() || !sharedData || !g_camTransform ||
         !fn_get_eulerAngles || !fn_set_eulerAngles) return;
 
-    bool triggerOk    = (sharedData->triggerKey == 0) || (sharedData->triggerHeld == 1);
-    bool doAimbot     = sharedData->silentAimEnabled && g_silentSnapValid &&
-                        fn_get_position && triggerOk;
+    // Aimbot tradicional: segue o melhor alvo deste frame (sem trigger obrigatório).
+    bool doAimbot     = sharedData->silentAimEnabled && g_aimCandValid && fn_get_position;
     // Anti-recoil SÓ quando disparando (triggerHeld==1).
-    // Se rodar toda frame sem trigger, bloqueia a câmera do jogador ("modo foto").
     bool doAntiRecoil = sharedData->recoilEnabled && g_camEulerValid &&
                         (sharedData->triggerHeld == 1);
 
@@ -601,9 +590,9 @@ static void Hook_CameraLateUpdate(void* self, void* methodInfo) {
     if (doAimbot) {
         // Aimbot: aponta câmera para cabeça do alvo (DEPOIS do controlador)
         Vector3 camPos = fn_get_position(g_camTransform, nullptr);
-        float dx = g_silentSnapTarget.x - camPos.x;
-        float dy = g_silentSnapTarget.y - camPos.y;
-        float dz = g_silentSnapTarget.z - camPos.z;
+        float dx = g_aimCandTarget.x - camPos.x;
+        float dy = g_aimCandTarget.y - camPos.y;
+        float dz = g_aimCandTarget.z - camPos.z;
         float hd = sqrtf(dx * dx + dz * dz);
         if (hd > 0.01f) {
             float tYaw   =  atan2f(dx, dz) * (180.0f / (float)M_PI);
@@ -735,18 +724,16 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
         // Camera-moving aimbot REMOVIDO (v29).
         // silentAim é o único aimbot: snap pré-orig, restore pós-orig, câmera não mexe.
         // aimAssistHasTarget reflete se silentAim tem alvo para o HUD do overlay.
+        // HUD: tinha alvo no frame anterior?
         sharedData->aimAssistHasTarget =
-            (g_silentSnapValid && sharedData->silentAimEnabled) ? 1 : 0;
+            (g_aimCandValid && sharedData->silentAimEnabled) ? 1 : 0;
 
-        // Resetar candidatos de aim para o novo frame (silentAim)
+        // Resetar candidatos para este frame
         g_aimBestScreenDist = 1e9f;
         g_aimBestHp         = 0x7fffffff;
         g_aimBestDepth      = 1e9f;
-        // Silent Aim: commit CAND → SNAP (alvo do frame atual vira alvo do próximo)
-        g_silentSnapTarget = g_silentCandTarget;
-        g_silentSnapValid  = g_silentCandValid;
-        g_silentCandValid  = false;
-        g_silentCandDist   = 1e9f;
+        g_aimCandValid      = false;
+        g_aimCandDist       = 1e9f;
     }
 
     int idx = sharedData->playerCount;
@@ -887,9 +874,9 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
                 g_aimBestScreenDist = screenDist;
                 g_aimBestHp         = chp;
                 g_aimBestDepth      = screenTop.z;
-                g_silentCandDist    = screenDist;
-                g_silentCandTarget  = topWorld;
-                g_silentCandValid   = true;
+                g_aimCandDist       = screenDist;
+                g_aimCandTarget     = topWorld;
+                g_aimCandValid      = true;
             }
         }
     }
