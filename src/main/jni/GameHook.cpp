@@ -58,7 +58,7 @@
   #define LOGE(...) ((void)0)
 #endif
 
-#define HOOK_BUILD_VER "v17-stealth"
+#define HOOK_BUILD_VER "v18-stealth"
 
 // ============================================================
 // Hook Log File — SOMENTE em modo debug
@@ -361,6 +361,11 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 #define OFF_get_MoveSpeed  0x69128F8
 #define OFF_set_MoveSpeed  0x691299C
 
+// Camera Controller — CameraControllerBase::LateUpdate
+// Hookeado para aplicar aimbot/anti-recoil DEPOIS que o controlador posiciona a câmera.
+// Offset é o RVA do código da função (como OFF_LateUpdate).
+#define OFF_CameraController_LateUpdate 0x68FCE30
+
 // ============================================================
 // Function Pointers — resolvidos via base + offset direto
 // ============================================================
@@ -414,6 +419,8 @@ static uintptr_t g_il2cpp_base = 0;
 
 // Original LateUpdate
 static void (*orig_OnUpdate)(void* self, void* methodInfo) = nullptr;
+// Original CameraControllerBase::LateUpdate
+static void (*orig_CameraLateUpdate)(void* self, void* methodInfo) = nullptr;
 
 // Shared memory
 static SharedESPData* sharedData = nullptr;
@@ -527,11 +534,14 @@ static Vector3 ManualWorldToScreen(Vector3 world, const Matrix4x4& vp, int sw, i
 // SNAP: alvo travado do frame ANTERIOR (commit no newFrame).
 // CAND: candidato sendo construído neste frame → vira SNAP no próximo.
 //
-// Fluxo (v31 — aimbot direto, câmera se move visivelmente para cabeça do alvo):
-//   1. PRE-orig: calcula ângulo câmera → cabeça do alvo, seta euler (lerp ou instant)
-//   2. Salva euler pós-snap para anti-recoil
-//   3. orig roda (jogo processa lógica, física, recoil)
-//   4. Anti-recoil: restaura euler salvo (cancela recoil vertical do tiro)
+// Fluxo (v33 — aimbot via CameraControllerBase::LateUpdate):
+//   Player::LateUpdate: coleta dados ESP + seleciona candidato ao alvo
+//   CameraControllerBase::LateUpdate:
+//     1. orig roda (controlador posiciona câmera corretamente relativo ao player)
+//     2. Aimbot: seta euler da câmera para apontar na cabeça do alvo (DEPOIS do orig)
+//        → câmera NÃO se desacopla (controlador já correu, nossa rotação persiste)
+//        → next-frame: shooting system lê camera.forward = direção do alvo → balas acertam
+//     3. Anti-recoil: restaura euler pré-orig se só anti-recoil ativo
 static Vector3 g_silentSnapTarget{0.0f, 0.0f, 0.0f};  // alvo travado (frame anterior)
 static bool    g_silentSnapValid  = false;
 static Vector3 g_silentCandTarget{0.0f, 0.0f, 0.0f};  // candidato atual (próximo frame)
@@ -539,21 +549,36 @@ static float   g_silentCandDist   = 1e9f;
 static bool    g_silentCandValid  = false;
 // ─────────────────────────────────────────────────────────────────────────────
 
-static void Hook_OnUpdate(void* self, void* methodInfo) {
+// ============================================================
+// HOOK DA CÂMERA — CameraControllerBase::LateUpdate
+// Aplicado DEPOIS que o controlador posiciona a câmera.
+// Aimbot e anti-recoil agora correm aqui (v33).
+// ============================================================
+static void Hook_CameraLateUpdate(void* self, void* methodInfo) {
+    // Salva euler pré-orig para anti-recoil
+    Vector3 eulerPre{0.0f, 0.0f, 0.0f};
+    bool hasCam       = g_camTransform && fn_get_eulerAngles && fn_set_eulerAngles;
+    bool doAimbot     = hasCam && sharedData && sharedData->silentAimEnabled &&
+                        g_silentSnapValid && fn_get_position;
+    bool doAntiRecoil = hasCam && sharedData && sharedData->recoilEnabled;
+
+    if ((doAimbot || doAntiRecoil) && hasCam) {
+        eulerPre = fn_get_eulerAngles(g_camTransform, nullptr);
+    }
+
+    // Chamar original: controlador posiciona câmera corretamente
+    if (orig_CameraLateUpdate)
+        orig_CameraLateUpdate(self, methodInfo);
+
+    if (!hasCam) return;
+
     bool triggerOk = !sharedData ||
                      (sharedData->triggerKey == 0) ||
                      (sharedData->triggerHeld == 1);
 
-    // ── Aimbot direto PRE-orig: move câmera para cabeça do alvo ──────────────
-    Vector3 eulerPreOrig{0.0f, 0.0f, 0.0f};
-    bool    savedEuler = false;
-
-    if (sharedData && sharedData->silentAimEnabled && triggerOk &&
-        g_silentSnapValid && g_camTransform &&
-        fn_get_eulerAngles && fn_set_eulerAngles && fn_get_position) {
-
-        Vector3 curEuler = fn_get_eulerAngles(g_camTransform, nullptr);
-        Vector3 camPos   = fn_get_position(g_camTransform, nullptr);
+    if (doAimbot && triggerOk) {
+        // Aimbot: aponta câmera para cabeça do alvo (DEPOIS do controlador)
+        Vector3 camPos = fn_get_position(g_camTransform, nullptr);
         float dx = g_silentSnapTarget.x - camPos.x;
         float dy = g_silentSnapTarget.y - camPos.y;
         float dz = g_silentSnapTarget.z - camPos.z;
@@ -565,6 +590,7 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
             if (tPitch < -89.0f) tPitch = -89.0f;
             float tPitchOut = tPitch < 0.0f ? tPitch + 360.0f : tPitch;
 
+            Vector3 curEuler = fn_get_eulerAngles(g_camTransform, nullptr);
             float smooth = sharedData->aimbotSmooth;
             smooth = smooth < 0.0f ? 0.0f : (smooth > 0.95f ? 0.95f : smooth);
             float t = 1.0f - smooth;
@@ -586,28 +612,18 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
             }
             fn_set_eulerAngles(g_camTransform, Vector3(newPitch, newYaw, curEuler.z), nullptr);
         }
-        // Salva euler pós-snap para anti-recoil
-        eulerPreOrig = fn_get_eulerAngles(g_camTransform, nullptr);
-        savedEuler   = true;
-    } else if (sharedData && sharedData->recoilEnabled &&
-               g_camTransform && fn_get_eulerAngles) {
-        // Anti-recoil sem aimbot: salva euler atual antes do orig
-        eulerPreOrig = fn_get_eulerAngles(g_camTransform, nullptr);
-        savedEuler   = true;
+    } else if (doAntiRecoil) {
+        // Anti-recoil sem aimbot: restaura euler pré-orig (cancela recoil do controlador)
+        Vector3 postOrig = fn_get_eulerAngles(g_camTransform, nullptr);
+        fn_set_eulerAngles(g_camTransform,
+            Vector3(eulerPre.x, eulerPre.y, postOrig.z), nullptr);
     }
+}
 
-    // Chamar original (jogo processa lógica, física, recoil)
+static void Hook_OnUpdate(void* self, void* methodInfo) {
+    // Chamar original (jogo processa lógica, física)
     if (orig_OnUpdate) {
         orig_OnUpdate(self, methodInfo);
-    }
-
-    // ── Anti-Recoil: restaura pitch pós-orig (cancela recoil vertical) ────────
-    if (savedEuler && sharedData && sharedData->recoilEnabled &&
-        g_camTransform && fn_get_eulerAngles && fn_set_eulerAngles) {
-        Vector3 postOrig = fn_get_eulerAngles(g_camTransform, nullptr);
-        // Restaura pitch (X) e yaw (Y) ao valor pré-orig: cancela recoil
-        fn_set_eulerAngles(g_camTransform,
-            Vector3(eulerPreOrig.x, eulerPreOrig.y, postOrig.z), nullptr);
     }
 
     // Se shared memory não está pronto ou hook desativado, retorna
@@ -1232,6 +1248,31 @@ void* hack_thread(void*) {
     sharedData->hookApplied = 0xBEEF1234;  // sinaliza overlay que VMT hook esta ativo
     LOGI("=== HOOK ATIVO === VMT hook em Player::LateUpdate");
     hookLogWrite("=== HOOK ATIVO === VMT em Player::LateUpdate");
+
+    // ── Hook CameraControllerBase::LateUpdate (aimbot + anti-recoil v33) ──
+    // Aplicar APÓS hook do Player::LateUpdate.
+    // CameraControllerBase::LateUpdate roda depois de Player::LateUpdate.
+    // Setamos euler da câmera DEPOIS que o controlador posiciona a câmera →
+    // câmera permanece acoplada ao player e balas seguem camera.forward.
+    void* cameraBaseClass = p_class_from_name(cs_image, "COW.GamePlay", "CameraControllerBase");
+    if (cameraBaseClass) {
+        void* camLateUpdateMethodInfo = p_class_get_method(cameraBaseClass, "LateUpdate", 0);
+        if (camLateUpdateMethodInfo) {
+            if (VmtHook(camLateUpdateMethodInfo, (void*)Hook_CameraLateUpdate, (void**)&orig_CameraLateUpdate)) {
+                LOGI("VMT Hook CameraControllerBase::LateUpdate aplicado: orig=%p", orig_CameraLateUpdate);
+                hookLogWrite("VMT CameraLateUpdate: orig=%p", orig_CameraLateUpdate);
+            } else {
+                LOGE("VMT Hook CameraControllerBase::LateUpdate FALHOU");
+                hookLogWrite("ERRO: VMT CameraLateUpdate falhou");
+            }
+        } else {
+            LOGE("LateUpdate nao encontrado em CameraControllerBase");
+            hookLogWrite("ERRO: LateUpdate nao encontrado em CameraControllerBase");
+        }
+    } else {
+        LOGE("CameraControllerBase nao encontrada");
+        hookLogWrite("ERRO: CameraControllerBase nao encontrada");
+    }
 
     return nullptr;
 }
