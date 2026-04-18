@@ -359,6 +359,11 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 // Patch ARM64: MOV W0,#0 + RET → sempre retorna Head (headshot em qualquer tiro).
 #define OFF_GetPartByCollider             0x4FEAD00
 
+// ELMGJKHIIAA.HPGMEMPFIPD(DamageInfo) — função que verifica se o dano é headshot.
+// Retorna bool: true = é headshot. Patch: MOV W0,#1 + RET → sempre true.
+// Esta é a função real usada pelo cálculo de dano (GetPartByCollider só pega hitbox).
+#define OFF_IsHeadShotCheck               0x6F43D74
+
 // ============================================================
 // Function Pointers — resolvidos via base + offset direto
 // ============================================================
@@ -402,18 +407,24 @@ static void*   (*fn_get_HeadCollider)(void* player, void* method) = nullptr;
 static void    (*fn_Collider_get_bounds_Injected)(void* collider, BoundsVal* outBounds, void* method) = nullptr;
 
 // ============================================================
-// Headshot Patch — Inline ARM64 patch em GetPartByCollider
-// Faz qualquer tiro contar como Head (0) independente do hitbox
+// Headshot Patch — Inline ARM64 patch em duas funções:
+//   1. GetPartByCollider → sempre retorna Head (0)
+//   2. HPGMEMPFIPD (IsHeadShot check) → sempre retorna true (1)
 // ============================================================
-static uintptr_t g_il2cpp_base   = 0;       // base resolvida no setup, usada no hook
-static uint8_t g_origGetPart[8]  = {};       // bytes originais salvos
+static uintptr_t g_il2cpp_base    = 0;       // base resolvida no setup, usada no hook
+static uint8_t g_origGetPart[8]   = {};       // bytes originais de GetPartByCollider
+static uint8_t g_origIsHeadShot[8]= {};       // bytes originais de IsHeadShotCheck
 static bool    g_patchApplied     = false;
-static bool    g_patchWanted      = false;  // estado desejado pelo overlay
+static bool    g_patchWanted      = false;
 
-// MOV W0, #0  = 0x52800000
-// RET         = 0xD65F03C0
-static const uint8_t kHeadPatch[8] = {
-    0x00, 0x00, 0x80, 0x52,  // MOV W0, #0   (Head = 0)
+// MOV W0, #0  = 0x52800000  (Head = 0)
+static const uint8_t kPatchRetHead[8] = {
+    0x00, 0x00, 0x80, 0x52,  // MOV W0, #0
+    0xC0, 0x03, 0x5F, 0xD6   // RET
+};
+// MOV W0, #1  = 0x52800020  (true = 1)
+static const uint8_t kPatchRetTrue[8] = {
+    0x20, 0x00, 0x80, 0x52,  // MOV W0, #1
     0xC0, 0x03, 0x5F, 0xD6   // RET
 };
 
@@ -431,23 +442,33 @@ static bool InlinePatch(void* target, const uint8_t* bytes, size_t len) {
 
 static void ApplyHeadshotPatch() {
     if (g_patchApplied || !g_il2cpp_base) return;
-    void* fn = (void*)(g_il2cpp_base + OFF_GetPartByCollider);
-    memcpy(g_origGetPart, fn, 8);  // salva original
-    if (InlinePatch(fn, kHeadPatch, 8)) {
+    // Patch 1: GetPartByCollider → sempre retorna Head (0)
+    void* fn1 = (void*)(g_il2cpp_base + OFF_GetPartByCollider);
+    memcpy(g_origGetPart, fn1, 8);
+    bool ok1 = InlinePatch(fn1, kPatchRetHead, 8);
+    // Patch 2: IsHeadShotCheck → sempre retorna true (1)
+    void* fn2 = (void*)(g_il2cpp_base + OFF_IsHeadShotCheck);
+    memcpy(g_origIsHeadShot, fn2, 8);
+    bool ok2 = InlinePatch(fn2, kPatchRetTrue, 8);
+    if (ok1 && ok2) {
         g_patchApplied = true;
-        LOGI("[Headshot] Patch aplicado em %p", fn);
+        LOGI("[Headshot] Patch aplicado: GetPartByCollider=%p IsHeadShot=%p", fn1, fn2);
     } else {
-        LOGE("[Headshot] Falha ao aplicar patch");
+        LOGE("[Headshot] Falha: GetPartByCollider=%d IsHeadShot=%d", ok1, ok2);
+        // Se um falhou, restaura o que conseguiu
+        if (ok1) InlinePatch(fn1, g_origGetPart, 8);
+        if (ok2) InlinePatch(fn2, g_origIsHeadShot, 8);
     }
 }
 
 static void RemoveHeadshotPatch() {
     if (!g_patchApplied || !g_il2cpp_base) return;
-    void* fn = (void*)(g_il2cpp_base + OFF_GetPartByCollider);
-    if (InlinePatch(fn, g_origGetPart, 8)) {
-        g_patchApplied = false;
-        LOGI("[Headshot] Patch removido");
-    }
+    void* fn1 = (void*)(g_il2cpp_base + OFF_GetPartByCollider);
+    void* fn2 = (void*)(g_il2cpp_base + OFF_IsHeadShotCheck);
+    InlinePatch(fn1, g_origGetPart, 8);
+    InlinePatch(fn2, g_origIsHeadShot, 8);
+    g_patchApplied = false;
+    LOGI("[Headshot] Patch removido");
 }
 
 // Original LateUpdate

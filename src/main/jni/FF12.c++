@@ -30,9 +30,15 @@ public UnityEngine.Collider get_HeadCollider(); // 0x676FEB4
 namespace: Assembly-CSharp.dll
 class: COW.GamePlay.PlayerColliderChecker
 // Determina qual parte do corpo foi atingida pela bala
-// HitPart enum: Head=0, Neck=1, Chest=2, Hips=3, LeftArm=4, RightArm=5, LeftLeg=6, RightLeg=7
+// HitPart enum: Head=0, Neck=1, Chest=2, Hips=3, LeftArm=4, RightArm=6, LeftLeg=9, RightLeg=11, ...NoFlag=18
 public COW.GamePlay.HitPart GetPartByCollider(UnityEngine.Collider collider); // 0x4FEAD00
-// ← PATCH v30: MOV W0,#0 + RET → sempre retorna Head (0) = headshot garantido
+// ← PATCH v30: MOV W0,#0 + RET → sempre retorna Head (0)
+
+namespace: Assembly-CSharp.dll
+class: COW.GamePlay.ELMGJKHIIAA  // DamageInfo
+// Verifica se o dano é headshot. Usado no cálculo real de dano (TakeDamage).
+// PATCH v30.2: MOV W0,#1 + RET → sempre retorna true = headshot garantido
+public static System.Boolean HPGMEMPFIPD(COW.GamePlay.ELMGJKHIIAA damageInfo); // 0x6F43D74
 
 // ── Aim / Câmera ─────────────────────────────────────────────
 namespace: UnityEngine.CoreModule.dll
