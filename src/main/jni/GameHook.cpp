@@ -413,10 +413,12 @@ static bool g_vpValid = false;
 static int g_frameId = 0;
 
 // ── Aim Assist — estado por frame ──────────────────────────────────────────
-static void*   g_camTransform      = nullptr;  // Transform da câmera (atualizado por frame)
+static void*   g_camTransform      = nullptr;      // Transform da câmera (atualizado por frame)
 static Vector3 g_aimTargetWorld{0.0f, 0.0f, 0.0f}; // Posição 3D da cabeça do melhor alvo
-static float   g_aimBestScreenDist = 1e9f;     // Distância de tela ao centro (menor = melhor)
-static bool    g_aimHasTarget      = false;    // Alvo válido neste frame
+static float   g_aimBestScreenDist = 1e9f;         // prioridade 0: menor distância ao centro
+static int     g_aimBestHp         = 0x7fffffff;   // prioridade 1: menor HP (Lowest HP mode)
+static float   g_aimBestDepth      = 1e9f;         // prioridade 2: menor clipW (Nearest Distance)
+static bool    g_aimHasTarget      = false;        // alvo válido neste frame
 // NOTA: NÃO há estado acumulado de pitch/yaw.
 // Lemos os euler angles REAIS da câmera a cada frame e aplicamos apenas um delta.
 // Isso garante que o input do jogador nunca seja ignorado.
