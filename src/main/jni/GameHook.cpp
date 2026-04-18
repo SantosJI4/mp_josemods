@@ -506,28 +506,60 @@ static Vector3 ManualWorldToScreen(Vector3 world, const Matrix4x4& vp, int sw, i
 // ============================================================
 
 // ── Silent Aim — estado entre frames ─────────────────────────────────────
-// g_silentAimPending: câmera foi snapped no frame anterior → restaurar agora
-static bool    g_silentAimPending = false;
-static Vector3 g_silentAimSaved{0.0f, 0.0f, 0.0f};   // ângulos salvos para restore
-// Target independente do aim assist — sem restrição de FOV
-static Vector3 g_silentTargetWorld{0.0f, 0.0f, 0.0f};
-static float   g_silentBestDist    = 1e9f;             // distância de tela ao centro
-static bool    g_silentHasTarget   = false;
+// SNAP: alvo travado do frame ANTERIOR — usado no snap PRÉ-orig deste frame.
+// CAND: melhor candidato sendo construído no frame ATUAL — vira SNAP no próximo.
+//
+// Fluxo correto:
+//   1. PRÉ-orig: snap câmera → g_silentSnapTarget (frame anterior)
+//   2. orig roda → raycast/tiro registra na cabeça → headshot
+//   3. PÓS-orig: restore câmera imediatamente → jogador não vê movimento
+//   4. newFrame: commit CAND→SNAP, reset CAND para próximo frame
+static Vector3 g_silentSnapTarget{0.0f, 0.0f, 0.0f};  // alvo travado (frame anterior)
+static bool    g_silentSnapValid  = false;
+static Vector3 g_silentCandTarget{0.0f, 0.0f, 0.0f};  // candidato atual (próximo frame)
+static float   g_silentCandDist   = 1e9f;
+static bool    g_silentCandValid  = false;
 // ─────────────────────────────────────────────────────────────────────────
 
 static void Hook_OnUpdate(void* self, void* methodInfo) {
-    // ── Silent Aim: Restaurar ângulos snapped do frame anterior ──────────────
-    // O snap é feito no FINAL do frame anterior (após orig já ter rodado).
-    // No início do frame atual, restauramos para que o jogador não veja o movimento.
-    // O tiro do frame anterior já registrou com o ângulo snapped.
-    if (g_silentAimPending && g_camTransform && fn_set_eulerAngles) {
-        fn_set_eulerAngles(g_camTransform, g_silentAimSaved, nullptr);
-        g_silentAimPending = false;
+    // ── Silent Aim: Snap PRÉ-orig ─────────────────────────────────────────────
+    // Usa g_silentSnapTarget (alvo travado do frame anterior).
+    // Snap ANTES de orig → orig processa o tiro/raycast com câmera na cabeça.
+    // Restore LOGO APÓS orig → jogador não vê a câmera se mover.
+    bool    sawSnap  = false;
+    Vector3 sawSaved{0.0f, 0.0f, 0.0f};
+
+    if (sharedData && sharedData->silentAimEnabled &&
+        g_silentSnapValid && g_camTransform &&
+        fn_get_eulerAngles && fn_set_eulerAngles && fn_get_position) {
+
+        sawSaved = fn_get_eulerAngles(g_camTransform, nullptr);
+        Vector3 sCamPos = fn_get_position(g_camTransform, nullptr);
+        float sdx = g_silentSnapTarget.x - sCamPos.x;
+        float sdy = g_silentSnapTarget.y - sCamPos.y;
+        float sdz = g_silentSnapTarget.z - sCamPos.z;
+        float shd = sqrtf(sdx * sdx + sdz * sdz);
+        if (shd > 0.01f) {
+            float sYaw   =  atan2f(sdx, sdz) * (180.0f / (float)M_PI);
+            float sPitch = -atan2f(sdy, shd)  * (180.0f / (float)M_PI);
+            if (sPitch >  89.0f) sPitch =  89.0f;
+            if (sPitch < -89.0f) sPitch = -89.0f;
+            float sOut = sPitch < 0.0f ? sPitch + 360.0f : sPitch;
+            fn_set_eulerAngles(g_camTransform, Vector3(sOut, sYaw, sawSaved.z), nullptr);
+            sawSnap = true;
+        }
     }
 
     // Chamar original (jogo processa lógica, física, raycast do tiro)
     if (orig_OnUpdate) {
         orig_OnUpdate(self, methodInfo);
+    }
+
+    // ── Silent Aim: Restore IMEDIATAMENTE após orig ───────────────────────────
+    // O tiro já foi registrado (na cabeça). Agora restaura para que o jogador
+    // não perceba o snap.
+    if (sawSnap && g_camTransform && fn_set_eulerAngles) {
+        fn_set_eulerAngles(g_camTransform, sawSaved, nullptr);
     }
 
     // Se shared memory não está pronto ou hook desativado, retorna
@@ -670,38 +702,11 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
         // Resetar candidatos de aim para o novo frame
         g_aimHasTarget      = false;
         g_aimBestScreenDist = 1e9f;
-        // Resetar candidatos de silent aim
-        g_silentHasTarget   = false;
-        g_silentBestDist    = 1e9f;
-
-        // ── Silent Aim: Snap instantâneo — SEM restrição de FOV ─────────────────
-        // Usa g_silentTargetWorld: inimigo vivo mais próximo do centro (tela inteira).
-        // Snap feito aqui (fim do frame), restaurado no INÍCIO do próximo frame
-        // antes de orig_OnUpdate → tiro registra na cabeça, mira não se move.
-        if (sharedData->silentAimEnabled && g_camTransform &&
-            g_silentHasTarget && fn_get_eulerAngles && fn_set_eulerAngles && fn_get_position) {
-
-            // Salvar ângulo atual para restaurar no início do próximo frame
-            g_silentAimSaved = fn_get_eulerAngles(g_camTransform, nullptr);
-
-            Vector3 camPos = fn_get_position(g_camTransform, nullptr);
-            float dx = g_silentTargetWorld.x - camPos.x;
-            float dy = g_silentTargetWorld.y - camPos.y;
-            float dz = g_silentTargetWorld.z - camPos.z;
-            float hd = sqrtf(dx*dx + dz*dz);
-
-            if (hd > 0.01f) {
-                float targetYaw   =  atan2f(dx, dz) * (180.0f / (float)M_PI);
-                float targetPitch = -atan2f(dy, hd)  * (180.0f / (float)M_PI);
-                if (targetPitch >  89.0f) targetPitch =  89.0f;
-                if (targetPitch < -89.0f) targetPitch = -89.0f;
-                float outPitch = targetPitch < 0.0f ? targetPitch + 360.0f : targetPitch;
-
-                fn_set_eulerAngles(g_camTransform, Vector3(outPitch, targetYaw, g_silentAimSaved.z), nullptr);
-                g_silentAimPending = true;
-            }
-        }
-        // ─────────────────────────────────────────────────────────────────────
+        // Silent Aim: commit CAND → SNAP (alvo do frame atual vira alvo do próximo)
+        g_silentSnapTarget = g_silentCandTarget;
+        g_silentSnapValid  = g_silentCandValid;
+        g_silentCandValid  = false;
+        g_silentCandDist   = 1e9f;
     }
 
     int idx = sharedData->playerCount;
@@ -830,13 +835,12 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     }
 
     // ── Silent Aim: rastrear inimigo mais próximo do centro (TELA INTEIRA) ───
-    // Sem restrição de FOV — qualquer inimigo vivo na tela é candidato.
-    // Snap ocorre no próximo tiro, sem mover a mira.
+    // Sem restrição de FOV — qualquer inimigo vivo na tela é candidato CAND.
     if (sharedData->silentAimEnabled && chp > 0) {
-        if (screenDist < g_silentBestDist) {
-            g_silentBestDist    = screenDist;
-            g_silentTargetWorld = topWorld;
-            g_silentHasTarget   = true;
+        if (screenDist < g_silentCandDist) {
+            g_silentCandDist   = screenDist;
+            g_silentCandTarget = topWorld;
+            g_silentCandValid  = true;
         }
     }
     // ─────────────────────────────────────────────────────────────────────────
