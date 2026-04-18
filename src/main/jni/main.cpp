@@ -225,16 +225,11 @@ void DrawESP(int screenW, int screenH) {
     // Hook SEMPRE coleta players (espEnabled=1 fixo) — draw controlado pelo toggle
     sharedData->espEnabled = 1;
 
-    // ── Sincronizar configurações do Aim Assist com o hook ──────────────────
-    sharedData->aimAssistEnabled  = aimAssist ? 1 : 0;
-    sharedData->aimAssistSpeed    = aimSpeed;
+    // ── Sincronizar Aimbot (v29: silentAim é o único aimbot) ────────────────
+    sharedData->aimAssistEnabled  = 0;       // camera-moving desligado permanentemente
     sharedData->aimAssistFovDeg   = aimFovDeg;
-    sharedData->aimAssistDeadzone = aimDeadzone;
-    // ── Sincronizar Silent Aim + Aimbot Mode (v27) ───────────────────────────
     sharedData->silentAimEnabled   = silentAim ? 1 : 0;
     sharedData->aimTargetPriority  = aimTargetPriority;
-    sharedData->aimMode            = aimMode;
-    sharedData->aimLegitSmooth     = aimLegitSmooth;
     sharedData->aimRageOffsetY     = aimRageOffsetY;
     sharedData->triggerKey         = triggerKey;
     // triggerHeld é gerenciado exclusivamente pelo hotkeyThread
@@ -594,16 +589,13 @@ static void* hotkeyThread(void*) {
         }
         // ── Toggles normais só em key-press (value==1) ────────────────────
         if (ev.value != 1) continue;
-        if (hotkeyAim    > 0 && ev.code == (uint16_t)hotkeyAim) {
-            aimAssist = !aimAssist;
-            if (sharedData) {
-                sharedData->aimAssistEnabled = aimAssist ? 1 : 0;
-                if (!aimAssist) sharedData->aimAssistHasTarget = 0;
-            }
-        }
-        if (hotkeySilent > 0 && ev.code == (uint16_t)hotkeySilent) {
+        // hotkeyAim agora controla silentAim (v29: único aimbot)
+        if (hotkeyAim > 0 && ev.code == (uint16_t)hotkeyAim) {
             silentAim = !silentAim;
-            if (sharedData) sharedData->silentAimEnabled = silentAim ? 1 : 0;
+            if (sharedData) {
+                sharedData->silentAimEnabled  = silentAim ? 1 : 0;
+                if (!silentAim) sharedData->aimAssistHasTarget = 0;
+            }
         }
         if (hotkeyEsp > 0 && ev.code == (uint16_t)hotkeyEsp)
             esp = !esp;
@@ -757,7 +749,7 @@ void DrawMenu() {
         ImGui::PopStyleColor(3);
     }
 
-    const char* verStr = menuMinimized ? "v28" : "v28  FF1.123";
+    const char* verStr = menuMinimized ? "v29" : "v29  FF1.123";
     float verW = ImGui::CalcTextSize(verStr).x;
     ImGui::SetCursorPos(ImVec2(W - verW - 36.0f, (HDR_H - textLineH) * 0.5f));
     ImGui::TextColored(cDimText, "%s", verStr);
@@ -887,16 +879,16 @@ void DrawMenu() {
         if (ImGui::BeginTabItem("AIM")) {
             ImGui::Spacing();
 
-            // Toggle Aimbot
-            bool prevAim = aimAssist;
-            ToggleRow("Aimbot", &aimAssist);
-            if (aimAssist != prevAim && sharedData) {
-                sharedData->aimAssistEnabled = aimAssist ? 1 : 0;
-                if (!aimAssist) sharedData->aimAssistHasTarget = 0;
+            // Toggle Aimbot (v29: silentAim é o único aimbot — sem movimento de câmera)
+            bool prevAim = silentAim;
+            ToggleRow("Aimbot", &silentAim);
+            if (silentAim != prevAim && sharedData) {
+                sharedData->silentAimEnabled  = silentAim ? 1 : 0;
+                if (!silentAim) sharedData->aimAssistHasTarget = 0;
             }
 
-            if (aimAssist) {
-                // Status
+            if (silentAim) {
+                // Status lock
                 bool hasLock = sharedData && sharedData->aimAssistHasTarget;
                 bool trigOk  = !sharedData ||
                                sharedData->triggerKey == 0 ||
@@ -915,32 +907,7 @@ void DrawMenu() {
                 }
                 Sep();
 
-                // Modo: Legit | Rage
-                ImGui::TextColored(cDimText, "Modo");
-                ImGui::Spacing();
-                float rw = ImGui::GetContentRegionAvail().x;
-                ImGui::PushStyleColor(ImGuiCol_Button,
-                    aimMode == 0 ? ImVec4(0.0f,0.55f,0.28f,0.9f)
-                                 : ImVec4(0.13f,0.14f,0.15f,1.0f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.0f,0.65f,0.34f,1.0f));
-                if (ImGui::Button("Legit##m0", ImVec2((rw - 6.0f) * 0.5f, 26.0f))) {
-                    aimMode = 0;
-                    if (sharedData) sharedData->aimMode = 0;
-                }
-                ImGui::PopStyleColor(2);
-                ImGui::SameLine(0, 6.0f);
-                ImGui::PushStyleColor(ImGuiCol_Button,
-                    aimMode == 1 ? ImVec4(0.65f,0.10f,0.10f,0.9f)
-                                 : ImVec4(0.13f,0.14f,0.15f,1.0f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.80f,0.15f,0.15f,1.0f));
-                if (ImGui::Button("Rage##m1", ImVec2(-1.0f, 26.0f))) {
-                    aimMode = 1;
-                    if (sharedData) sharedData->aimMode = 1;
-                }
-                ImGui::PopStyleColor(2);
-                Sep();
-
-                // Target Priority
+                // Prioridade de alvo
                 ImGui::TextColored(cDimText, "Prioridade");
                 ImGui::Spacing();
                 const char* priorities[] = {
@@ -953,38 +920,23 @@ void DrawMenu() {
                     if (sharedData) sharedData->aimTargetPriority = aimTargetPriority;
                 Sep();
 
-                // FOV
+                // FOV — cone de detecção de alvo
                 ValueLabel("FOV", "%.0f Deg", aimFovDeg);
                 ImGui::SetNextItemWidth(-1.0f);
                 if (ImGui::SliderFloat("##fov", &aimFovDeg, 5.0f, 90.0f, ""))
                     if (sharedData) sharedData->aimAssistFovDeg = aimFovDeg;
                 ImGui::Spacing();
 
-                // Head Offset Y — calibracao visivel em AMBOS os modos
+                // Head Offset Y — calibrar ponto exato de impacto na cabeça
                 ValueLabel("Head Offset Y", "%.2f", aimRageOffsetY);
                 ImGui::SetNextItemWidth(-1.0f);
                 if (ImGui::SliderFloat("##hoy", &aimRageOffsetY, -0.30f, 0.50f, ""))
                     if (sharedData) sharedData->aimRageOffsetY = aimRageOffsetY;
                 ImGui::Spacing();
-
-                if (aimMode == 0) {
-                    // LEGIT
-                    ValueLabel("Suavidade", "%.2f", aimLegitSmooth);
-                    ImGui::SetNextItemWidth(-1.0f);
-                    if (ImGui::SliderFloat("##lgts", &aimLegitSmooth, 0.01f, 0.50f, ""))
-                        if (sharedData) sharedData->aimLegitSmooth = aimLegitSmooth;
-                    ImGui::Spacing();
-                    float lockPct = (1.0f - aimDeadzone / 5.0f) * 100.0f;
-                    ValueLabel("Deadzone", "%.0f%%", lockPct);
-                    ImGui::SetNextItemWidth(-1.0f);
-                    if (ImGui::SliderFloat("##lkd", &aimDeadzone, 0.0f, 5.0f, ""))
-                        if (sharedData) sharedData->aimAssistDeadzone = aimDeadzone;
-                    ImGui::Spacing();
-                }
                 Sep();
 
                 // Trigger Key
-                ImGui::TextColored(cDimText, "Trigger (HOLD para mirar)");
+                ImGui::TextColored(cDimText, "Trigger (HOLD para ativar)");
                 ImGui::Spacing();
                 const char* tkeys[] = { "Sempre Ativo", "Vol-  (114)", "Vol+  (115)" };
                 int tidx = (triggerKey == 114) ? 1 : (triggerKey == 115) ? 2 : 0;
@@ -1001,20 +953,6 @@ void DrawMenu() {
                     ImGui::TextColored(cDimText, "  Segure o botao enquanto atira");
                 }
             }
-            Sep();
-
-            // Silent Aim (na mesma aba)
-            bool prevSilent = silentAim;
-            ToggleRow("Silent Aim", &silentAim);
-            if (silentAim != prevSilent && sharedData)
-                sharedData->silentAimEnabled = silentAim ? 1 : 0;
-            if (silentAim) {
-                ImGui::Spacing();
-                float rww = ImGui::GetContentRegionAvail().x;
-                float hw  = ImGui::CalcTextSize("HEADSHOT AUTO").x;
-                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (rww - hw) * 0.5f);
-                ImGui::TextColored(cGreen, "HEADSHOT AUTO");
-            }
             ImGui::EndTabItem();
         }
 
@@ -1027,19 +965,13 @@ void DrawMenu() {
             ImGui::Spacing();
 
             const char* knames[] = { "OFF", "Vol-  (114)", "Vol+  (115)" };
-            int aidx = (hotkeyAim    == 114) ? 1 : (hotkeyAim    == 115) ? 2 : 0;
-            int sidx = (hotkeySilent == 114) ? 1 : (hotkeySilent == 115) ? 2 : 0;
-            int eidx = (hotkeyEsp    == 114) ? 1 : (hotkeyEsp    == 115) ? 2 : 0;
+            int aidx = (hotkeyAim == 114) ? 1 : (hotkeyAim == 115) ? 2 : 0;
+            int eidx = (hotkeyEsp == 114) ? 1 : (hotkeyEsp == 115) ? 2 : 0;
 
             ImGui::TextColored(cFgText, "Aimbot");
             ImGui::SameLine(90.0f); ImGui::SetNextItemWidth(-1.0f);
             if (ImGui::Combo("##hka", &aidx, knames, 3))
                 hotkeyAim = (aidx == 1) ? 114 : (aidx == 2) ? 115 : 0;
-
-            ImGui::TextColored(cFgText, "Silent Aim");
-            ImGui::SameLine(90.0f); ImGui::SetNextItemWidth(-1.0f);
-            if (ImGui::Combo("##hks", &sidx, knames, 3))
-                hotkeySilent = (sidx == 1) ? 114 : (sidx == 2) ? 115 : 0;
 
             ImGui::TextColored(cFgText, "ESP");
             ImGui::SameLine(90.0f); ImGui::SetNextItemWidth(-1.0f);
@@ -1071,7 +1003,7 @@ void DrawMenu() {
         IM_COL32(28, 30, 33, 255));
 
     ImGui::SetCursorPos(ImVec2(14.0f, winH - FOOTER_H + 8.0f));
-    ImGui::TextColored(cDimText, "jawmods.app  v28");
+    ImGui::TextColored(cDimText, "jawmods.app  v29");
 
     } // end !menuMinimized
 

@@ -531,7 +531,12 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     bool    sawSnap  = false;
     Vector3 sawSaved{0.0f, 0.0f, 0.0f};
 
-    if (sharedData && sharedData->silentAimEnabled &&
+    // triggerOk: silentAim também respeita a tecla de trigger
+    bool triggerOk = !sharedData ||
+                     (sharedData->triggerKey == 0) ||
+                     (sharedData->triggerHeld == 1);
+
+    if (sharedData && sharedData->silentAimEnabled && triggerOk &&
         g_silentSnapValid && g_camTransform &&
         fn_get_eulerAngles && fn_set_eulerAngles && fn_get_position) {
 
@@ -626,111 +631,16 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
             g_vpValid = true;
         }
 
-        // ── Aim Assist: Aplicar correção de ângulo (dados do frame anterior) ──
-        // Roda em LateUpdate: o game controller já setou a câmera no Update.
-        // Lemos a rotação ATUAL (inclui input do jogador), calculamos um delta
-        // pequeno em direção à cabeça do alvo e escrevemos de volta.
-        // O jogador mantém controle total — apenas sentimos um "puxão" sutil.
+        // ── Aim: g_camTransform (necessário para silentAim no próximo frame) ───
         g_camTransform = fn_get_transform ? fn_get_transform(g_cachedCamera, nullptr) : nullptr;
 
-        if (sharedData->aimAssistEnabled && g_camTransform &&
-            g_aimHasTarget && fn_get_eulerAngles && fn_set_eulerAngles) {
+        // Camera-moving aimbot REMOVIDO (v29).
+        // silentAim é o único aimbot: snap pré-orig, restore pós-orig, câmera não mexe.
+        // aimAssistHasTarget reflete se silentAim tem alvo para o HUD do overlay.
+        sharedData->aimAssistHasTarget =
+            (g_silentSnapValid && sharedData->silentAimEnabled) ? 1 : 0;
 
-            // Trigger check: ativo sempre (triggerKey=0) OU enquanto tecla pressionada
-            bool triggerOk = (sharedData->triggerKey == 0) ||
-                             (sharedData->triggerHeld == 1);
-
-            if (triggerOk) {
-                Vector3 curEuler = fn_get_eulerAngles(g_camTransform, nullptr);
-                Vector3 camPos   = fn_get_position(g_camTransform, nullptr);
-
-                // Capa offset: ajusta foco para o topo da malha (Rage mode)
-                // Para Legit, aimRageOffsetY pode ser 0 ou pequeno
-                float offsetY = sharedData->aimRageOffsetY;
-
-                // Delta 3D entre câmera e alvo + offset vertical
-                float dx = g_aimTargetWorld.x - camPos.x;
-                float dy = (g_aimTargetWorld.y + offsetY) - camPos.y;
-                float dz = g_aimTargetWorld.z - camPos.z;
-
-                // Hipotenusa horizontal (plano XZ)
-                float hd = sqrtf(dx * dx + dz * dz);
-
-                if (hd > 0.01f) {
-                    // ── Cálculo de ViewAngles via atan2 ────────────────────────
-                    // atan2(x, z) lida com todos quadrantes sem divisão por zero.
-                    // Yaw   = rotação horizontal (eixo Y Unity)
-                    // Pitch = rotação vertical   (eixo X Unity, negado: cima = neg)
-                    float targetYaw   =  atan2f(dx, dz) * (180.0f / (float)M_PI);
-                    float targetPitch = -atan2f(dy, hd)  * (180.0f / (float)M_PI);
-                    if (targetPitch >  89.0f) targetPitch =  89.0f;
-                    if (targetPitch < -89.0f) targetPitch = -89.0f;
-
-                    if (sharedData->aimMode == 1) {
-                        // ══ RAGE — Snap instantâneo ════════════════════════════
-                        // Converter pitch de [-89,89] para convenção Unity [0,360)
-                        // Unity: 0-89 = olhando para baixo, 271-359 = olhando para cima
-                        // targetPitch < 0  → olhando para cima → unity = targetPitch + 360
-                        // targetPitch >= 0 → olhando para baixo → unity = targetPitch
-                        float outPitch = (targetPitch < 0.0f)
-                            ? targetPitch + 360.0f
-                            : targetPitch;
-                        fn_set_eulerAngles(g_camTransform,
-                            Vector3(outPitch, targetYaw, curEuler.z), nullptr);
-                        sharedData->aimAssistHasTarget = 1;
-
-                    } else {
-                        // ══ LEGIT — Interpolação suave (lerp) ═══════════════
-                        // 1. Normalizar pitch atual de [0,360) para [-180,180)
-                        float curPitch = curEuler.x;
-                        if (curPitch > 180.0f) curPitch -= 360.0f;
-                        float curYaw = curEuler.y;
-
-                        // 2. Delta pelo caminho mais curto
-                        float pitchDiff = targetPitch - curPitch;
-                        float yawDiff   = targetYaw   - curYaw;
-                        while (yawDiff >  180.0f) yawDiff -= 360.0f;
-                        while (yawDiff < -180.0f) yawDiff += 360.0f;
-
-                        // 3. Deadzone
-                        float dz_ang = sharedData->aimAssistDeadzone;
-                        if (dz_ang < 0.0f) dz_ang = 0.0f;
-                        bool inDeadzone = (fabsf(pitchDiff) < dz_ang &&
-                                           fabsf(yawDiff)   < dz_ang);
-
-                        if (!inDeadzone) {
-                            // 4. Lerp suave: fator aimLegitSmooth (0.01–0.5)
-                            // Baixo = mais humano/devagar  |  Alto = mais rápido
-                            float smooth = sharedData->aimLegitSmooth;
-                            if (smooth < 0.01f) smooth = 0.01f;
-                            if (smooth > 1.0f)  smooth = 1.0f;
-
-                            float newPitch = curPitch + pitchDiff * smooth;
-                            float newYaw   = curYaw   + yawDiff   * smooth;
-
-                            // 5. Sanitizar
-                            if (newPitch >  89.0f) newPitch =  89.0f;
-                            if (newPitch < -89.0f) newPitch = -89.0f;
-                            while (newYaw >= 360.0f) newYaw -= 360.0f;
-                            while (newYaw <    0.0f) newYaw += 360.0f;
-
-                            float outPitch = newPitch < 0.0f
-                                ? newPitch + 360.0f : newPitch;
-                            fn_set_eulerAngles(g_camTransform,
-                                Vector3(outPitch, newYaw, curEuler.z), nullptr);
-                            sharedData->aimAssistHasTarget = 1;
-                        } else {
-                            sharedData->aimAssistHasTarget = 1; // dentro da deadzone = travado
-                        }
-                    }
-                }
-            } // triggerOk
-        } else {
-            sharedData->aimAssistHasTarget = 0;
-        }
-
-        // Resetar candidatos de aim para o novo frame
-        g_aimHasTarget      = false;
+        // Resetar candidatos de aim para o novo frame (silentAim)
         g_aimBestScreenDist = 1e9f;
         g_aimBestHp         = 0x7fffffff;
         g_aimBestDepth      = 1e9f;
@@ -851,44 +761,36 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     float dY = screenTop.y - screenH * 0.5f;
     float screenDist = sqrtf(dX * dX + dY * dY);
 
-    // ── Aim Assist: registrar candidato ao alvo ──────────────────────────────
-    // Somente inimigos vivos visíveis dentro do cone de FOV configurado
-    if (sharedData->aimAssistEnabled && chp > 0) {
+    // ── Silent Aim: selecionar candidato ao alvo (com FOV e prioridade) ───────
+    // silentAim é o único aimbot (v29) — câmera NÃO é movida permanentemente.
+    // O snap acontece pré-orig (LateUpdate) e é restaurado pós-orig: invisível.
+    if (sharedData->silentAimEnabled && chp > 0) {
         float fovDeg = sharedData->aimAssistFovDeg;
-        if (fovDeg < 1.0f || fovDeg > 90.0f) fovDeg = 30.0f;
+        if (fovDeg < 1.0f || fovDeg > 90.0f) fovDeg = 90.0f;
         float fovRadiusPx = (float)screenW * (fovDeg / 90.0f) * 0.5f;
 
         if (screenDist < fovRadiusPx) {
             int  priority = sharedData->aimTargetPriority;
             bool isBetter = false;
             if (priority == 1) {
-                // Lowest HP
+                // Menor HP
                 isBetter = (chp < g_aimBestHp);
             } else if (priority == 2) {
-                // Nearest Distance (clipW da cabeça = profundidade de câmera)
+                // Menor distância (profundidade)
                 float depth = screenTop.z;
                 isBetter = (depth < g_aimBestDepth);
             } else {
-                // Nearest Center Screen (padrão)
+                // Mais próximo do centro da tela (padrão)
                 isBetter = (screenDist < g_aimBestScreenDist);
             }
             if (isBetter) {
                 g_aimBestScreenDist = screenDist;
                 g_aimBestHp         = chp;
                 g_aimBestDepth      = screenTop.z;
-                g_aimTargetWorld    = topWorld;
-                g_aimHasTarget      = true;
+                g_silentCandDist    = screenDist;
+                g_silentCandTarget  = topWorld;
+                g_silentCandValid   = true;
             }
-        }
-    }
-
-    // ── Silent Aim: rastrear inimigo mais próximo do centro (TELA INTEIRA) ───
-    // Sem restrição de FOV — qualquer inimigo vivo na tela é candidato CAND.
-    if (sharedData->silentAimEnabled && chp > 0) {
-        if (screenDist < g_silentCandDist) {
-            g_silentCandDist   = screenDist;
-            g_silentCandTarget = topWorld;
-            g_silentCandValid  = true;
         }
     }
     // ─────────────────────────────────────────────────────────────────────────
