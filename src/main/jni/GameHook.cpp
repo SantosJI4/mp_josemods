@@ -668,10 +668,13 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
 
                     if (sharedData->aimMode == 1) {
                         // ══ RAGE — Snap instantâneo ════════════════════════════
-                        // Câmera vai direto ao alvo em 1 frame.
-                        // aimRageOffsetY já aplicado no delta dy acima.
-                        float outPitch = targetPitch < 0.0f
-                            ? targetPitch + 360.0f : targetPitch;
+                        // Converter pitch de [-89,89] para convenção Unity [0,360)
+                        // Unity: 0-89 = olhando para baixo, 271-359 = olhando para cima
+                        // targetPitch < 0  → olhando para cima → unity = targetPitch + 360
+                        // targetPitch >= 0 → olhando para baixo → unity = targetPitch
+                        float outPitch = (targetPitch < 0.0f)
+                            ? targetPitch + 360.0f
+                            : targetPitch;
                         fn_set_eulerAngles(g_camTransform,
                             Vector3(outPitch, targetYaw, curEuler.z), nullptr);
                         sharedData->aimAssistHasTarget = 1;

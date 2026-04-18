@@ -87,7 +87,7 @@ static int   aimTargetPriority = 0;
 // ============================================================
 static int   aimMode        = 0;      // 0=Legit, 1=Rage
 static float aimLegitSmooth = 0.12f;  // fator lerp (0.01–0.50)
-static float aimRageOffsetY = 0.05f;  // offset Y sobre a cabeça (capa)
+static float aimRageOffsetY = 0.15f;  // offset Y sobre a cabeça (capa)
 static int   triggerKey     = 0;      // 0=sempre ativo, 114=Vol-, 115=Vol+
 
 // ============================================================
@@ -261,8 +261,8 @@ void DrawESP(int screenW, int screenH) {
     float scaleY = (float)screenH / (float)gameH;
 
     ImU32 color = ImGui::ColorConvertFloat4ToU32(espLineColor);
-    // Snapline: origem no CENTRO DA TELA (crosshair/mira), não no topo
-    ImVec2 snapOrigin = ImVec2(screenW * linePositionX, screenH * 0.5f);
+    // Snapline: origem no TOPO da tela (posicao original)
+    ImVec2 snapOrigin = ImVec2(screenW * linePositionX, 0.0f);
     auto* draw = ImGui::GetBackgroundDrawList();
 
     // Verificar se há pelo menos um alvo válido na tela
@@ -757,7 +757,7 @@ void DrawMenu() {
         ImGui::PopStyleColor(3);
     }
 
-    const char* verStr = menuMinimized ? "v27" : "v27  FF1.123";
+    const char* verStr = menuMinimized ? "v28" : "v28  FF1.123";
     float verW = ImGui::CalcTextSize(verStr).x;
     ImGui::SetCursorPos(ImVec2(W - verW - 36.0f, (HDR_H - textLineH) * 0.5f));
     ImGui::TextColored(cDimText, "%s", verStr);
@@ -765,10 +765,10 @@ void DrawMenu() {
 
     if (!menuMinimized) {
     // ═══════════════════════════════════════════════════════════════════════
-    // CORPO com scroll
+    // CORPO com abas
     // ═══════════════════════════════════════════════════════════════════════
     const float FOOTER_H = 34.0f;
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 8.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 6.0f));
     ImGui::BeginChild("##body", ImVec2(0.0f, winH - HDR_H - FOOTER_H - 4.0f),
         false, ImGuiWindowFlags_None);
     ImGui::PopStyleVar();
@@ -787,14 +787,16 @@ void DrawMenu() {
 
     // Helper: row com label + toggle alinhado à direita
     auto ToggleRow = [&](const char* label, bool* val) {
+        float rw = ImGui::GetContentRegionAvail().x;
         ImGui::TextColored(cFgText, "%s", label);
-        ImGui::SameLine(cw - 38.0f);
+        ImGui::SameLine(rw - 38.0f);
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 1.0f);
         AnimatedToggle(label, val);
     };
 
     // Helper: row com label + valor verde à direita
     auto ValueLabel = [&](const char* label, const char* fmt, ...) {
+        float rw = ImGui::GetContentRegionAvail().x;
         ImGui::TextColored(cDimText, "%s", label);
         char buf[48];
         va_list args;
@@ -802,239 +804,258 @@ void DrawMenu() {
         vsnprintf(buf, sizeof(buf), fmt, args);
         va_end(args);
         float vw = ImGui::CalcTextSize(buf).x;
-        ImGui::SameLine(cw - vw);
+        ImGui::SameLine(rw - vw);
         ImGui::TextColored(cGreen, "%s", buf);
     };
 
-    // ─── SECAO: STATUS ───────────────────────────────────────────────────────
-    if (ImGui::CollapsingHeader("  STATUS", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::Spacing();
+    // ─── TAB BAR ─────────────────────────────────────────────────────────────
+    ImGui::PushStyleColor(ImGuiCol_Tab,        ImVec4(0.10f, 0.11f, 0.12f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_TabActive,  ImVec4(0.00f, 0.42f, 0.22f, 0.90f));
+    ImGui::PushStyleColor(ImGuiCol_TabHovered, ImVec4(0.00f, 0.32f, 0.16f, 0.70f));
 
-        ImGui::TextColored(cDimText, "Hook");
-        ImGui::SameLine(90.0f);
-        if (vmtApplied)
-            ImGui::TextColored(cGreen, "Ativo  (%d inimigos)",
-                sharedData ? sharedData->playerCount : 0);
-        else if (shmReady)
-            ImGui::TextColored(cYellow, "Iniciando (%d)",
-                sharedData ? sharedData->debugLastCall : 0);
-        else
-            ImGui::TextColored(cRed, "Aguardando");
+    if (ImGui::BeginTabBar("##tabs")) {
 
-        ImGui::TextColored(cDimText, "Servidor");
-        ImGui::SameLine(90.0f);
-        if (g_serverOnline.load())
-            ImGui::TextColored(cGreen, "Online");
-        else
-            ImGui::TextColored(cRed, "%s", g_serverStatus);
-
-        if (shmReady && sharedData && sharedData->screenW > 0) {
-            ImGui::TextColored(cDimText, "Resolucao");
+        // ──────────────────────────────────────────────────────────────────
+        // ABA: STATUS
+        // ──────────────────────────────────────────────────────────────────
+        if (ImGui::BeginTabItem("STATUS")) {
+            ImGui::Spacing();
+            ImGui::TextColored(cDimText, "Hook");
             ImGui::SameLine(90.0f);
-            ImGui::TextColored(cFgText, "%dx%d",
-                sharedData->screenW, sharedData->screenH);
-        }
-        ImGui::Spacing();
-    }
+            if (vmtApplied)
+                ImGui::TextColored(cGreen, "Ativo  (%d inimigos)",
+                    sharedData ? sharedData->playerCount : 0);
+            else if (shmReady)
+                ImGui::TextColored(cYellow, "Iniciando (%d)",
+                    sharedData ? sharedData->debugLastCall : 0);
+            else
+                ImGui::TextColored(cRed, "Aguardando");
 
-    // ─── SECAO: ESP ──────────────────────────────────────────────────────────
-    if (ImGui::CollapsingHeader("  ESP", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::Spacing();
-        ToggleRow("ESP", &esp);
-        if (esp) {
-            Sep();
-            ToggleRow("Caixas",    &drawEnemyBox);
-            ToggleRow("Snapline",  &drawSnapLine);
-            ToggleRow("Distancia", &drawDistance);
-            Sep();
-            ValueLabel("Max Distance", "%.0f m", espMaxDistance);
-            ImGui::SetNextItemWidth(-1.0f);
-            ImGui::SliderFloat("##emd", &espMaxDistance, 10.0f, 999.0f, "");
-            ImGui::Spacing();
-            ImGui::TextColored(cDimText, "Cor dos inimigos");
-            ImGui::SameLine();
-            ImGui::ColorEdit4("##ec", (float*)&espLineColor,
-                ImGuiColorEditFlags_NoLabel |
-                ImGuiColorEditFlags_AlphaBar |
-                ImGuiColorEditFlags_NoInputs);
-        }
-        ImGui::Spacing();
-    }
+            ImGui::TextColored(cDimText, "Servidor");
+            ImGui::SameLine(90.0f);
+            if (g_serverOnline.load())
+                ImGui::TextColored(cGreen, "Online");
+            else
+                ImGui::TextColored(cRed, "%s", g_serverStatus);
 
-    // ─── SECAO: AIMBOT ───────────────────────────────────────────────────────
-    if (ImGui::CollapsingHeader("  AIMBOT", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::Spacing();
-        bool prevAim = aimAssist;
-        ToggleRow("Aimbot", &aimAssist);
-        if (aimAssist != prevAim && sharedData) {
-            sharedData->aimAssistEnabled = aimAssist ? 1 : 0;
-            if (!aimAssist) sharedData->aimAssistHasTarget = 0;
-        }
-        if (aimAssist) {
-            // ── Status: LOCKED / AGUARDANDO TRIGGER ──────────────────────
-            bool hasLock = sharedData && sharedData->aimAssistHasTarget;
-            bool trigOk  = !sharedData ||
-                           sharedData->triggerKey == 0 ||
-                           sharedData->triggerHeld == 1;
-            ImGui::Spacing();
-            if (hasLock && trigOk) {
-                float tw = ImGui::CalcTextSize("[ HEAD LOCKED ]").x;
-                ImGui::SetCursorPosX((cw - tw) * 0.5f);
-                ImGui::TextColored(cGreen, "[ HEAD LOCKED ]");
-            } else if (!trigOk) {
-                float tw = ImGui::CalcTextSize("[ AGUARDANDO TRIGGER ]").x;
-                ImGui::SetCursorPosX((cw - tw) * 0.5f);
-                ImGui::TextColored(ImVec4(1.0f, 0.80f, 0.0f, 1.0f), "[ AGUARDANDO TRIGGER ]");
+            if (shmReady && sharedData && sharedData->screenW > 0) {
+                ImGui::TextColored(cDimText, "Resolucao");
+                ImGui::SameLine(90.0f);
+                ImGui::TextColored(cFgText, "%dx%d",
+                    sharedData->screenW, sharedData->screenH);
             }
             Sep();
-
-            // ── Seletor de modo: Legit | Rage ────────────────────────────
-            ImGui::TextColored(cDimText, "Modo");
-            ImGui::Spacing();
-            ImGui::PushStyleColor(ImGuiCol_Button,
-                aimMode == 0 ? ImVec4(0.0f,0.55f,0.28f,0.9f)
-                             : ImVec4(0.13f,0.14f,0.15f,1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.0f,0.65f,0.34f,1.0f));
-            if (ImGui::Button("Legit##m0", ImVec2((cw - 6.0f) * 0.5f, 26.0f))) {
-                aimMode = 0;
-                if (sharedData) sharedData->aimMode = 0;
+            if (ImGui::Button("Verificar Servidor", ImVec2(-1.0f, 26.0f))) {
+                snprintf(g_serverStatus, sizeof(g_serverStatus), "Verificando...");
+                g_serverOnline.store(false);
+                pthread_t tt;
+                pthread_create(&tt, nullptr, serverCheckThread, nullptr);
+                pthread_detach(tt);
             }
-            ImGui::PopStyleColor(2);
-            ImGui::SameLine(0, 6.0f);
-            ImGui::PushStyleColor(ImGuiCol_Button,
-                aimMode == 1 ? ImVec4(0.65f,0.10f,0.10f,0.9f)
-                             : ImVec4(0.13f,0.14f,0.15f,1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.80f,0.15f,0.15f,1.0f));
-            if (ImGui::Button("Rage##m1", ImVec2(-1.0f, 26.0f))) {
-                aimMode = 1;
-                if (sharedData) sharedData->aimMode = 1;
-            }
-            ImGui::PopStyleColor(2);
-            Sep();
+            ImGui::EndTabItem();
+        }
 
-            // ── Target Priority ───────────────────────────────────────────
-            ImGui::TextColored(cDimText, "Target Priority");
+        // ──────────────────────────────────────────────────────────────────
+        // ABA: ESP
+        // ──────────────────────────────────────────────────────────────────
+        if (ImGui::BeginTabItem("ESP")) {
             ImGui::Spacing();
-            const char* priorities[] = {
-                "Nearest (Center Screen)",
-                "Lowest HP",
-                "Nearest Distance"
-            };
-            ImGui::SetNextItemWidth(-1.0f);
-            if (ImGui::Combo("##tp", &aimTargetPriority, priorities, 3))
-                if (sharedData) sharedData->aimTargetPriority = aimTargetPriority;
-            Sep();
-
-            // ── FOV (usada em ambos os modos para selecionar candidato) ──
-            ValueLabel("FOV", "%.0f Deg", aimFovDeg);
-            ImGui::SetNextItemWidth(-1.0f);
-            if (ImGui::SliderFloat("##fov", &aimFovDeg, 5.0f, 90.0f, ""))
-                if (sharedData) sharedData->aimAssistFovDeg = aimFovDeg;
-            ImGui::Spacing();
-
-            if (aimMode == 0) {
-                // ══ LEGIT: parametros de suavidade ═══════════════════════
-                ValueLabel("Smoothness", "%.2f", aimLegitSmooth);
+            ToggleRow("ESP", &esp);
+            if (esp) {
+                Sep();
+                ToggleRow("Caixas",    &drawEnemyBox);
+                ToggleRow("Snapline",  &drawSnapLine);
+                ToggleRow("Distancia", &drawDistance);
+                Sep();
+                ValueLabel("Max Distance", "%.0f m", espMaxDistance);
                 ImGui::SetNextItemWidth(-1.0f);
-                if (ImGui::SliderFloat("##lgts", &aimLegitSmooth, 0.01f, 0.50f, ""))
-                    if (sharedData) sharedData->aimLegitSmooth = aimLegitSmooth;
+                ImGui::SliderFloat("##emd", &espMaxDistance, 10.0f, 999.0f, "");
+                ImGui::Spacing();
+                ImGui::TextColored(cDimText, "Cor dos inimigos");
+                ImGui::SameLine();
+                ImGui::ColorEdit4("##ec", (float*)&espLineColor,
+                    ImGuiColorEditFlags_NoLabel |
+                    ImGuiColorEditFlags_AlphaBar |
+                    ImGuiColorEditFlags_NoInputs);
+            }
+            ImGui::EndTabItem();
+        }
+
+        // ──────────────────────────────────────────────────────────────────
+        // ABA: AIM
+        // ──────────────────────────────────────────────────────────────────
+        if (ImGui::BeginTabItem("AIM")) {
+            ImGui::Spacing();
+
+            // Toggle Aimbot
+            bool prevAim = aimAssist;
+            ToggleRow("Aimbot", &aimAssist);
+            if (aimAssist != prevAim && sharedData) {
+                sharedData->aimAssistEnabled = aimAssist ? 1 : 0;
+                if (!aimAssist) sharedData->aimAssistHasTarget = 0;
+            }
+
+            if (aimAssist) {
+                // Status
+                bool hasLock = sharedData && sharedData->aimAssistHasTarget;
+                bool trigOk  = !sharedData ||
+                               sharedData->triggerKey == 0 ||
+                               sharedData->triggerHeld == 1;
+                ImGui::Spacing();
+                if (hasLock && trigOk) {
+                    float rw = ImGui::GetContentRegionAvail().x;
+                    float tw = ImGui::CalcTextSize("[ HEAD LOCKED ]").x;
+                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (rw - tw) * 0.5f);
+                    ImGui::TextColored(cGreen, "[ HEAD LOCKED ]");
+                } else if (!trigOk) {
+                    float rw = ImGui::GetContentRegionAvail().x;
+                    float tw = ImGui::CalcTextSize("[ HOLD TRIGGER ]").x;
+                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (rw - tw) * 0.5f);
+                    ImGui::TextColored(ImVec4(1.0f, 0.80f, 0.0f, 1.0f), "[ HOLD TRIGGER ]");
+                }
+                Sep();
+
+                // Modo: Legit | Rage
+                ImGui::TextColored(cDimText, "Modo");
+                ImGui::Spacing();
+                float rw = ImGui::GetContentRegionAvail().x;
+                ImGui::PushStyleColor(ImGuiCol_Button,
+                    aimMode == 0 ? ImVec4(0.0f,0.55f,0.28f,0.9f)
+                                 : ImVec4(0.13f,0.14f,0.15f,1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.0f,0.65f,0.34f,1.0f));
+                if (ImGui::Button("Legit##m0", ImVec2((rw - 6.0f) * 0.5f, 26.0f))) {
+                    aimMode = 0;
+                    if (sharedData) sharedData->aimMode = 0;
+                }
+                ImGui::PopStyleColor(2);
+                ImGui::SameLine(0, 6.0f);
+                ImGui::PushStyleColor(ImGuiCol_Button,
+                    aimMode == 1 ? ImVec4(0.65f,0.10f,0.10f,0.9f)
+                                 : ImVec4(0.13f,0.14f,0.15f,1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.80f,0.15f,0.15f,1.0f));
+                if (ImGui::Button("Rage##m1", ImVec2(-1.0f, 26.0f))) {
+                    aimMode = 1;
+                    if (sharedData) sharedData->aimMode = 1;
+                }
+                ImGui::PopStyleColor(2);
+                Sep();
+
+                // Target Priority
+                ImGui::TextColored(cDimText, "Prioridade");
+                ImGui::Spacing();
+                const char* priorities[] = {
+                    "Mais Proximo (Tela)",
+                    "Menos HP",
+                    "Menor Distancia"
+                };
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::Combo("##tp", &aimTargetPriority, priorities, 3))
+                    if (sharedData) sharedData->aimTargetPriority = aimTargetPriority;
+                Sep();
+
+                // FOV
+                ValueLabel("FOV", "%.0f Deg", aimFovDeg);
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::SliderFloat("##fov", &aimFovDeg, 5.0f, 90.0f, ""))
+                    if (sharedData) sharedData->aimAssistFovDeg = aimFovDeg;
                 ImGui::Spacing();
 
-                float lockPct = (1.0f - aimDeadzone / 5.0f) * 100.0f;
-                ValueLabel("Lock Threshold", "%.0f%%", lockPct);
-                ImGui::SetNextItemWidth(-1.0f);
-                if (ImGui::SliderFloat("##lkd", &aimDeadzone, 0.0f, 5.0f, ""))
-                    if (sharedData) sharedData->aimAssistDeadzone = aimDeadzone;
-                ImGui::Spacing();
-                ImGui::TextColored(cDimText, "  Baixo = humano  |  Alto = rapido");
-            } else {
-                // ══ RAGE: parametros de snap ══════════════════════════════
+                // Head Offset Y — calibracao visivel em AMBOS os modos
                 ValueLabel("Head Offset Y", "%.2f", aimRageOffsetY);
                 ImGui::SetNextItemWidth(-1.0f);
-                if (ImGui::SliderFloat("##rgo", &aimRageOffsetY, -0.30f, 0.50f, ""))
+                if (ImGui::SliderFloat("##hoy", &aimRageOffsetY, -0.30f, 0.50f, ""))
                     if (sharedData) sharedData->aimRageOffsetY = aimRageOffsetY;
                 ImGui::Spacing();
-                ImGui::TextColored(cDimText, "  Offset vertical sobre a cabeca (capa)");
-            }
-            Sep();
 
-            // ── Max Distance ──────────────────────────────────────────────
-            ValueLabel("Max Distance", "%.0f m", espMaxDistance);
-            ImGui::SetNextItemWidth(-1.0f);
-            ImGui::SliderFloat("##amd", &espMaxDistance, 10.0f, 999.0f, "");
-            Sep();
+                if (aimMode == 0) {
+                    // LEGIT
+                    ValueLabel("Suavidade", "%.2f", aimLegitSmooth);
+                    ImGui::SetNextItemWidth(-1.0f);
+                    if (ImGui::SliderFloat("##lgts", &aimLegitSmooth, 0.01f, 0.50f, ""))
+                        if (sharedData) sharedData->aimLegitSmooth = aimLegitSmooth;
+                    ImGui::Spacing();
+                    float lockPct = (1.0f - aimDeadzone / 5.0f) * 100.0f;
+                    ValueLabel("Deadzone", "%.0f%%", lockPct);
+                    ImGui::SetNextItemWidth(-1.0f);
+                    if (ImGui::SliderFloat("##lkd", &aimDeadzone, 0.0f, 5.0f, ""))
+                        if (sharedData) sharedData->aimAssistDeadzone = aimDeadzone;
+                    ImGui::Spacing();
+                }
+                Sep();
 
-            // ── Trigger Key ───────────────────────────────────────────────
-            ImGui::TextColored(cDimText, "Trigger (HOLD para mirar)");
-            ImGui::Spacing();
-            const char* tkeys[] = { "Sempre Ativo", "Vol-  (114)", "Vol+  (115)" };
-            int tidx = (triggerKey == 114) ? 1 : (triggerKey == 115) ? 2 : 0;
-            ImGui::SetNextItemWidth(-1.0f);
-            if (ImGui::Combo("##trk", &tidx, tkeys, 3)) {
-                triggerKey = (tidx == 1) ? 114 : (tidx == 2) ? 115 : 0;
-                if (sharedData) {
-                    sharedData->triggerKey  = triggerKey;
-                    sharedData->triggerHeld = 0;
+                // Trigger Key
+                ImGui::TextColored(cDimText, "Trigger (HOLD para mirar)");
+                ImGui::Spacing();
+                const char* tkeys[] = { "Sempre Ativo", "Vol-  (114)", "Vol+  (115)" };
+                int tidx = (triggerKey == 114) ? 1 : (triggerKey == 115) ? 2 : 0;
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::Combo("##trk", &tidx, tkeys, 3)) {
+                    triggerKey = (tidx == 1) ? 114 : (tidx == 2) ? 115 : 0;
+                    if (sharedData) {
+                        sharedData->triggerKey  = triggerKey;
+                        sharedData->triggerHeld = 0;
+                    }
+                }
+                if (triggerKey > 0) {
+                    ImGui::Spacing();
+                    ImGui::TextColored(cDimText, "  Segure o botao enquanto atira");
                 }
             }
-            if (triggerKey > 0) {
+            Sep();
+
+            // Silent Aim (na mesma aba)
+            bool prevSilent = silentAim;
+            ToggleRow("Silent Aim", &silentAim);
+            if (silentAim != prevSilent && sharedData)
+                sharedData->silentAimEnabled = silentAim ? 1 : 0;
+            if (silentAim) {
                 ImGui::Spacing();
-                ImGui::TextColored(cDimText, "  Segure o botao enquanto atira");
+                float rww = ImGui::GetContentRegionAvail().x;
+                float hw  = ImGui::CalcTextSize("HEADSHOT AUTO").x;
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (rww - hw) * 0.5f);
+                ImGui::TextColored(cGreen, "HEADSHOT AUTO");
             }
+            ImGui::EndTabItem();
         }
-        ImGui::Spacing();
-    }
 
-    // ─── SECAO: SILENT AIM ───────────────────────────────────────────────────
-    if (ImGui::CollapsingHeader("  SILENT AIM")) {
-        ImGui::Spacing();
-        bool prevSilent = silentAim;
-        ToggleRow("Silent Aim", &silentAim);
-        if (silentAim != prevSilent && sharedData)
-            sharedData->silentAimEnabled = silentAim ? 1 : 0;
-        if (silentAim) {
+        // ──────────────────────────────────────────────────────────────────
+        // ABA: MISC
+        // ──────────────────────────────────────────────────────────────────
+        if (ImGui::BeginTabItem("MISC")) {
             ImGui::Spacing();
-            float hw = ImGui::CalcTextSize("HEADSHOT AUTOMATICO").x;
-            ImGui::SetCursorPosX((cw - hw) * 0.5f);
-            ImGui::TextColored(cGreen, "HEADSHOT AUTOMATICO");
+            ImGui::TextColored(cDimText, "HOTKEYS  (Botoes de Volume)");
             ImGui::Spacing();
-            ImGui::TextColored(cDimText, "  Todo tiro vai na cabeca");
+
+            const char* knames[] = { "OFF", "Vol-  (114)", "Vol+  (115)" };
+            int aidx = (hotkeyAim    == 114) ? 1 : (hotkeyAim    == 115) ? 2 : 0;
+            int sidx = (hotkeySilent == 114) ? 1 : (hotkeySilent == 115) ? 2 : 0;
+            int eidx = (hotkeyEsp    == 114) ? 1 : (hotkeyEsp    == 115) ? 2 : 0;
+
+            ImGui::TextColored(cFgText, "Aimbot");
+            ImGui::SameLine(90.0f); ImGui::SetNextItemWidth(-1.0f);
+            if (ImGui::Combo("##hka", &aidx, knames, 3))
+                hotkeyAim = (aidx == 1) ? 114 : (aidx == 2) ? 115 : 0;
+
+            ImGui::TextColored(cFgText, "Silent Aim");
+            ImGui::SameLine(90.0f); ImGui::SetNextItemWidth(-1.0f);
+            if (ImGui::Combo("##hks", &sidx, knames, 3))
+                hotkeySilent = (sidx == 1) ? 114 : (sidx == 2) ? 115 : 0;
+
+            ImGui::TextColored(cFgText, "ESP");
+            ImGui::SameLine(90.0f); ImGui::SetNextItemWidth(-1.0f);
+            if (ImGui::Combo("##hke", &eidx, knames, 3))
+                hotkeyEsp = (eidx == 1) ? 114 : (eidx == 2) ? 115 : 0;
+
+            Sep();
+            if (ImGui::Button("Salvar Configuracoes", ImVec2(-1.0f, 28.0f)))
+                saveConfig();
+            ImGui::EndTabItem();
         }
-        ImGui::Spacing();
-    }
 
-    // ─── SECAO: MISC ─────────────────────────────────────────────────────────
-    if (ImGui::CollapsingHeader("  MISC")) {
-        ImGui::Spacing();
-        ImGui::TextColored(cDimText, "HOTKEYS  (Botoes de Volume)");
-        ImGui::Spacing();
+        ImGui::EndTabBar();
+    } // EndTabBar
 
-        const char* knames[] = { "OFF", "Vol-  (114)", "Vol+  (115)" };
-        int aidx = (hotkeyAim    == 114) ? 1 : (hotkeyAim    == 115) ? 2 : 0;
-        int sidx = (hotkeySilent == 114) ? 1 : (hotkeySilent == 115) ? 2 : 0;
-        int eidx = (hotkeyEsp    == 114) ? 1 : (hotkeyEsp    == 115) ? 2 : 0;
-
-        ImGui::TextColored(cFgText, "Head Mag");
-        ImGui::SameLine(105.0f); ImGui::SetNextItemWidth(-1.0f);
-        if (ImGui::Combo("##hka", &aidx, knames, 3))
-            hotkeyAim = (aidx == 1) ? 114 : (aidx == 2) ? 115 : 0;
-
-        ImGui::TextColored(cFgText, "Silent Aim");
-        ImGui::SameLine(105.0f); ImGui::SetNextItemWidth(-1.0f);
-        if (ImGui::Combo("##hks", &sidx, knames, 3))
-            hotkeySilent = (sidx == 1) ? 114 : (sidx == 2) ? 115 : 0;
-
-        ImGui::TextColored(cFgText, "ESP");
-        ImGui::SameLine(105.0f); ImGui::SetNextItemWidth(-1.0f);
-        if (ImGui::Combo("##hke", &eidx, knames, 3))
-            hotkeyEsp = (eidx == 1) ? 114 : (eidx == 2) ? 115 : 0;
-
-        ImGui::Spacing();
-        if (ImGui::Button("Salvar Configuracoes", ImVec2(-1.0f, 28.0f)))
-            saveConfig();
-        ImGui::Spacing();
-    }
-
+    ImGui::PopStyleColor(3); // Tab colors
     ImGui::EndChild();
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -1050,15 +1071,7 @@ void DrawMenu() {
         IM_COL32(28, 30, 33, 255));
 
     ImGui::SetCursorPos(ImVec2(14.0f, winH - FOOTER_H + 8.0f));
-    ImGui::TextColored(cDimText, "jawmods.app");
-    ImGui::SameLine(W - 118.0f);
-    if (ImGui::SmallButton("Verificar SRV")) {
-        snprintf(g_serverStatus, sizeof(g_serverStatus), "Verificando...");
-        g_serverOnline.store(false);
-        pthread_t tt;
-        pthread_create(&tt, nullptr, serverCheckThread, nullptr);
-        pthread_detach(tt);
-    }
+    ImGui::TextColored(cDimText, "jawmods.app  v28");
 
     } // end !menuMinimized
 
