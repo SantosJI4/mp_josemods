@@ -354,6 +354,11 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 // get_bounds_Injected(out Bounds& ret) recebe o ponteiro em x1 como parâmetro normal → correto.
 #define OFF_Collider_get_bounds_Injected  0x9CB794C
 
+// GetPartByCollider(Collider c) — determina qual parte do corpo foi atingida.
+// Retorna HitPart: Head=0, Neck=1, Chest=2, Hips=3, ...
+// Patch ARM64: MOV W0,#0 + RET → sempre retorna Head (headshot em qualquer tiro).
+#define OFF_GetPartByCollider             0x4FEAD00
+
 // ============================================================
 // Function Pointers — resolvidos via base + offset direto
 // ============================================================
@@ -395,6 +400,55 @@ typedef struct { float cx, cy, cz; float ex, ey, ez; } BoundsVal;
 static void*   (*fn_get_HeadCollider)(void* player, void* method) = nullptr;
 // _Injected: assinatura nativa real — sem SRET, ponteiro de saída em x1
 static void    (*fn_Collider_get_bounds_Injected)(void* collider, BoundsVal* outBounds, void* method) = nullptr;
+
+// ============================================================
+// Headshot Patch — Inline ARM64 patch em GetPartByCollider
+// Faz qualquer tiro contar como Head (0) independente do hitbox
+// ============================================================
+static uintptr_t g_il2cpp_base   = 0;       // base resolvida no setup, usada no hook
+static uint8_t g_origGetPart[8]  = {};       // bytes originais salvos
+static bool    g_patchApplied     = false;
+static bool    g_patchWanted      = false;  // estado desejado pelo overlay
+
+// MOV W0, #0  = 0x52800000
+// RET         = 0xD65F03C0
+static const uint8_t kHeadPatch[8] = {
+    0x00, 0x00, 0x80, 0x52,  // MOV W0, #0   (Head = 0)
+    0xC0, 0x03, 0x5F, 0xD6   // RET
+};
+
+static bool InlinePatch(void* target, const uint8_t* bytes, size_t len) {
+    uintptr_t pageSize = (uintptr_t)sysconf(_SC_PAGESIZE);
+    uintptr_t addr     = (uintptr_t)target;
+    uintptr_t pageBase = addr & ~(pageSize - 1);
+    if (mprotect((void*)pageBase, pageSize * 2, PROT_READ | PROT_WRITE | PROT_EXEC) != 0)
+        return false;
+    memcpy(target, bytes, len);
+    __builtin___clear_cache((char*)addr, (char*)(addr + len));
+    mprotect((void*)pageBase, pageSize * 2, PROT_READ | PROT_EXEC);
+    return true;
+}
+
+static void ApplyHeadshotPatch() {
+    if (g_patchApplied || !g_il2cpp_base) return;
+    void* fn = (void*)(g_il2cpp_base + OFF_GetPartByCollider);
+    memcpy(g_origGetPart, fn, 8);  // salva original
+    if (InlinePatch(fn, kHeadPatch, 8)) {
+        g_patchApplied = true;
+        LOGI("[Headshot] Patch aplicado em %p", fn);
+    } else {
+        LOGE("[Headshot] Falha ao aplicar patch");
+    }
+}
+
+static void RemoveHeadshotPatch() {
+    if (!g_patchApplied || !g_il2cpp_base) return;
+    void* fn = (void*)(g_il2cpp_base + OFF_GetPartByCollider);
+    if (InlinePatch(fn, g_origGetPart, 8)) {
+        g_patchApplied = false;
+        LOGI("[Headshot] Patch removido");
+    }
+}
 
 // Original LateUpdate
 static void (*orig_OnUpdate)(void* self, void* methodInfo) = nullptr;
@@ -524,6 +578,20 @@ static bool    g_silentCandValid  = false;
 // ─────────────────────────────────────────────────────────────────────────
 
 static void Hook_OnUpdate(void* self, void* methodInfo) {
+    // ── Headshot Patch toggle ─────────────────────────────────────────────────
+    // Verifica a flag do overlay e aplica/remove o patch inline em GetPartByCollider.
+    // Chamado a cada frame, mas ApplyHeadshotPatch/Remove são idempotentes.
+    if (sharedData) {
+        bool want = (sharedData->headshotPatch == 1);
+        if (want != g_patchWanted) {
+            g_patchWanted = want;
+            if (want)
+                ApplyHeadshotPatch();
+            else
+                RemoveHeadshotPatch();
+        }
+    }
+
     // ── Silent Aim: Snap PRÉ-orig ─────────────────────────────────────────────
     // Usa g_silentSnapTarget (alvo travado do frame anterior).
     // Snap ANTES de orig → orig processa o tiro/raycast com câmera na cabeça.
@@ -864,6 +932,7 @@ void* hack_thread(void*) {
     // Os offsets do il2cppdumper (RVA) são relativos a esse endereço.
     if (sharedData) sharedData->debugLastCall = 3; // stage 3: libil2cpp found
     uintptr_t il2cpp_base = findLibrary("libil2cpp.so");
+    g_il2cpp_base = il2cpp_base;
     if (!il2cpp_base) {
         if (sharedData) sharedData->debugLastCall = 93; // stage 93: base=0 error
         LOGE("findLibrary(libil2cpp.so) retornou 0!");

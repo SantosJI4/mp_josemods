@@ -73,7 +73,8 @@ static float aimDeadzone     = 1.5f;  // Ângulo mínimo para ativar (anti-jitte
 // ============================================================
 // Silent Aim State
 // ============================================================
-static bool  silentAim = false;
+static bool  silentAim      = false;
+static bool  headshotPatch  = false;  // v30: patch GetPartByCollider → sempre retorna Head
 
 // ============================================================
 // Aim Target Priority
@@ -232,6 +233,7 @@ void DrawESP(int screenW, int screenH) {
     sharedData->aimTargetPriority  = aimTargetPriority;
     sharedData->aimRageOffsetY     = aimRageOffsetY;
     sharedData->triggerKey         = triggerKey;
+    sharedData->headshotPatch      = headshotPatch ? 1 : 0;
     // triggerHeld é gerenciado exclusivamente pelo hotkeyThread
     // ────────────────────────────────────────────────────────────────────────
 
@@ -425,7 +427,7 @@ static void readHookLog() {
 // Config — persiste em /data/local/tmp/.jawmods_cfg
 // ============================================================
 #define JAW_CONFIG_PATH  "/data/local/tmp/.jawmods_cfg"
-#define JAW_CONFIG_MAGIC 0x4A415705u  // "JAW" v5
+#define JAW_CONFIG_MAGIC 0x4A415706u  // "JAW" v6
 
 #pragma pack(push, 1)
 struct JawConfig {
@@ -443,6 +445,8 @@ struct JawConfig {
     float    aimLegitSmooth;
     float    aimRageOffsetY;
     int32_t  triggerKey;
+    // v6 fields
+    uint8_t  headshotPatch;
 };
 #pragma pack(pop)
 
@@ -473,6 +477,7 @@ static void saveConfig() {
     c.aimLegitSmooth     = aimLegitSmooth;
     c.aimRageOffsetY     = aimRageOffsetY;
     c.triggerKey         = triggerKey;
+    c.headshotPatch      = headshotPatch;
     int fd = open(JAW_CONFIG_PATH, O_CREAT | O_WRONLY | O_TRUNC, 0666);
     if (fd >= 0) { write(fd, &c, sizeof(c)); close(fd); }
 }
@@ -505,6 +510,7 @@ static void loadConfig() {
     aimLegitSmooth     = c.aimLegitSmooth;
     aimRageOffsetY     = c.aimRageOffsetY;
     triggerKey         = c.triggerKey;
+    headshotPatch      = c.headshotPatch;
 }
 
 // ============================================================
@@ -774,7 +780,7 @@ void DrawMenu() {
         ImGui::PopStyleColor(3);
     }
 
-    const char* verStr = menuMinimized ? "v29" : "v29  FF1.123";
+    const char* verStr = menuMinimized ? "v30" : "v30  FF1.123";
     float verW = ImGui::CalcTextSize(verStr).x;
     ImGui::SetCursorPos(ImVec2(W - verW - 64.0f, (HDR_H - textLineH) * 0.5f));
     ImGui::TextColored(cDimText, "%s", verStr);
@@ -911,7 +917,21 @@ void DrawMenu() {
                 sharedData->silentAimEnabled  = silentAim ? 1 : 0;
                 if (!silentAim) sharedData->aimAssistHasTarget = 0;
             }
+            Sep();
 
+            // v30: Toggle Headshot Garantido
+            bool prevHS = headshotPatch;
+            ToggleRow("Headshot Garantido", &headshotPatch);
+            if (headshotPatch != prevHS && sharedData)
+                sharedData->headshotPatch = headshotPatch ? 1 : 0;
+            if (headshotPatch) {
+                ImGui::Spacing();
+                float rw = ImGui::GetContentRegionAvail().x;
+                float tw = ImGui::CalcTextSize("100% HEADSHOT").x;
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (rw - tw) * 0.5f);
+                ImGui::TextColored(cGreen, "100% HEADSHOT");
+            }
+            Sep();
             if (silentAim) {
                 // Status lock
                 bool hasLock = sharedData && sharedData->aimAssistHasTarget;

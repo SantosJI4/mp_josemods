@@ -81,7 +81,14 @@ struct SharedESPData {
     // triggerKey  = 114/115 → aimbot só ativo enquanto tecla estiver PRESSIONADA
     // triggerHeld = 1 enquanto a tecla estiver segurada (overlay atualiza)
     volatile int triggerHeld; // 1 = tecla trigger pressionada agora
-    int32_t      triggerKey;  // keycode (0 = sem trigger / sempre ativo)    // ────────────────────────────────────────────────────────────────────────
+    int32_t      triggerKey;  // keycode (0 = sem trigger / sempre ativo)
+
+    // ── Headshot Patch ─────────────────────────────────────
+    // Patch inline ARM64 em GetPartByCollider para sempre retornar Head (0).
+    // Qualquer tiro em qualquer parte do corpo é contabilizado como headshot.
+    // 1 = ativo, 0 = desativado (restaura bytes originais)
+    volatile int headshotPatch; // overlay escreve, hook aplica/restaura
+    // ─────────────────────────────────────────────────────────────────────
 
     ESPEntry players[MAX_ESP_PLAYERS];
 };
