@@ -58,7 +58,7 @@
   #define LOGE(...) ((void)0)
 #endif
 
-#define HOOK_BUILD_VER "v20-stealth"
+#define HOOK_BUILD_VER "v21-stealth"
 
 // ============================================================
 // Hook Log File — SOMENTE em modo debug
@@ -356,11 +356,10 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 
 // (offsets GetPartByCollider e IsHeadShotCheck removidos em v31 — server-side validates)
 
-// Speed Hack — hook em Player::IPhysicalCharacter.UpdateVelocity (offset 0x676789C)
-// Interceptamos o vetor de velocidade calculado pelo jogo ANTES de ser passado à física.
-// Escalamos X e Z pelo fator (speedValue / 6.5), deixando Y intacto (anti-fly).
-// Só aplica ao jogador local (fn_IsLocalPlayer).
-#define OFF_UpdateVelocity  0x676789C  // Player::IPhysicalCharacter.UpdateVelocity
+// Speed Hack — hook em Player::GetMoveSpeedForFPPMode (offset 0x6857498)
+// Getter chamado pelo sistema de locomoção a cada frame para obter a velocidade atual.
+// Retornamos speedValue diretamente quando speedEnabled e localPlayer.
+#define OFF_GetMoveSpeedForFPPMode  0x6857498  // Player::GetMoveSpeedForFPPMode()
 
 // Camera Controller — CameraControllerBase::LateUpdate
 // Hookeado para aplicar aimbot/anti-recoil DEPOIS que o controlador posiciona a câmera.
@@ -409,8 +408,8 @@ static void*   (*fn_get_HeadCollider)(void* player, void* method) = nullptr;
 // _Injected: assinatura nativa real — sem SRET, ponteiro de saída em x1
 static void    (*fn_Collider_get_bounds_Injected)(void* collider, BoundsVal* outBounds, void* method) = nullptr;
 
-// Speed Hack — hook em UpdateVelocity (orig + escala X/Z)
-static Vector3 (*orig_UpdateVelocity)(void* self, Vector3 baseVelocity, float gameTime, float deltaTime, void* methodInfo) = nullptr;
+// Speed Hack — hook em GetMoveSpeedForFPPMode
+static float (*orig_GetMoveSpeedForFPPMode)(void* self, void* methodInfo) = nullptr;
 
 // ============================================================
 // Aimbot state (v31: direct aim, camera moves visibly to enemy head)
@@ -554,18 +553,17 @@ static bool    g_silentCandValid  = false;
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ============================================================
-// HOOK DE VELOCIDADE — Player::IPhysicalCharacter.UpdateVelocity (v35)
-// Chamado pelo engine de física a cada FixedUpdate com a velocidade calculada.
-// Retornamos a velocidade escalada em X/Z (não Y — evita fly/gravidade).
-// ARM64 HFA: Vector3 passado/retornado em s0-s2 sem ponteiro oculto.
+// HOOK DE VELOCIDADE — Player::GetMoveSpeedForFPPMode (v35)
+// Getter chamado pelo sistema de locomoção para obter a velocidade de movimento.
+// Retornamos speedValue diretamente quando speedEnabled e localPlayer.
 // ============================================================
-static Vector3 Hook_UpdateVelocity(void* self, Vector3 baseVelocity, float gameTime, float deltaTime, void* methodInfo) {
-    Vector3 result = orig_UpdateVelocity(self, baseVelocity, gameTime, deltaTime, methodInfo);
+static float Hook_GetMoveSpeedForFPPMode(void* self, void* methodInfo) {
+    float result = orig_GetMoveSpeedForFPPMode
+        ? orig_GetMoveSpeedForFPPMode(self, methodInfo)
+        : 6.5f;
     if (sharedData && sharedData->speedEnabled && sharedData->speedValue > 0.5f) {
         if (fn_IsLocalPlayer && fn_IsLocalPlayer(self, nullptr)) {
-            float factor = sharedData->speedValue / 6.5f;
-            result.x *= factor;
-            result.z *= factor;
+            return sharedData->speedValue;
         }
     }
     return result;
@@ -593,7 +591,10 @@ static void Hook_CameraLateUpdate(void* self, void* methodInfo) {
     bool triggerOk    = (sharedData->triggerKey == 0) || (sharedData->triggerHeld == 1);
     bool doAimbot     = sharedData->silentAimEnabled && g_silentSnapValid &&
                         fn_get_position && triggerOk;
-    bool doAntiRecoil = sharedData->recoilEnabled && g_camEulerValid;
+    // Anti-recoil SÓ quando disparando (triggerHeld==1).
+    // Se rodar toda frame sem trigger, bloqueia a câmera do jogador ("modo foto").
+    bool doAntiRecoil = sharedData->recoilEnabled && g_camEulerValid &&
+                        (sharedData->triggerHeld == 1);
 
     if (!doAimbot && !doAntiRecoil) return;
 
@@ -638,13 +639,13 @@ static void Hook_CameraLateUpdate(void* self, void* methodInfo) {
             fn_set_eulerAngles(g_camTransform, Vector3(newPitch, newYaw, curEuler.z), nullptr);
         }
     } else {
-        // Anti-recoil: restaura euler pré-frame (g_cachedCamEuler = euler no início do frame,
-        // antes do camera controller rodar). Cancela qualquer recoil que o controlador aplicou.
+        // Anti-recoil: restaura APENAS o pitch (X) pré-frame → cancela recoil vertical.
+        // YAW (Y) e ROLL (Z) vêm do pós-orig → jogador controla horizontal livremente.
+        // Só corre quando triggerHeld==1 (ver doAntiRecoil acima).
         Vector3 postOrig = fn_get_eulerAngles(g_camTransform, nullptr);
-        // Guard NaN no postOrig (usamos .z do post-orig para manter roll correto)
-        if (std::isnan(postOrig.z)) return;
+        if (std::isnan(postOrig.y) || std::isnan(postOrig.z)) return;
         fn_set_eulerAngles(g_camTransform,
-            Vector3(g_cachedCamEuler.x, g_cachedCamEuler.y, postOrig.z), nullptr);
+            Vector3(g_cachedCamEuler.x, postOrig.y, postOrig.z), nullptr);
     }
 }
 
@@ -1346,36 +1347,22 @@ void* hack_thread(void*) {
         hookLogWrite("ERRO: CameraControllerBase nao encontrada");
     }
 
-    // ── Hook Player::IPhysicalCharacter.UpdateVelocity (speed hack v35) ──────
-    // É uma implementação explícita de interface → p_class_get_method("UpdateVelocity",3)
-    // pode não encontrar pelo nome qualificado. Usamos p_class_get_methods para
-    // iterar todos os métodos do Player e achar o que tem methodPointer == nosso offset.
-    void* playerClass2 = p_class_from_name(cs_image, "COW.GamePlay", "Player");
-    if (playerClass2 && p_class_get_methods) {
-        void*    updateVelMethodInfo = nullptr;
-        void*    iter                = nullptr;
-        void*    mi                  = nullptr;
-        uintptr_t targetAddr         = il2cpp_base + OFF_UpdateVelocity;
-        while ((mi = p_class_get_methods(playerClass2, &iter)) != nullptr) {
-            if ((uintptr_t)*(void**)mi == targetAddr) {
-                updateVelMethodInfo = mi;
-                break;
-            }
-        }
-        if (updateVelMethodInfo) {
-            if (VmtHook(updateVelMethodInfo, (void*)Hook_UpdateVelocity, (void**)&orig_UpdateVelocity)) {
-                LOGI("VMT Hook Player::UpdateVelocity aplicado: orig=%p", orig_UpdateVelocity);
-                hookLogWrite("VMT UpdateVelocity: orig=%p", orig_UpdateVelocity);
-            } else {
-                LOGE("VMT Hook Player::UpdateVelocity FALHOU");
-                hookLogWrite("ERRO: VMT UpdateVelocity falhou");
-            }
+    // ── Hook Player::GetMoveSpeedForFPPMode (speed hack v35) ────────────────────
+    // Nome não obfuscado → p_class_get_method por nome, 0 parâmetros.
+    // playerClass já está resolvido acima (onUpdateMethodInfo).
+    void* speedMethodInfo = p_class_get_method(playerClass, "GetMoveSpeedForFPPMode", 0);
+    if (speedMethodInfo) {
+        if (VmtHook(speedMethodInfo, (void*)Hook_GetMoveSpeedForFPPMode,
+                    (void**)&orig_GetMoveSpeedForFPPMode)) {
+            LOGI("VMT Hook Player::GetMoveSpeedForFPPMode aplicado: orig=%p", orig_GetMoveSpeedForFPPMode);
+            hookLogWrite("VMT GetMoveSpeedForFPPMode: orig=%p", orig_GetMoveSpeedForFPPMode);
         } else {
-            LOGE("Player::UpdateVelocity (0x%lX) nao encontrado nos metodos", (unsigned long)targetAddr);
-            hookLogWrite("ERRO: UpdateVelocity nao encontrado em Player");
+            LOGE("VMT Hook GetMoveSpeedForFPPMode FALHOU");
+            hookLogWrite("ERRO: VMT GetMoveSpeedForFPPMode falhou");
         }
     } else {
-        LOGE("Player class ou p_class_get_methods nao disponivel para UpdateVelocity hook");
+        LOGE("GetMoveSpeedForFPPMode nao encontrado em Player");
+        hookLogWrite("ERRO: GetMoveSpeedForFPPMode nao encontrado");
     }
 
     return nullptr;
