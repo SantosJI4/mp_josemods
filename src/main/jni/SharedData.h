@@ -61,8 +61,8 @@ struct SharedESPData {
     // ── Silent Aim ───────────────────────────────────────────────────────────
     // Snap instantâneo da câmera para a cabeça ANTES do Original LateUpdate,
     // depois restaura. O tiro registra na cabeça sem o jogador ver a câmera mover.
+    // Sem restrição de FOV: qualquer inimigo visível na tela é headshot.
     volatile int silentAimEnabled;  // Toggle: 0 = off, 1 = on
-    float        silentAimFovDeg;   // Cone de ativação em graus (ex: 15)
     // ────────────────────────────────────────────────────────────────────────
 
     ESPEntry players[MAX_ESP_PLAYERS];

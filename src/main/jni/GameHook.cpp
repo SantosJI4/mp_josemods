@@ -508,7 +508,11 @@ static Vector3 ManualWorldToScreen(Vector3 world, const Matrix4x4& vp, int sw, i
 // ── Silent Aim — estado entre frames ─────────────────────────────────────
 // g_silentAimPending: câmera foi snapped no frame anterior → restaurar agora
 static bool    g_silentAimPending = false;
-static Vector3 g_silentAimSaved{0.0f, 0.0f, 0.0f}; // ângulos salvos para restore
+static Vector3 g_silentAimSaved{0.0f, 0.0f, 0.0f};   // ângulos salvos para restore
+// Target independente do aim assist — sem restrição de FOV
+static Vector3 g_silentTargetWorld{0.0f, 0.0f, 0.0f};
+static float   g_silentBestDist    = 1e9f;             // distância de tela ao centro
+static bool    g_silentHasTarget   = false;
 // ─────────────────────────────────────────────────────────────────────────
 
 static void Hook_OnUpdate(void* self, void* methodInfo) {
@@ -666,59 +670,35 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
         // Resetar candidatos de aim para o novo frame
         g_aimHasTarget      = false;
         g_aimBestScreenDist = 1e9f;
+        // Resetar candidatos de silent aim
+        g_silentHasTarget   = false;
+        g_silentBestDist    = 1e9f;
 
-        // ── Silent Aim: Snap instantâneo da câmera para a cabeça ─────────────────
-        // Só executa se houver alvo NO FRAME ATUAL (recém calculado acima).
-        // O snap é feito APÓS o aim assist para não conflitar.
-        // A câmera permanece snapped até o início do PRÓXIMO frame, quando é restaurada
-        // antes de chamar orig_OnUpdate. Assim o raycast/tiro do próximo frame
-        // registra com o ângulo correto, e o jogador nunca vê a câmera mover.
+        // ── Silent Aim: Snap instantâneo — SEM restrição de FOV ─────────────────
+        // Usa g_silentTargetWorld: inimigo vivo mais próximo do centro (tela inteira).
+        // Snap feito aqui (fim do frame), restaurado no INÍCIO do próximo frame
+        // antes de orig_OnUpdate → tiro registra na cabeça, mira não se move.
         if (sharedData->silentAimEnabled && g_camTransform &&
-            g_aimHasTarget && fn_get_eulerAngles && fn_set_eulerAngles && fn_get_position) {
+            g_silentHasTarget && fn_get_eulerAngles && fn_set_eulerAngles && fn_get_position) {
 
-            float saFovDeg = sharedData->silentAimFovDeg;
-            if (saFovDeg < 1.0f || saFovDeg > 90.0f) saFovDeg = 15.0f;
+            // Salvar ângulo atual para restaurar no início do próximo frame
+            g_silentAimSaved = fn_get_eulerAngles(g_camTransform, nullptr);
 
-            // Verificar se o alvo está dentro do cone de silent aim
-            // (usa g_aimBestScreenDist que foi resetada acima — não disponível;
-            //  re-calculamos a partir da posição 3D do alvo)
-            bool inFov = true;
-            {
-                // Reprojetar alvo para checar FOV
-                int sw = sharedData->screenW;
-                int sh = sharedData->screenH;
-                if (sw > 0 && sh > 0 && g_vpValid) {
-                    Vector3 sp = ManualWorldToScreen(g_aimTargetWorld, g_vpMatrix, sw, sh);
-                    if (sp.z > 0.1f) {
-                        float dX = sp.x - sw * 0.5f;
-                        float dY = sp.y - sh * 0.5f;
-                        float dist = sqrtf(dX*dX + dY*dY);
-                        float fovRad = (float)sw * (saFovDeg / 90.0f) * 0.5f;
-                        inFov = dist < fovRad;
-                    }
-                }
-            }
+            Vector3 camPos = fn_get_position(g_camTransform, nullptr);
+            float dx = g_silentTargetWorld.x - camPos.x;
+            float dy = g_silentTargetWorld.y - camPos.y;
+            float dz = g_silentTargetWorld.z - camPos.z;
+            float hd = sqrtf(dx*dx + dz*dz);
 
-            if (inFov) {
-                // Salvar ângulo atual para restaurar no início do próximo frame
-                g_silentAimSaved = fn_get_eulerAngles(g_camTransform, nullptr);
+            if (hd > 0.01f) {
+                float targetYaw   =  atan2f(dx, dz) * (180.0f / (float)M_PI);
+                float targetPitch = -atan2f(dy, hd)  * (180.0f / (float)M_PI);
+                if (targetPitch >  89.0f) targetPitch =  89.0f;
+                if (targetPitch < -89.0f) targetPitch = -89.0f;
+                float outPitch = targetPitch < 0.0f ? targetPitch + 360.0f : targetPitch;
 
-                Vector3 camPos = fn_get_position(g_camTransform, nullptr);
-                float dx = g_aimTargetWorld.x - camPos.x;
-                float dy = g_aimTargetWorld.y - camPos.y;
-                float dz = g_aimTargetWorld.z - camPos.z;
-                float hd = sqrtf(dx*dx + dz*dz);
-
-                if (hd > 0.01f) {
-                    float targetYaw   =  atan2f(dx, dz) * (180.0f / (float)M_PI);
-                    float targetPitch = -atan2f(dy, hd)  * (180.0f / (float)M_PI);
-                    if (targetPitch >  89.0f) targetPitch =  89.0f;
-                    if (targetPitch < -89.0f) targetPitch = -89.0f;
-                    float outPitch = targetPitch < 0.0f ? targetPitch + 360.0f : targetPitch;
-
-                    fn_set_eulerAngles(g_camTransform, Vector3(outPitch, targetYaw, g_silentAimSaved.z), nullptr);
-                    g_silentAimPending = true;
-                }
+                fn_set_eulerAngles(g_camTransform, Vector3(outPitch, targetYaw, g_silentAimSaved.z), nullptr);
+                g_silentAimPending = true;
             }
         }
         // ─────────────────────────────────────────────────────────────────────
@@ -827,27 +807,36 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     // Verificar se está na frente da câmera
     if (screenBottom.z < 0.1f || screenTop.z < 0.1f) return;
 
+    // HP check comum (evita alocar alvo morto/derrubado)
+    int chp = fn_get_CurHP ? fn_get_CurHP(self, nullptr) : 1;
+
+    float dX = screenTop.x - screenW * 0.5f;
+    float dY = screenTop.y - screenH * 0.5f;
+    float screenDist = sqrtf(dX * dX + dY * dY);
+
     // ── Aim Assist: registrar candidato ao alvo ──────────────────────────────
     // Somente inimigos vivos visíveis dentro do cone de FOV configurado
-    if (sharedData->aimAssistEnabled) {
+    if (sharedData->aimAssistEnabled && chp > 0) {
         float fovDeg = sharedData->aimAssistFovDeg;
         if (fovDeg < 1.0f || fovDeg > 90.0f) fovDeg = 30.0f;
 
-        // Converter FOV graus em raio de pixels (estimativa proporcional à tela)
         float fovRadiusPx = (float)screenW * (fovDeg / 90.0f) * 0.5f;
 
-        float dX = screenTop.x - screenW * 0.5f;
-        float dY = screenTop.y - screenH * 0.5f;
-        float screenDist = sqrtf(dX * dX + dY * dY);
-
         if (screenDist < fovRadiusPx && screenDist < g_aimBestScreenDist) {
-            // HP check: não mirar em player já morto/derrubado
-            int chp = fn_get_CurHP ? fn_get_CurHP(self, nullptr) : 1;
-            if (chp > 0) {
-                g_aimBestScreenDist = screenDist;
-                g_aimTargetWorld    = topWorld;   // posição 3D da cabeça
-                g_aimHasTarget      = true;
-            }
+            g_aimBestScreenDist = screenDist;
+            g_aimTargetWorld    = topWorld;
+            g_aimHasTarget      = true;
+        }
+    }
+
+    // ── Silent Aim: rastrear inimigo mais próximo do centro (TELA INTEIRA) ───
+    // Sem restrição de FOV — qualquer inimigo vivo na tela é candidato.
+    // Snap ocorre no próximo tiro, sem mover a mira.
+    if (sharedData->silentAimEnabled && chp > 0) {
+        if (screenDist < g_silentBestDist) {
+            g_silentBestDist    = screenDist;
+            g_silentTargetWorld = topWorld;
+            g_silentHasTarget   = true;
         }
     }
     // ─────────────────────────────────────────────────────────────────────────

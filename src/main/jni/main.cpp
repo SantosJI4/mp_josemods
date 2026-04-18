@@ -68,7 +68,6 @@ static float aimDeadzone     = 1.5f;  // Ângulo mínimo para ativar (anti-jitte
 // Silent Aim State
 // ============================================================
 static bool  silentAim       = false;
-static float silentAimFovDeg = 15.0f; // Cone de ativação em graus
 
 // SharedMemory (leitura do hook injetado no jogo)
 static SharedESPData* sharedData = nullptr;
@@ -205,7 +204,6 @@ void DrawESP(int screenW, int screenH) {
     sharedData->aimAssistDeadzone = aimDeadzone;
     // ── Sincronizar Silent Aim ───────────────────────────────────────────────
     sharedData->silentAimEnabled  = silentAim ? 1 : 0;
-    sharedData->silentAimFovDeg   = silentAimFovDeg;
     // ────────────────────────────────────────────────────────────────────────
 
     if (!esp) return;
@@ -561,13 +559,7 @@ void DrawMenu() {
             ImGui::TextColored(textDim, "[buscando...]");
 
         ImGui::Spacing();
-        ImGui::PushItemWidth(-1);
-        if (ImGui::SliderFloat("##safov", &silentAimFovDeg, 5.0f, 60.0f, "FOV Silent: %.0f deg")) {
-            if (sharedData) sharedData->silentAimFovDeg = silentAimFovDeg;
-        }
-        ImGui::PopItemWidth();
-        ImGui::Spacing();
-        ImGui::TextColored(textDim, "Tiro vai na cabeca sem mover a mira visualmente");
+        ImGui::TextColored(textDim, "Qualquer tiro vai na cabeca - sem mover a mira");
     }
     // ────────────────────────────────────────────────────────────────────────
 
