@@ -103,11 +103,36 @@ public:
         touchX = x;
         touchY = y;
         if (action == 0) { // ACTION_DOWN
-            pendingDown = true;
+            pendingDown      = true;
+            touchPrevY       = y;
+            touchStartY      = y;
+            totalDragY       = 0.0f;
+            isTouchDrag      = false;
+            pendingCancelMouse = false;
         } else if (action == 1 || action == 3) { // ACTION_UP / CANCEL
-            pendingUp = true;
+            pendingUp        = true;
+            touchPrevY       = -1.0f;
+            isTouchDrag      = false;
+            totalDragY       = 0.0f;
+        } else if (action == 2) { // ACTION_MOVE
+            if (touchPrevY >= 0.0f) {
+                float dy = touchPrevY - y; // positivo = dedo subiu = scroll down
+                totalDragY += dy;
+                touchPrevY  = y;
+
+                // Limiar: movimento > 18px é gesto de scroll, não tap
+                if (!isTouchDrag && fabsf(totalDragY) > 18.0f) {
+                    isTouchDrag      = true;
+                    pendingDown      = false; // cancela tap pendente
+                    pendingCancelMouse = true; // libera botão se já estava pressed
+                }
+
+                if (isTouchDrag) {
+                    // Fator: 60px de arrasto = 1 unidade de scroll ImGui
+                    pendingWheel += dy / 60.0f;
+                }
+            }
         }
-        // ACTION_MOVE: só atualiza posição
     }
 
     int getScreenW() const { return screenW; }
@@ -310,6 +335,18 @@ private:
             io.MousePos = ImVec2(touchX, touchY);
         }
 
+        // Cancela press se gesto de scroll foi detectado
+        if (pendingCancelMouse) {
+            io.MouseDown[0] = false;
+            pendingCancelMouse = false;
+        }
+
+        // Scroll por gesto de arrastar
+        if (fabsf(pendingWheel) > 0.001f) {
+            io.AddMouseWheelEvent(0.0f, pendingWheel);
+            pendingWheel = 0.0f;
+        }
+
         // DOWN tem prioridade: segura por 1 frame antes de processar UP
         if (pendingDown) {
             io.MouseDown[0] = true;
@@ -404,8 +441,15 @@ private:
 
     // Touch
     std::mutex touchMtx;
-    float touchX = -1.0f;
-    float touchY = -1.0f;
-    bool pendingDown = false;
-    bool pendingUp = false;
+    float touchX           = -1.0f;
+    float touchY           = -1.0f;
+    bool  pendingDown      = false;
+    bool  pendingUp        = false;
+    // Scroll-gesture state
+    float touchPrevY       = -1.0f;
+    float touchStartY      = 0.0f;
+    float totalDragY       = 0.0f;
+    float pendingWheel     = 0.0f;
+    bool  isTouchDrag      = false;
+    bool  pendingCancelMouse = false;
 };

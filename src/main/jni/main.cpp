@@ -261,7 +261,8 @@ void DrawESP(int screenW, int screenH) {
     float scaleY = (float)screenH / (float)gameH;
 
     ImU32 color = ImGui::ColorConvertFloat4ToU32(espLineColor);
-    ImVec2 screenTopLine = ImVec2(screenW * linePositionX, 0.0f);
+    // Snapline: origem no CENTRO DA TELA (crosshair/mira), não no topo
+    ImVec2 snapOrigin = ImVec2(screenW * linePositionX, screenH * 0.5f);
     auto* draw = ImGui::GetBackgroundDrawList();
 
     // Verificar se há pelo menos um alvo válido na tela
@@ -356,10 +357,10 @@ void DrawESP(int screenW, int screenH) {
                 hpColor);
         }
 
-        // Snap line: from top-center of screen to center of body
+        // Snap line: from center of screen (crosshair) to center of body
         if (drawSnapLine) {
             float bodyCenterY = (top + bot) * 0.5f;
-            draw->AddLine(screenTopLine,
+            draw->AddLine(snapOrigin,
                          ImVec2(centerX, bodyCenterY), boxColor, 1.2f);
         }
 
@@ -673,7 +674,7 @@ void DrawMenu() {
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,    ImVec2(8.0f, 6.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,   ImVec2(6.0f, 3.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,  4.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize,  4.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize,  8.0f);
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg,             ImVec4(0.07f, 0.07f, 0.08f, 0.96f));
     ImGui::PushStyleColor(ImGuiCol_ChildBg,              ImVec4(0.00f, 0.00f, 0.00f, 0.00f));
@@ -699,12 +700,15 @@ void DrawMenu() {
     const float FULL_H = 490.0f;
     const float MINI_H = 44.0f;
     float targetH = menuMinimized ? MINI_H : FULL_H;
+    // Posição inicial: canto superior esquerdo (só na primeira vez que o ImGui cria a janela)
+    ImGui::SetNextWindowPos(ImVec2(8.0f, 8.0f), ImGuiCond_Once);
     ImGui::SetNextWindowSize(ImVec2(310.0f, targetH), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.96f * fadeAlpha);
     ImGui::Begin("##jw", nullptr,
         ImGuiWindowFlags_NoTitleBar      |
         ImGuiWindowFlags_NoScrollbar     |
-        ImGuiWindowFlags_NoScrollWithMouse);
+        ImGuiWindowFlags_NoScrollWithMouse |
+        ImGuiWindowFlags_NoResize);
 
     float W    = ImGui::GetWindowWidth();
     float winH = ImGui::GetWindowHeight();
@@ -753,7 +757,7 @@ void DrawMenu() {
         ImGui::PopStyleColor(3);
     }
 
-    const char* verStr = menuMinimized ? "v26" : "v26  FF1.123";
+    const char* verStr = menuMinimized ? "v27" : "v27  FF1.123";
     float verW = ImGui::CalcTextSize(verStr).x;
     ImGui::SetCursorPos(ImVec2(W - verW - 36.0f, (HDR_H - textLineH) * 0.5f));
     ImGui::TextColored(cDimText, "%s", verStr);
