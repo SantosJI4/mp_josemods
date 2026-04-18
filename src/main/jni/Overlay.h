@@ -103,34 +103,24 @@ public:
         touchX = x;
         touchY = y;
         if (action == 0) { // ACTION_DOWN
-            pendingDown      = true;
-            touchPrevY       = y;
-            touchStartY      = y;
-            totalDragY       = 0.0f;
-            isTouchDrag      = false;
-            pendingCancelMouse = false;
+            pendingDown   = true;
+            pendingUp     = false;
+            touchPrevY    = y;
+            touchStartY   = y;
+            totalDragY    = 0.0f;
+            pendingWheel  = 0.0f;
+            dragMode      = 0;  // 0=undecided, 1=scroll, 2=window-drag
         } else if (action == 1 || action == 3) { // ACTION_UP / CANCEL
-            pendingUp        = true;
-            touchPrevY       = -1.0f;
-            isTouchDrag      = false;
-            totalDragY       = 0.0f;
+            pendingUp     = true;
+            touchPrevY    = -1.0f;
+            totalDragY    = 0.0f;
+            dragMode      = 0;
         } else if (action == 2) { // ACTION_MOVE
             if (touchPrevY >= 0.0f) {
-                float dy = touchPrevY - y; // positivo = dedo subiu = scroll down
+                float dy    = touchPrevY - y; // positivo = dedo subiu = scroll down
                 totalDragY += dy;
+                pendingWheel += dy / 60.0f;   // acumulado; só consumido se dragMode==1
                 touchPrevY  = y;
-
-                // Limiar: movimento > 18px é gesto de scroll, não tap
-                if (!isTouchDrag && fabsf(totalDragY) > 18.0f) {
-                    isTouchDrag      = true;
-                    pendingDown      = false; // cancela tap pendente
-                    pendingCancelMouse = true; // libera botão se já estava pressed
-                }
-
-                if (isTouchDrag) {
-                    // Fator: 60px de arrasto = 1 unidade de scroll ImGui
-                    pendingWheel += dy / 60.0f;
-                }
             }
         }
     }
@@ -331,34 +321,45 @@ private:
         ImGuiIO& io = ImGui::GetIO();
 
         // Sempre atualizar posição do mouse
-        if (touchX >= 0.0f && touchY >= 0.0f) {
+        if (touchX >= 0.0f && touchY >= 0.0f)
             io.MousePos = ImVec2(touchX, touchY);
-        }
 
-        // Cancela press se gesto de scroll foi detectado
-        if (pendingCancelMouse) {
-            io.MouseDown[0] = false;
-            pendingCancelMouse = false;
-        }
-
-        // Scroll por gesto de arrastar
-        if (fabsf(pendingWheel) > 0.001f) {
-            io.AddMouseWheelEvent(0.0f, pendingWheel);
-            pendingWheel = 0.0f;
-        }
-
-        // DOWN tem prioridade: segura por 1 frame antes de processar UP
+        // DOWN tem prioridade: garante que ImGui vê o click antes de qualquer UP
         if (pendingDown) {
             io.MouseDown[0] = true;
             pendingDown = false;
-            // Não processar UP este frame — garante que ImGui vê o click
             return;
         }
 
         if (pendingUp) {
             io.MouseDown[0] = false;
-            pendingUp = false;
+            pendingUp    = false;
+            pendingWheel = 0.0f;
             clearMousePosNextFrame = true;
+            return;
+        }
+
+        // Movimento em andamento — decidir entre drag de janela/resize e scroll de conteúdo.
+        // Verificação usa estado do FRAME ANTERIOR do ImGui (processTouch roda antes de NewFrame).
+        if (io.MouseDown[0]) {
+            bool imguiDragging = ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f);
+
+            if (dragMode != 2 && imguiDragging)
+                dragMode = 2;  // ImGui está arrastando janela ou resize handle
+
+            if (dragMode == 2) {
+                // Drag de janela/resize: manter mouse pressionado, descartar scroll
+                pendingWheel = 0.0f;
+            } else if (dragMode == 0 && fabsf(totalDragY) > 40.0f) {
+                // Sem drag de janela e deslocamento vertical grande → scroll de conteúdo
+                dragMode = 1;
+                io.MouseDown[0] = false;
+            }
+
+            if (dragMode == 1 && fabsf(pendingWheel) > 0.001f) {
+                io.AddMouseWheelEvent(0.0f, pendingWheel);
+                pendingWheel = 0.0f;
+            }
         }
     }
 
@@ -441,15 +442,14 @@ private:
 
     // Touch
     std::mutex touchMtx;
-    float touchX           = -1.0f;
-    float touchY           = -1.0f;
-    bool  pendingDown      = false;
-    bool  pendingUp        = false;
-    // Scroll-gesture state
-    float touchPrevY       = -1.0f;
-    float touchStartY      = 0.0f;
-    float totalDragY       = 0.0f;
-    float pendingWheel     = 0.0f;
-    bool  isTouchDrag      = false;
-    bool  pendingCancelMouse = false;
+    float touchX      = -1.0f;
+    float touchY      = -1.0f;
+    bool  pendingDown = false;
+    bool  pendingUp   = false;
+    // Drag/scroll detection (resolvido em processTouch via estado do ImGui)
+    float touchPrevY  = -1.0f;
+    float touchStartY = 0.0f;
+    float totalDragY  = 0.0f;
+    float pendingWheel= 0.0f;
+    int   dragMode    = 0;    // 0=undecided, 1=scroll-conteúdo, 2=window-drag/resize
 };

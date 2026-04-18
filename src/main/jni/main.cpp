@@ -758,8 +758,8 @@ void DrawMenu() {
 
     // Botões do header: [P/M/G] tamanho  e  [-/+] minimizar
     {
-        const float BTN_W = 22.0f;
-        const float BTN_H = 17.0f;
+        const float BTN_W = 44.0f;   // touch-friendly (era 22)
+        const float BTN_H = 34.0f;   // touch-friendly (era 17)
         ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.0f, 0.55f, 0.28f, 0.40f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.0f, 0.80f, 0.42f, 0.55f));
@@ -782,7 +782,7 @@ void DrawMenu() {
 
     const char* verStr = menuMinimized ? "v30" : "v30  FF1.123";
     float verW = ImGui::CalcTextSize(verStr).x;
-    ImGui::SetCursorPos(ImVec2(W - verW - 64.0f, (HDR_H - textLineH) * 0.5f));
+    ImGui::SetCursorPos(ImVec2(W - verW - 108.0f, (HDR_H - textLineH) * 0.5f));
     ImGui::TextColored(cDimText, "%s", verStr);
     ImGui::SetCursorPosY(HDR_H + 2.0f);
 
