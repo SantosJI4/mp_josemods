@@ -636,67 +636,92 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
         if (sharedData->aimAssistEnabled && g_camTransform &&
             g_aimHasTarget && fn_get_eulerAngles && fn_set_eulerAngles) {
 
-            // 1. Ler rotação ATUAL da câmera (inclui input do jogador neste frame)
-            Vector3 curEuler = fn_get_eulerAngles(g_camTransform, nullptr);
-            Vector3 camPos   = fn_get_position(g_camTransform, nullptr);
+            // Trigger check: ativo sempre (triggerKey=0) OU enquanto tecla pressionada
+            bool triggerOk = (sharedData->triggerKey == 0) ||
+                             (sharedData->triggerHeld == 1);
 
-            float dx = g_aimTargetWorld.x - camPos.x;
-            float dy = g_aimTargetWorld.y - camPos.y;
-            float dz = g_aimTargetWorld.z - camPos.z;
-            float hd = sqrtf(dx * dx + dz * dz);
+            if (triggerOk) {
+                Vector3 curEuler = fn_get_eulerAngles(g_camTransform, nullptr);
+                Vector3 camPos   = fn_get_position(g_camTransform, nullptr);
 
-            if (hd > 0.01f) {
-                // 2. Calcular ângulos ideais para apontar à cabeça
-                float targetYaw   =  atan2f(dx, dz) * (180.0f / (float)M_PI);
-                float targetPitch = -atan2f(dy, hd)  * (180.0f / (float)M_PI);
-                if (targetPitch >  89.0f) targetPitch =  89.0f;
-                if (targetPitch < -89.0f) targetPitch = -89.0f;
+                // Capa offset: ajusta foco para o topo da malha (Rage mode)
+                // Para Legit, aimRageOffsetY pode ser 0 ou pequeno
+                float offsetY = sharedData->aimRageOffsetY;
 
-                // 3. Normalizar pitch atual: Unity usa [0,360), precisamos de [-180,180)
-                float curPitch = curEuler.x;
-                if (curPitch > 180.0f) curPitch -= 360.0f;
-                float curYaw = curEuler.y;
+                // Delta 3D entre câmera e alvo + offset vertical
+                float dx = g_aimTargetWorld.x - camPos.x;
+                float dy = (g_aimTargetWorld.y + offsetY) - camPos.y;
+                float dz = g_aimTargetWorld.z - camPos.z;
 
-                // 4. Calcular delta pelo caminho mais curto
-                float pitchDiff = targetPitch - curPitch;
-                float yawDiff   = targetYaw   - curYaw;
-                while (yawDiff >  180.0f) yawDiff -= 360.0f;
-                while (yawDiff < -180.0f) yawDiff += 360.0f;
+                // Hipotenusa horizontal (plano XZ)
+                float hd = sqrtf(dx * dx + dz * dz);
 
-                // 5. Deadzone: se já está muito perto, não aplica (evita micro-jitter)
-                float dz_ang = sharedData->aimAssistDeadzone;
-                if (dz_ang < 0.0f) dz_ang = 0.0f;
-                bool inDeadzone = (fabsf(pitchDiff) < dz_ang && fabsf(yawDiff) < dz_ang);
+                if (hd > 0.01f) {
+                    // ── Cálculo de ViewAngles via atan2 ────────────────────────
+                    // atan2(x, z) lida com todos quadrantes sem divisão por zero.
+                    // Yaw   = rotação horizontal (eixo Y Unity)
+                    // Pitch = rotação vertical   (eixo X Unity, negado: cima = neg)
+                    float targetYaw   =  atan2f(dx, dz) * (180.0f / (float)M_PI);
+                    float targetPitch = -atan2f(dy, hd)  * (180.0f / (float)M_PI);
+                    if (targetPitch >  89.0f) targetPitch =  89.0f;
+                    if (targetPitch < -89.0f) targetPitch = -89.0f;
 
-                if (!inDeadzone) {
-                    // 6. Clamp: máximo de X graus por frame ("sensi" do aim)
-                    float maxDeg = sharedData->aimAssistSpeed;
-                    if (maxDeg < 0.1f)  maxDeg = 0.1f;
-                    if (maxDeg > 10.0f) maxDeg = 10.0f;
+                    if (sharedData->aimMode == 1) {
+                        // ══ RAGE — Snap instantâneo ════════════════════════════
+                        // Câmera vai direto ao alvo em 1 frame.
+                        // aimRageOffsetY já aplicado no delta dy acima.
+                        float outPitch = targetPitch < 0.0f
+                            ? targetPitch + 360.0f : targetPitch;
+                        fn_set_eulerAngles(g_camTransform,
+                            Vector3(outPitch, targetYaw, curEuler.z), nullptr);
+                        sharedData->aimAssistHasTarget = 1;
 
-                    auto clampF = [](float v, float lim) -> float {
-                        return v > lim ? lim : (v < -lim ? -lim : v);
-                    };
+                    } else {
+                        // ══ LEGIT — Interpolação suave (lerp) ═══════════════
+                        // 1. Normalizar pitch atual de [0,360) para [-180,180)
+                        float curPitch = curEuler.x;
+                        if (curPitch > 180.0f) curPitch -= 360.0f;
+                        float curYaw = curEuler.y;
 
-                    float newPitch = curPitch + clampF(pitchDiff, maxDeg);
-                    float newYaw   = curYaw   + clampF(yawDiff,   maxDeg);
+                        // 2. Delta pelo caminho mais curto
+                        float pitchDiff = targetPitch - curPitch;
+                        float yawDiff   = targetYaw   - curYaw;
+                        while (yawDiff >  180.0f) yawDiff -= 360.0f;
+                        while (yawDiff < -180.0f) yawDiff += 360.0f;
 
-                    // 7. Sanitizar
-                    if (newPitch >  89.0f) newPitch =  89.0f;
-                    if (newPitch < -89.0f) newPitch = -89.0f;
-                    while (newYaw >= 360.0f) newYaw -= 360.0f;
-                    while (newYaw <    0.0f) newYaw += 360.0f;
+                        // 3. Deadzone
+                        float dz_ang = sharedData->aimAssistDeadzone;
+                        if (dz_ang < 0.0f) dz_ang = 0.0f;
+                        bool inDeadzone = (fabsf(pitchDiff) < dz_ang &&
+                                           fabsf(yawDiff)   < dz_ang);
 
-                    // 8. Converter pitch de volta para [0,360) (convenção Unity)
-                    float outPitch = newPitch < 0.0f ? newPitch + 360.0f : newPitch;
+                        if (!inDeadzone) {
+                            // 4. Lerp suave: fator aimLegitSmooth (0.01–0.5)
+                            // Baixo = mais humano/devagar  |  Alto = mais rápido
+                            float smooth = sharedData->aimLegitSmooth;
+                            if (smooth < 0.01f) smooth = 0.01f;
+                            if (smooth > 1.0f)  smooth = 1.0f;
 
-                    // 9. Preservar Z (roll) e escrever
-                    fn_set_eulerAngles(g_camTransform, Vector3(outPitch, newYaw, curEuler.z), nullptr);
-                    sharedData->aimAssistHasTarget = 1;
-                } else {
-                    sharedData->aimAssistHasTarget = 1; // dentro da cabeça = travado
+                            float newPitch = curPitch + pitchDiff * smooth;
+                            float newYaw   = curYaw   + yawDiff   * smooth;
+
+                            // 5. Sanitizar
+                            if (newPitch >  89.0f) newPitch =  89.0f;
+                            if (newPitch < -89.0f) newPitch = -89.0f;
+                            while (newYaw >= 360.0f) newYaw -= 360.0f;
+                            while (newYaw <    0.0f) newYaw += 360.0f;
+
+                            float outPitch = newPitch < 0.0f
+                                ? newPitch + 360.0f : newPitch;
+                            fn_set_eulerAngles(g_camTransform,
+                                Vector3(outPitch, newYaw, curEuler.z), nullptr);
+                            sharedData->aimAssistHasTarget = 1;
+                        } else {
+                            sharedData->aimAssistHasTarget = 1; // dentro da deadzone = travado
+                        }
+                    }
                 }
-            }
+            } // triggerOk
         } else {
             sharedData->aimAssistHasTarget = 0;
         }

@@ -69,7 +69,19 @@ struct SharedESPData {
     // 1 = Lowest HP — inimigo com menor HP dentro do FOV
     // 2 = Nearest Distance — menor profundidade de câmera (clipW)
     volatile int aimTargetPriority;
-    // ────────────────────────────────────────────────────────────────────────
+    // ── Aimbot Mode ──────────────────────────────────────────────────
+    // 0 = Legit: interpolação suave (lerp) por frame
+    // 1 = Rage:  snap instantâneo + offsetY (capa) para o topo da malha
+    volatile int aimMode;
+    float        aimLegitSmooth; // Legit: fator lerp por frame (0.01–0.50)
+    float        aimRageOffsetY; // Rage: offset Y sobre o alvo (capa) ex: 0.05
+
+    // ── Trigger Key (hold-to-aim) ─────────────────────────────────
+    // triggerKey  = 0  → aimbot sempre ativo quando aimAssistEnabled
+    // triggerKey  = 114/115 → aimbot só ativo enquanto tecla estiver PRESSIONADA
+    // triggerHeld = 1 enquanto a tecla estiver segurada (overlay atualiza)
+    volatile int triggerHeld; // 1 = tecla trigger pressionada agora
+    int32_t      triggerKey;  // keycode (0 = sem trigger / sempre ativo)    // ────────────────────────────────────────────────────────────────────────
 
     ESPEntry players[MAX_ESP_PLAYERS];
 };

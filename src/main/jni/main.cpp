@@ -82,6 +82,15 @@ static bool  silentAim = false;
 static int   aimTargetPriority = 0;
 
 // ============================================================
+// Aimbot Mode (v27)
+// 0 = Legit (suave/lerp), 1 = Rage (snap instantâneo)
+// ============================================================
+static int   aimMode        = 0;      // 0=Legit, 1=Rage
+static float aimLegitSmooth = 0.12f;  // fator lerp (0.01–0.50)
+static float aimRageOffsetY = 0.05f;  // offset Y sobre a cabeça (capa)
+static int   triggerKey     = 0;      // 0=sempre ativo, 114=Vol-, 115=Vol+
+
+// ============================================================
 // Hotkeys State  (Linux keycodes: Vol- = 114, Vol+ = 115)
 // ============================================================
 static int hotkeyAim    = 115;  // KEY_VOLUMEUP  — toggle Head Magnetism
@@ -221,9 +230,14 @@ void DrawESP(int screenW, int screenH) {
     sharedData->aimAssistSpeed    = aimSpeed;
     sharedData->aimAssistFovDeg   = aimFovDeg;
     sharedData->aimAssistDeadzone = aimDeadzone;
-    // ── Sincronizar Silent Aim ───────────────────────────────────────────────
+    // ── Sincronizar Silent Aim + Aimbot Mode (v27) ───────────────────────────
     sharedData->silentAimEnabled   = silentAim ? 1 : 0;
     sharedData->aimTargetPriority  = aimTargetPriority;
+    sharedData->aimMode            = aimMode;
+    sharedData->aimLegitSmooth     = aimLegitSmooth;
+    sharedData->aimRageOffsetY     = aimRageOffsetY;
+    sharedData->triggerKey         = triggerKey;
+    // triggerHeld é gerenciado exclusivamente pelo hotkeyThread
     // ────────────────────────────────────────────────────────────────────────
 
     if (!esp) return;
@@ -415,7 +429,7 @@ static void readHookLog() {
 // Config — persiste em /data/local/tmp/.jawmods_cfg
 // ============================================================
 #define JAW_CONFIG_PATH  "/data/local/tmp/.jawmods_cfg"
-#define JAW_CONFIG_MAGIC 0x4A415704u  // "JAW" v4
+#define JAW_CONFIG_MAGIC 0x4A415705u  // "JAW" v5
 
 #pragma pack(push, 1)
 struct JawConfig {
@@ -428,6 +442,11 @@ struct JawConfig {
     uint8_t  silentAim;
     int32_t  hotkeyAim, hotkeySilent, hotkeyEsp;
     int32_t  aimTargetPriority;
+    // v5 fields
+    int32_t  aimMode;
+    float    aimLegitSmooth;
+    float    aimRageOffsetY;
+    int32_t  triggerKey;
 };
 #pragma pack(pop)
 
@@ -453,6 +472,11 @@ static void saveConfig() {
     c.hotkeySilent       = hotkeySilent;
     c.hotkeyEsp          = hotkeyEsp;
     c.aimTargetPriority  = aimTargetPriority;
+    // v5
+    c.aimMode            = aimMode;
+    c.aimLegitSmooth     = aimLegitSmooth;
+    c.aimRageOffsetY     = aimRageOffsetY;
+    c.triggerKey         = triggerKey;
     int fd = open(JAW_CONFIG_PATH, O_CREAT | O_WRONLY | O_TRUNC, 0666);
     if (fd >= 0) { write(fd, &c, sizeof(c)); close(fd); }
 }
@@ -480,6 +504,11 @@ static void loadConfig() {
     hotkeySilent       = c.hotkeySilent;
     hotkeyEsp          = c.hotkeyEsp;
     aimTargetPriority  = c.aimTargetPriority;
+    // v5
+    aimMode            = c.aimMode;
+    aimLegitSmooth     = c.aimLegitSmooth;
+    aimRageOffsetY     = c.aimRageOffsetY;
+    triggerKey         = c.triggerKey;
 }
 
 // ============================================================
@@ -553,7 +582,17 @@ static void* hotkeyThread(void*) {
     while (g_hotkeyRunning.load()) {
         ssize_t rd = read(evfd, &ev, sizeof(ev));
         if (rd < (ssize_t)sizeof(ev)) { usleep(8000); continue; }
-        if (ev.type != EV_KEY || ev.value != 1) continue;  // só key-press
+        if (ev.type != EV_KEY) continue;
+        // ── Trigger key: detectar HOLD/RELEASE em tempo real ──────────────
+        // Se triggerKey está configurado, essa tecla faz "hold-to-aim".
+        // Tecla de trigger não aciona toggles de features.
+        if (triggerKey > 0 && ev.code == (uint16_t)triggerKey) {
+            if (sharedData)
+                sharedData->triggerHeld = (ev.value >= 1) ? 1 : 0;
+            continue;  // não cai nos toggles abaixo
+        }
+        // ── Toggles normais só em key-press (value==1) ────────────────────
+        if (ev.value != 1) continue;
         if (hotkeyAim    > 0 && ev.code == (uint16_t)hotkeyAim) {
             aimAssist = !aimAssist;
             if (sharedData) {
@@ -822,21 +861,54 @@ void DrawMenu() {
     if (ImGui::CollapsingHeader("  AIMBOT", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Spacing();
         bool prevAim = aimAssist;
-        ToggleRow("Head Magnetism", &aimAssist);
+        ToggleRow("Aimbot", &aimAssist);
         if (aimAssist != prevAim && sharedData) {
             sharedData->aimAssistEnabled = aimAssist ? 1 : 0;
             if (!aimAssist) sharedData->aimAssistHasTarget = 0;
         }
         if (aimAssist) {
-            if (sharedData && sharedData->aimAssistHasTarget) {
-                ImGui::Spacing();
-                float lockW = ImGui::CalcTextSize("[ HEAD LOCKED ]").x;
-                ImGui::SetCursorPosX((cw - lockW) * 0.5f);
+            // ── Status: LOCKED / AGUARDANDO TRIGGER ──────────────────────
+            bool hasLock = sharedData && sharedData->aimAssistHasTarget;
+            bool trigOk  = !sharedData ||
+                           sharedData->triggerKey == 0 ||
+                           sharedData->triggerHeld == 1;
+            ImGui::Spacing();
+            if (hasLock && trigOk) {
+                float tw = ImGui::CalcTextSize("[ HEAD LOCKED ]").x;
+                ImGui::SetCursorPosX((cw - tw) * 0.5f);
                 ImGui::TextColored(cGreen, "[ HEAD LOCKED ]");
+            } else if (!trigOk) {
+                float tw = ImGui::CalcTextSize("[ AGUARDANDO TRIGGER ]").x;
+                ImGui::SetCursorPosX((cw - tw) * 0.5f);
+                ImGui::TextColored(ImVec4(1.0f, 0.80f, 0.0f, 1.0f), "[ AGUARDANDO TRIGGER ]");
             }
             Sep();
 
-            // Target Priority
+            // ── Seletor de modo: Legit | Rage ────────────────────────────
+            ImGui::TextColored(cDimText, "Modo");
+            ImGui::Spacing();
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                aimMode == 0 ? ImVec4(0.0f,0.55f,0.28f,0.9f)
+                             : ImVec4(0.13f,0.14f,0.15f,1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.0f,0.65f,0.34f,1.0f));
+            if (ImGui::Button("Legit##m0", ImVec2((cw - 6.0f) * 0.5f, 26.0f))) {
+                aimMode = 0;
+                if (sharedData) sharedData->aimMode = 0;
+            }
+            ImGui::PopStyleColor(2);
+            ImGui::SameLine(0, 6.0f);
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                aimMode == 1 ? ImVec4(0.65f,0.10f,0.10f,0.9f)
+                             : ImVec4(0.13f,0.14f,0.15f,1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.80f,0.15f,0.15f,1.0f));
+            if (ImGui::Button("Rage##m1", ImVec2(-1.0f, 26.0f))) {
+                aimMode = 1;
+                if (sharedData) sharedData->aimMode = 1;
+            }
+            ImGui::PopStyleColor(2);
+            Sep();
+
+            // ── Target Priority ───────────────────────────────────────────
             ImGui::TextColored(cDimText, "Target Priority");
             ImGui::Spacing();
             const char* priorities[] = {
@@ -849,32 +921,62 @@ void DrawMenu() {
                 if (sharedData) sharedData->aimTargetPriority = aimTargetPriority;
             Sep();
 
-            // FOV slider
+            // ── FOV (usada em ambos os modos para selecionar candidato) ──
             ValueLabel("FOV", "%.0f Deg", aimFovDeg);
             ImGui::SetNextItemWidth(-1.0f);
             if (ImGui::SliderFloat("##fov", &aimFovDeg, 5.0f, 90.0f, ""))
                 if (sharedData) sharedData->aimAssistFovDeg = aimFovDeg;
             ImGui::Spacing();
 
-            // Aim Smoothness slider
-            ValueLabel("Aim Smoothness", "%.1f", aimSpeed);
-            ImGui::SetNextItemWidth(-1.0f);
-            if (ImGui::SliderFloat("##asm", &aimSpeed, 0.5f, 8.0f, ""))
-                if (sharedData) sharedData->aimAssistSpeed = aimSpeed;
-            ImGui::Spacing();
+            if (aimMode == 0) {
+                // ══ LEGIT: parametros de suavidade ═══════════════════════
+                ValueLabel("Smoothness", "%.2f", aimLegitSmooth);
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::SliderFloat("##lgts", &aimLegitSmooth, 0.01f, 0.50f, ""))
+                    if (sharedData) sharedData->aimLegitSmooth = aimLegitSmooth;
+                ImGui::Spacing();
 
-            // Max Distance slider
+                float lockPct = (1.0f - aimDeadzone / 5.0f) * 100.0f;
+                ValueLabel("Lock Threshold", "%.0f%%", lockPct);
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::SliderFloat("##lkd", &aimDeadzone, 0.0f, 5.0f, ""))
+                    if (sharedData) sharedData->aimAssistDeadzone = aimDeadzone;
+                ImGui::Spacing();
+                ImGui::TextColored(cDimText, "  Baixo = humano  |  Alto = rapido");
+            } else {
+                // ══ RAGE: parametros de snap ══════════════════════════════
+                ValueLabel("Head Offset Y", "%.2f", aimRageOffsetY);
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::SliderFloat("##rgo", &aimRageOffsetY, -0.30f, 0.50f, ""))
+                    if (sharedData) sharedData->aimRageOffsetY = aimRageOffsetY;
+                ImGui::Spacing();
+                ImGui::TextColored(cDimText, "  Offset vertical sobre a cabeca (capa)");
+            }
+            Sep();
+
+            // ── Max Distance ──────────────────────────────────────────────
             ValueLabel("Max Distance", "%.0f m", espMaxDistance);
             ImGui::SetNextItemWidth(-1.0f);
             ImGui::SliderFloat("##amd", &espMaxDistance, 10.0f, 999.0f, "");
-            ImGui::Spacing();
+            Sep();
 
-            // Lock On Speed (inverso da deadzone)
-            float lockPct = (1.0f - aimDeadzone / 5.0f) * 100.0f;
-            ValueLabel("Lock On Speed", "%.0f%%", lockPct);
+            // ── Trigger Key ───────────────────────────────────────────────
+            ImGui::TextColored(cDimText, "Trigger (HOLD para mirar)");
+            ImGui::Spacing();
+            const char* tkeys[] = { "Sempre Ativo", "Vol-  (114)", "Vol+  (115)" };
+            int tidx = (triggerKey == 114) ? 1 : (triggerKey == 115) ? 2 : 0;
             ImGui::SetNextItemWidth(-1.0f);
-            if (ImGui::SliderFloat("##los", &aimDeadzone, 0.0f, 5.0f, ""))
-                if (sharedData) sharedData->aimAssistDeadzone = aimDeadzone;
+            if (ImGui::Combo("##trk", &tidx, tkeys, 3)) {
+                triggerKey = (tidx == 1) ? 114 : (tidx == 2) ? 115 : 0;
+                if (sharedData) {
+                    sharedData->triggerKey  = triggerKey;
+                    sharedData->triggerHeld = 0;
+                }
+            }
+            if (triggerKey > 0) {
+                ImGui::Spacing();
+                ImGui::TextColored(cDimText, "  Segure o botao enquanto atira");
+            }
         }
         ImGui::Spacing();
     }
