@@ -694,17 +694,30 @@ void DrawMenu() {
     float targetH = menuMinimized ? MINI_H : FULL_H;
     // Largura do menu: 3 tamanhos ciclados pelo botão [P/M/G]
     static const float kMenuWidths[] = { 300.0f, 360.0f, 420.0f };
-    static int menuSizeLevel = 1; // 0=Pequeno, 1=Médio(default), 2=Grande
+    static int  menuSizeLevel   = 1;     // 0=Pequeno, 1=Médio(default), 2=Grande
+    static bool prevMinimized   = false; // detectar transição
     float menuW = kMenuWidths[menuSizeLevel];
-    // Posição inicial: canto superior esquerdo (só na primeira vez que o ImGui cria a janela)
+    // Posição inicial: canto superior esquerdo (só na primeira vez)
     ImGui::SetNextWindowPos(ImVec2(8.0f, 8.0f), ImGuiCond_Once);
-    ImGui::SetNextWindowSize(ImVec2(menuW, targetH), ImGuiCond_Always);
+    // Forçar tamanho apenas: na primeira abertura, ao minimizar ou ao restaurar.
+    // Fora dessas transições o usuário pode arrastar o canto para redimensionar.
+    bool sizeTransition = (menuMinimized != prevMinimized);
+    if (sizeTransition) {
+        ImGui::SetNextWindowSize(ImVec2(menuW, targetH), ImGuiCond_Always);
+    } else if (!menuMinimized) {
+        // Só limita altura mínima; largura livre
+        ImGui::SetNextWindowSizeConstraints(
+            ImVec2(260.0f, 300.0f), ImVec2(600.0f, 800.0f));
+    } else {
+        // Minimizado: travar no tamanho mini
+        ImGui::SetNextWindowSize(ImVec2(menuW, MINI_H), ImGuiCond_Always);
+    }
+    prevMinimized = menuMinimized;
     ImGui::SetNextWindowBgAlpha(0.96f * fadeAlpha);
     ImGui::Begin("##jw", nullptr,
         ImGuiWindowFlags_NoTitleBar      |
         ImGuiWindowFlags_NoScrollbar     |
-        ImGuiWindowFlags_NoScrollWithMouse |
-        ImGuiWindowFlags_NoResize);
+        ImGuiWindowFlags_NoScrollWithMouse);
 
     float W    = ImGui::GetWindowWidth();
     float winH = ImGui::GetWindowHeight();
