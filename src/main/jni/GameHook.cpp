@@ -58,7 +58,7 @@
   #define LOGE(...) ((void)0)
 #endif
 
-#define HOOK_BUILD_VER "v22-stealth"
+#define HOOK_BUILD_VER "v23-stealth"
 
 // ============================================================
 // Hook Log File — SOMENTE em modo debug
@@ -340,8 +340,8 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 // Player layout: offset 0x700 = NewPlayerAnimationSystemComponent*
 // NewPlayerAnimationSystemComponent base (GCommon.AnimationSystemComponent): offset 0x28 = Animator*
 #define OFF_Animator_GetBoneTransform 0x9BEE970
-#define PLAYER_ANIM_COMPONENT_OFFSET  0x700  // campo HFKJCLHCBGB na classe Player
-#define ANIM_COMPONENT_ANIMATOR_OFFSET 0x28  // campo m_Animator na base GCommon.AnimationSystemComponent
+#define PLAYER_ANIM_COMPONENT_OFFSET  0x700  // campo HFKJCLHCBGB na classe Player (dump L650012)
+#define ANIM_COMPONENT_ANIMATOR_OFFSET 0x20   // campo KFGPIOMOLHI (Animator) na base GCommon.AnimationSystemComponent (dump L644587/644603)
 #define HUMAN_BODY_BONE_HEAD           10    // UnityEngine.HumanBodyBones.Head
 
 // PlayerColliderChecker — hitbox real da cabeça (igual o servidor usa para dano)
