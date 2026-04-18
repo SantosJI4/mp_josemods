@@ -505,8 +505,23 @@ static Vector3 ManualWorldToScreen(Vector3 world, const Matrix4x4& vp, int sw, i
 // HOOK DO OnUpdate — Chamado pelo jogo para CADA player
 // ============================================================
 
+// ── Silent Aim — estado entre frames ─────────────────────────────────────
+// g_silentAimPending: câmera foi snapped no frame anterior → restaurar agora
+static bool    g_silentAimPending = false;
+static Vector3 g_silentAimSaved{0.0f, 0.0f, 0.0f}; // ângulos salvos para restore
+// ─────────────────────────────────────────────────────────────────────────
+
 static void Hook_OnUpdate(void* self, void* methodInfo) {
-    // Chamar original primeiro (mantém o jogo funcionando)
+    // ── Silent Aim: Restaurar ângulos snapped do frame anterior ──────────────
+    // O snap é feito no FINAL do frame anterior (após orig já ter rodado).
+    // No início do frame atual, restauramos para que o jogador não veja o movimento.
+    // O tiro do frame anterior já registrou com o ângulo snapped.
+    if (g_silentAimPending && g_camTransform && fn_set_eulerAngles) {
+        fn_set_eulerAngles(g_camTransform, g_silentAimSaved, nullptr);
+        g_silentAimPending = false;
+    }
+
+    // Chamar original (jogo processa lógica, física, raycast do tiro)
     if (orig_OnUpdate) {
         orig_OnUpdate(self, methodInfo);
     }
@@ -651,6 +666,62 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
         // Resetar candidatos de aim para o novo frame
         g_aimHasTarget      = false;
         g_aimBestScreenDist = 1e9f;
+
+        // ── Silent Aim: Snap instantâneo da câmera para a cabeça ─────────────────
+        // Só executa se houver alvo NO FRAME ATUAL (recém calculado acima).
+        // O snap é feito APÓS o aim assist para não conflitar.
+        // A câmera permanece snapped até o início do PRÓXIMO frame, quando é restaurada
+        // antes de chamar orig_OnUpdate. Assim o raycast/tiro do próximo frame
+        // registra com o ângulo correto, e o jogador nunca vê a câmera mover.
+        if (sharedData->silentAimEnabled && g_camTransform &&
+            g_aimHasTarget && fn_get_eulerAngles && fn_set_eulerAngles && fn_get_position) {
+
+            float saFovDeg = sharedData->silentAimFovDeg;
+            if (saFovDeg < 1.0f || saFovDeg > 90.0f) saFovDeg = 15.0f;
+
+            // Verificar se o alvo está dentro do cone de silent aim
+            // (usa g_aimBestScreenDist que foi resetada acima — não disponível;
+            //  re-calculamos a partir da posição 3D do alvo)
+            bool inFov = true;
+            {
+                // Reprojetar alvo para checar FOV
+                int sw = sharedData->screenW;
+                int sh = sharedData->screenH;
+                if (sw > 0 && sh > 0 && g_vpValid) {
+                    Vector3 sp = ManualWorldToScreen(g_aimTargetWorld, g_vpMatrix, sw, sh);
+                    if (sp.z > 0.1f) {
+                        float dX = sp.x - sw * 0.5f;
+                        float dY = sp.y - sh * 0.5f;
+                        float dist = sqrtf(dX*dX + dY*dY);
+                        float fovRad = (float)sw * (saFovDeg / 90.0f) * 0.5f;
+                        inFov = dist < fovRad;
+                    }
+                }
+            }
+
+            if (inFov) {
+                // Salvar ângulo atual para restaurar no início do próximo frame
+                g_silentAimSaved = fn_get_eulerAngles(g_camTransform, nullptr);
+
+                Vector3 camPos = fn_get_position(g_camTransform, nullptr);
+                float dx = g_aimTargetWorld.x - camPos.x;
+                float dy = g_aimTargetWorld.y - camPos.y;
+                float dz = g_aimTargetWorld.z - camPos.z;
+                float hd = sqrtf(dx*dx + dz*dz);
+
+                if (hd > 0.01f) {
+                    float targetYaw   =  atan2f(dx, dz) * (180.0f / (float)M_PI);
+                    float targetPitch = -atan2f(dy, hd)  * (180.0f / (float)M_PI);
+                    if (targetPitch >  89.0f) targetPitch =  89.0f;
+                    if (targetPitch < -89.0f) targetPitch = -89.0f;
+                    float outPitch = targetPitch < 0.0f ? targetPitch + 360.0f : targetPitch;
+
+                    fn_set_eulerAngles(g_camTransform, Vector3(outPitch, targetYaw, g_silentAimSaved.z), nullptr);
+                    g_silentAimPending = true;
+                }
+            }
+        }
+        // ─────────────────────────────────────────────────────────────────────
     }
 
     int idx = sharedData->playerCount;

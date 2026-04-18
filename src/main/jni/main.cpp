@@ -64,6 +64,12 @@ static float aimSpeed        = 2.5f;  // Graus por frame (sensi do aim)
 static float aimFovDeg       = 30.0f; // Cone de ativação em graus
 static float aimDeadzone     = 1.5f;  // Ângulo mínimo para ativar (anti-jitter)
 
+// ============================================================
+// Silent Aim State
+// ============================================================
+static bool  silentAim       = false;
+static float silentAimFovDeg = 15.0f; // Cone de ativação em graus
+
 // SharedMemory (leitura do hook injetado no jogo)
 static SharedESPData* sharedData = nullptr;
 static int shmFd = -1;
@@ -197,6 +203,9 @@ void DrawESP(int screenW, int screenH) {
     sharedData->aimAssistSpeed    = aimSpeed;
     sharedData->aimAssistFovDeg   = aimFovDeg;
     sharedData->aimAssistDeadzone = aimDeadzone;
+    // ── Sincronizar Silent Aim ───────────────────────────────────────────────
+    sharedData->silentAimEnabled  = silentAim ? 1 : 0;
+    sharedData->silentAimFovDeg   = silentAimFovDeg;
     // ────────────────────────────────────────────────────────────────────────
 
     if (!esp) return;
@@ -526,6 +535,39 @@ void DrawMenu() {
         ImGui::PopItemWidth();
         ImGui::Spacing();
         ImGui::TextColored(textDim, "Sensi baixa = mais suave | FOV menor = mais seletivo | Deadzone evita tremida");
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // ── Silent Aim ───────────────────────────────────────────────────────────
+    bool prevSilent = silentAim;
+    ImGui::PushStyleColor(ImGuiCol_CheckMark, green);
+    ImGui::Checkbox("  Silent Aim", &silentAim);
+    ImGui::PopStyleColor();
+
+    if (silentAim != prevSilent && sharedData) {
+        sharedData->silentAimEnabled = silentAim ? 1 : 0;
+    }
+
+    if (silentAim) {
+        bool locked = sharedData && sharedData->aimAssistHasTarget;
+        ImGui::SameLine(0, 12);
+        if (locked)
+            ImGui::TextColored(green, "[ON TARGET]");
+        else
+            ImGui::TextColored(textDim, "[buscando...]");
+
+        ImGui::Spacing();
+        ImGui::PushItemWidth(-1);
+        if (ImGui::SliderFloat("##safov", &silentAimFovDeg, 5.0f, 60.0f, "FOV Silent: %.0f deg")) {
+            if (sharedData) sharedData->silentAimFovDeg = silentAimFovDeg;
+        }
+        ImGui::PopItemWidth();
+        ImGui::Spacing();
+        ImGui::TextColored(textDim, "Tiro vai na cabeca sem mover a mira visualmente");
     }
     // ────────────────────────────────────────────────────────────────────────
 

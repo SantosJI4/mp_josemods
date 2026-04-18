@@ -57,6 +57,12 @@ struct SharedESPData {
     float        aimAssistFovDeg;   // Cone de ativação em graus (ex: 30)
     float        aimAssistDeadzone; // Ângulo mínimo para ativar correção (evita jitter)
     volatile int aimAssistHasTarget;// Hook escreve 1 quando há alvo no cone
+
+    // ── Silent Aim ───────────────────────────────────────────────────────────
+    // Snap instantâneo da câmera para a cabeça ANTES do Original LateUpdate,
+    // depois restaura. O tiro registra na cabeça sem o jogador ver a câmera mover.
+    volatile int silentAimEnabled;  // Toggle: 0 = off, 1 = on
+    float        silentAimFovDeg;   // Cone de ativação em graus (ex: 15)
     // ────────────────────────────────────────────────────────────────────────
 
     ESPEntry players[MAX_ESP_PLAYERS];
