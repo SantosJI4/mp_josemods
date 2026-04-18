@@ -71,10 +71,11 @@ static float aimFovDeg       = 30.0f; // Cone de ativação em graus
 static float aimDeadzone     = 1.5f;  // Ângulo mínimo para ativar (anti-jitter)
 
 // ============================================================
-// Silent Aim State
+// Aimbot State (v31)
 // ============================================================
 static bool  silentAim      = false;
-static bool  headshotPatch  = false;  // v30: patch GetPartByCollider → sempre retorna Head
+static bool  recoilEnabled  = false;  // v31: anti-recoil
+static float aimbotSmooth   = 0.0f;   // 0.0=snap instant, 0.0-0.95=lerp suave
 
 // ============================================================
 // Aim Target Priority
@@ -226,14 +227,15 @@ void DrawESP(int screenW, int screenH) {
     // Hook SEMPRE coleta players (espEnabled=1 fixo) — draw controlado pelo toggle
     sharedData->espEnabled = 1;
 
-    // ── Sincronizar Aimbot (v29: silentAim é o único aimbot) ────────────────
-    sharedData->aimAssistEnabled  = 0;       // camera-moving desligado permanentemente
+    // ── Sincronizar Aimbot (v31: aimbot direto + anti-recoil) ────────────────
+    sharedData->aimAssistEnabled  = 0;
     sharedData->aimAssistFovDeg   = aimFovDeg;
     sharedData->silentAimEnabled   = silentAim ? 1 : 0;
     sharedData->aimTargetPriority  = aimTargetPriority;
     sharedData->aimRageOffsetY     = aimRageOffsetY;
     sharedData->triggerKey         = triggerKey;
-    sharedData->headshotPatch      = headshotPatch ? 1 : 0;
+    sharedData->recoilEnabled      = recoilEnabled ? 1 : 0;
+    sharedData->aimbotSmooth       = aimbotSmooth;
     // triggerHeld é gerenciado exclusivamente pelo hotkeyThread
     // ────────────────────────────────────────────────────────────────────────
 
@@ -427,7 +429,7 @@ static void readHookLog() {
 // Config — persiste em /data/local/tmp/.jawmods_cfg
 // ============================================================
 #define JAW_CONFIG_PATH  "/data/local/tmp/.jawmods_cfg"
-#define JAW_CONFIG_MAGIC 0x4A415706u  // "JAW" v6
+#define JAW_CONFIG_MAGIC 0x4A415707u  // "JAW" v7
 
 #pragma pack(push, 1)
 struct JawConfig {
@@ -445,8 +447,9 @@ struct JawConfig {
     float    aimLegitSmooth;
     float    aimRageOffsetY;
     int32_t  triggerKey;
-    // v6 fields
-    uint8_t  headshotPatch;
+    // v7 fields
+    uint8_t  recoilEnabled;
+    float    aimbotSmooth;
 };
 #pragma pack(pop)
 
@@ -477,7 +480,9 @@ static void saveConfig() {
     c.aimLegitSmooth     = aimLegitSmooth;
     c.aimRageOffsetY     = aimRageOffsetY;
     c.triggerKey         = triggerKey;
-    c.headshotPatch      = headshotPatch;
+    // v7
+    c.recoilEnabled      = recoilEnabled;
+    c.aimbotSmooth       = aimbotSmooth;
     int fd = open(JAW_CONFIG_PATH, O_CREAT | O_WRONLY | O_TRUNC, 0666);
     if (fd >= 0) { write(fd, &c, sizeof(c)); close(fd); }
 }
@@ -510,7 +515,9 @@ static void loadConfig() {
     aimLegitSmooth     = c.aimLegitSmooth;
     aimRageOffsetY     = c.aimRageOffsetY;
     triggerKey         = c.triggerKey;
-    headshotPatch      = c.headshotPatch;
+    // v7
+    recoilEnabled      = c.recoilEnabled;
+    aimbotSmooth       = c.aimbotSmooth;
 }
 
 // ============================================================
@@ -780,7 +787,7 @@ void DrawMenu() {
         ImGui::PopStyleColor(3);
     }
 
-    const char* verStr = menuMinimized ? "v30" : "v30  FF1.123";
+    const char* verStr = menuMinimized ? "v31" : "v31  FF1.123";
     float verW = ImGui::CalcTextSize(verStr).x;
     ImGui::SetCursorPos(ImVec2(W - verW - 108.0f, (HDR_H - textLineH) * 0.5f));
     ImGui::TextColored(cDimText, "%s", verStr);
@@ -910,7 +917,7 @@ void DrawMenu() {
         if (ImGui::BeginTabItem("AIM")) {
             ImGui::Spacing();
 
-            // Toggle Aimbot (v29: silentAim é o único aimbot — sem movimento de câmera)
+            // Toggle Aimbot (v31: move câmera visivelmente para cabeça do inimigo)
             bool prevAim = silentAim;
             ToggleRow("Aimbot", &silentAim);
             if (silentAim != prevAim && sharedData) {
@@ -919,19 +926,6 @@ void DrawMenu() {
             }
             Sep();
 
-            // v30: Toggle Headshot Garantido
-            bool prevHS = headshotPatch;
-            ToggleRow("Headshot Garantido", &headshotPatch);
-            if (headshotPatch != prevHS && sharedData)
-                sharedData->headshotPatch = headshotPatch ? 1 : 0;
-            if (headshotPatch) {
-                ImGui::Spacing();
-                float rw = ImGui::GetContentRegionAvail().x;
-                float tw = ImGui::CalcTextSize("100% HEADSHOT").x;
-                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (rw - tw) * 0.5f);
-                ImGui::TextColored(cGreen, "100% HEADSHOT");
-            }
-            Sep();
             if (silentAim) {
                 // Status lock
                 bool hasLock = sharedData && sharedData->aimAssistHasTarget;
@@ -965,18 +959,18 @@ void DrawMenu() {
                     if (sharedData) sharedData->aimTargetPriority = aimTargetPriority;
                 Sep();
 
-                // FOV — cone de detecção de alvo
+                // FOV
                 ValueLabel("FOV", "%.0f Deg", aimFovDeg);
                 ImGui::SetNextItemWidth(-1.0f);
                 if (ImGui::SliderFloat("##fov", &aimFovDeg, 5.0f, 90.0f, ""))
                     if (sharedData) sharedData->aimAssistFovDeg = aimFovDeg;
                 ImGui::Spacing();
 
-                // Head Offset Y — calibrar ponto exato de impacto na cabeça
-                ValueLabel("Head Offset Y", "%.2f", aimRageOffsetY);
+                // Suavidade do aimbot
+                ValueLabel("Suavidade", "%.2f", aimbotSmooth);
                 ImGui::SetNextItemWidth(-1.0f);
-                if (ImGui::SliderFloat("##hoy", &aimRageOffsetY, -0.30f, 0.50f, ""))
-                    if (sharedData) sharedData->aimRageOffsetY = aimRageOffsetY;
+                if (ImGui::SliderFloat("##smo", &aimbotSmooth, 0.0f, 0.95f, ""))
+                    if (sharedData) sharedData->aimbotSmooth = aimbotSmooth;
                 ImGui::Spacing();
                 Sep();
 
@@ -997,6 +991,20 @@ void DrawMenu() {
                     ImGui::Spacing();
                     ImGui::TextColored(cDimText, "  Segure o botao enquanto atira");
                 }
+            }
+            Sep();
+
+            // Anti-Recoil
+            bool prevRC = recoilEnabled;
+            ToggleRow("Anti-Recoil", &recoilEnabled);
+            if (recoilEnabled != prevRC && sharedData)
+                sharedData->recoilEnabled = recoilEnabled ? 1 : 0;
+            if (recoilEnabled) {
+                ImGui::Spacing();
+                float rw = ImGui::GetContentRegionAvail().x;
+                float tw = ImGui::CalcTextSize("SEM RECUO").x;
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (rw - tw) * 0.5f);
+                ImGui::TextColored(cGreen, "SEM RECUO");
             }
             ImGui::EndTabItem();
         }

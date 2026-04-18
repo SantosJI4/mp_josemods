@@ -58,10 +58,9 @@ struct SharedESPData {
     float        aimAssistDeadzone; // Ângulo mínimo para ativar correção (evita jitter)
     volatile int aimAssistHasTarget;// Hook escreve 1 quando há alvo no cone
 
-    // ── Silent Aim ───────────────────────────────────────────────────────────
-    // Snap instantâneo da câmera para a cabeça ANTES do Original LateUpdate,
-    // depois restaura. O tiro registra na cabeça sem o jogador ver a câmera mover.
-    // Sem restrição de FOV: qualquer inimigo visível na tela é headshot.
+    // ── Silent Aim (v31: aimbot direto) ───────────────────────────────────
+    // Mover câmera diretamente para a cabeça do inimigo (visível ao jogador).
+    // A câmera NÃO é restaurada após orig — mira permanece no alvo.
     volatile int silentAimEnabled;  // Toggle: 0 = off, 1 = on
 
     // ── Aim Target Priority ──────────────────────────────────────────────────
@@ -73,8 +72,9 @@ struct SharedESPData {
     // 0 = Legit: interpolação suave (lerp) por frame
     // 1 = Rage:  snap instantâneo + offsetY (capa) para o topo da malha
     volatile int aimMode;
-    float        aimLegitSmooth; // Legit: fator lerp por frame (0.01–0.50)
+    float        aimLegitSmooth; // legado (não utilizado, manter offset)
     float        aimRageOffsetY; // Rage: offset Y sobre o alvo (capa) ex: 0.05
+    float        aimbotSmooth;   // Aimbot: 0.0=instant snap, 0.0-0.95=lerp suave
 
     // ── Trigger Key (hold-to-aim) ─────────────────────────────────
     // triggerKey  = 0  → aimbot sempre ativo quando aimAssistEnabled
@@ -83,12 +83,11 @@ struct SharedESPData {
     volatile int triggerHeld; // 1 = tecla trigger pressionada agora
     int32_t      triggerKey;  // keycode (0 = sem trigger / sempre ativo)
 
-    // ── Headshot Patch ─────────────────────────────────────
-    // Patch inline ARM64 em GetPartByCollider para sempre retornar Head (0).
-    // Qualquer tiro em qualquer parte do corpo é contabilizado como headshot.
-    // 1 = ativo, 0 = desativado (restaura bytes originais)
-    volatile int headshotPatch; // overlay escreve, hook aplica/restaura
-    // ─────────────────────────────────────────────────────────────────────
+    // ── Anti-Recoil ──────────────────────────────────────────────────────
+    // Salva euler antes de orig, restaura após orig.
+    // Cancela o recoil (variação angular) adicionado pelo jogo por frame.
+    // Funciona independente do aimbot.
+    volatile int recoilEnabled; // 1 = ativo, 0 = desativado
 
     ESPEntry players[MAX_ESP_PLAYERS];
 };

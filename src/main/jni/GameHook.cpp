@@ -354,15 +354,7 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 // get_bounds_Injected(out Bounds& ret) recebe o ponteiro em x1 como parâmetro normal → correto.
 #define OFF_Collider_get_bounds_Injected  0x9CB794C
 
-// GetPartByCollider(Collider c) — determina qual parte do corpo foi atingida.
-// Retorna HitPart: Head=0, Neck=1, Chest=2, Hips=3, ...
-// Patch ARM64: MOV W0,#0 + RET → sempre retorna Head (headshot em qualquer tiro).
-#define OFF_GetPartByCollider             0x4FEAD00
-
-// ELMGJKHIIAA.HPGMEMPFIPD(DamageInfo) — função que verifica se o dano é headshot.
-// Retorna bool: true = é headshot. Patch: MOV W0,#1 + RET → sempre true.
-// Esta é a função real usada pelo cálculo de dano (GetPartByCollider só pega hitbox).
-#define OFF_IsHeadShotCheck               0x6F43D74
+// (offsets GetPartByCollider e IsHeadShotCheck removidos em v31 — server-side validates)
 
 // ============================================================
 // Function Pointers — resolvidos via base + offset direto
@@ -407,69 +399,9 @@ static void*   (*fn_get_HeadCollider)(void* player, void* method) = nullptr;
 static void    (*fn_Collider_get_bounds_Injected)(void* collider, BoundsVal* outBounds, void* method) = nullptr;
 
 // ============================================================
-// Headshot Patch — Inline ARM64 patch em duas funções:
-//   1. GetPartByCollider → sempre retorna Head (0)
-//   2. HPGMEMPFIPD (IsHeadShot check) → sempre retorna true (1)
+// Aimbot state (v31: direct aim, camera moves visibly to enemy head)
 // ============================================================
-static uintptr_t g_il2cpp_base    = 0;       // base resolvida no setup, usada no hook
-static uint8_t g_origGetPart[8]   = {};       // bytes originais de GetPartByCollider
-static uint8_t g_origIsHeadShot[8]= {};       // bytes originais de IsHeadShotCheck
-static bool    g_patchApplied     = false;
-static bool    g_patchWanted      = false;
-
-// MOV W0, #0  = 0x52800000  (Head = 0)
-static const uint8_t kPatchRetHead[8] = {
-    0x00, 0x00, 0x80, 0x52,  // MOV W0, #0
-    0xC0, 0x03, 0x5F, 0xD6   // RET
-};
-// MOV W0, #1  = 0x52800020  (true = 1)
-static const uint8_t kPatchRetTrue[8] = {
-    0x20, 0x00, 0x80, 0x52,  // MOV W0, #1
-    0xC0, 0x03, 0x5F, 0xD6   // RET
-};
-
-static bool InlinePatch(void* target, const uint8_t* bytes, size_t len) {
-    uintptr_t pageSize = (uintptr_t)sysconf(_SC_PAGESIZE);
-    uintptr_t addr     = (uintptr_t)target;
-    uintptr_t pageBase = addr & ~(pageSize - 1);
-    if (mprotect((void*)pageBase, pageSize * 2, PROT_READ | PROT_WRITE | PROT_EXEC) != 0)
-        return false;
-    memcpy(target, bytes, len);
-    __builtin___clear_cache((char*)addr, (char*)(addr + len));
-    mprotect((void*)pageBase, pageSize * 2, PROT_READ | PROT_EXEC);
-    return true;
-}
-
-static void ApplyHeadshotPatch() {
-    if (g_patchApplied || !g_il2cpp_base) return;
-    // Patch 1: GetPartByCollider → sempre retorna Head (0)
-    void* fn1 = (void*)(g_il2cpp_base + OFF_GetPartByCollider);
-    memcpy(g_origGetPart, fn1, 8);
-    bool ok1 = InlinePatch(fn1, kPatchRetHead, 8);
-    // Patch 2: IsHeadShotCheck → sempre retorna true (1)
-    void* fn2 = (void*)(g_il2cpp_base + OFF_IsHeadShotCheck);
-    memcpy(g_origIsHeadShot, fn2, 8);
-    bool ok2 = InlinePatch(fn2, kPatchRetTrue, 8);
-    if (ok1 && ok2) {
-        g_patchApplied = true;
-        LOGI("[Headshot] Patch aplicado: GetPartByCollider=%p IsHeadShot=%p", fn1, fn2);
-    } else {
-        LOGE("[Headshot] Falha: GetPartByCollider=%d IsHeadShot=%d", ok1, ok2);
-        // Se um falhou, restaura o que conseguiu
-        if (ok1) InlinePatch(fn1, g_origGetPart, 8);
-        if (ok2) InlinePatch(fn2, g_origIsHeadShot, 8);
-    }
-}
-
-static void RemoveHeadshotPatch() {
-    if (!g_patchApplied || !g_il2cpp_base) return;
-    void* fn1 = (void*)(g_il2cpp_base + OFF_GetPartByCollider);
-    void* fn2 = (void*)(g_il2cpp_base + OFF_IsHeadShotCheck);
-    InlinePatch(fn1, g_origGetPart, 8);
-    InlinePatch(fn2, g_origIsHeadShot, 8);
-    g_patchApplied = false;
-    LOGI("[Headshot] Patch removido");
-}
+static uintptr_t g_il2cpp_base = 0;
 
 // Original LateUpdate
 static void (*orig_OnUpdate)(void* self, void* methodInfo) = nullptr;
@@ -582,80 +514,91 @@ static Vector3 ManualWorldToScreen(Vector3 world, const Matrix4x4& vp, int sw, i
 // HOOK DO OnUpdate — Chamado pelo jogo para CADA player
 // ============================================================
 
-// ── Silent Aim — estado entre frames ─────────────────────────────────────
-// SNAP: alvo travado do frame ANTERIOR — usado no snap PRÉ-orig deste frame.
-// CAND: melhor candidato sendo construído no frame ATUAL — vira SNAP no próximo.
+// ── Aimbot — estado entre frames ────────────────────────────────────────────
+// SNAP: alvo travado do frame ANTERIOR (commit no newFrame).
+// CAND: candidato sendo construído neste frame → vira SNAP no próximo.
 //
-// Fluxo correto:
-//   1. PRÉ-orig: snap câmera → g_silentSnapTarget (frame anterior)
-//   2. orig roda → raycast/tiro registra na cabeça → headshot
-//   3. PÓS-orig: restore câmera imediatamente → jogador não vê movimento
-//   4. newFrame: commit CAND→SNAP, reset CAND para próximo frame
+// Fluxo (v31 — aimbot direto, câmera se move visivelmente para cabeça do alvo):
+//   1. PRE-orig: calcula ângulo câmera → cabeça do alvo, seta euler (lerp ou instant)
+//   2. Salva euler pós-snap para anti-recoil
+//   3. orig roda (jogo processa lógica, física, recoil)
+//   4. Anti-recoil: restaura euler salvo (cancela recoil vertical do tiro)
 static Vector3 g_silentSnapTarget{0.0f, 0.0f, 0.0f};  // alvo travado (frame anterior)
 static bool    g_silentSnapValid  = false;
 static Vector3 g_silentCandTarget{0.0f, 0.0f, 0.0f};  // candidato atual (próximo frame)
 static float   g_silentCandDist   = 1e9f;
 static bool    g_silentCandValid  = false;
-// ─────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 
 static void Hook_OnUpdate(void* self, void* methodInfo) {
-    // ── Headshot Patch toggle ─────────────────────────────────────────────────
-    // Verifica a flag do overlay e aplica/remove o patch inline em GetPartByCollider.
-    // Chamado a cada frame, mas ApplyHeadshotPatch/Remove são idempotentes.
-    if (sharedData) {
-        bool want = (sharedData->headshotPatch == 1);
-        if (want != g_patchWanted) {
-            g_patchWanted = want;
-            if (want)
-                ApplyHeadshotPatch();
-            else
-                RemoveHeadshotPatch();
-        }
-    }
-
-    // ── Silent Aim: Snap PRÉ-orig ─────────────────────────────────────────────
-    // Usa g_silentSnapTarget (alvo travado do frame anterior).
-    // Snap ANTES de orig → orig processa o tiro/raycast com câmera na cabeça.
-    // Restore LOGO APÓS orig → jogador não vê a câmera se mover.
-    bool    sawSnap  = false;
-    Vector3 sawSaved{0.0f, 0.0f, 0.0f};
-
-    // triggerOk: silentAim também respeita a tecla de trigger
     bool triggerOk = !sharedData ||
                      (sharedData->triggerKey == 0) ||
                      (sharedData->triggerHeld == 1);
+
+    // ── Aimbot direto PRE-orig: move câmera para cabeça do alvo ──────────────
+    Vector3 eulerPreOrig{0.0f, 0.0f, 0.0f};
+    bool    savedEuler = false;
 
     if (sharedData && sharedData->silentAimEnabled && triggerOk &&
         g_silentSnapValid && g_camTransform &&
         fn_get_eulerAngles && fn_set_eulerAngles && fn_get_position) {
 
-        sawSaved = fn_get_eulerAngles(g_camTransform, nullptr);
-        Vector3 sCamPos = fn_get_position(g_camTransform, nullptr);
-        float sdx = g_silentSnapTarget.x - sCamPos.x;
-        float sdy = g_silentSnapTarget.y - sCamPos.y;
-        float sdz = g_silentSnapTarget.z - sCamPos.z;
-        float shd = sqrtf(sdx * sdx + sdz * sdz);
-        if (shd > 0.01f) {
-            float sYaw   =  atan2f(sdx, sdz) * (180.0f / (float)M_PI);
-            float sPitch = -atan2f(sdy, shd)  * (180.0f / (float)M_PI);
-            if (sPitch >  89.0f) sPitch =  89.0f;
-            if (sPitch < -89.0f) sPitch = -89.0f;
-            float sOut = sPitch < 0.0f ? sPitch + 360.0f : sPitch;
-            fn_set_eulerAngles(g_camTransform, Vector3(sOut, sYaw, sawSaved.z), nullptr);
-            sawSnap = true;
+        Vector3 curEuler = fn_get_eulerAngles(g_camTransform, nullptr);
+        Vector3 camPos   = fn_get_position(g_camTransform, nullptr);
+        float dx = g_silentSnapTarget.x - camPos.x;
+        float dy = g_silentSnapTarget.y - camPos.y;
+        float dz = g_silentSnapTarget.z - camPos.z;
+        float hd = sqrtf(dx * dx + dz * dz);
+        if (hd > 0.01f) {
+            float tYaw   =  atan2f(dx, dz) * (180.0f / (float)M_PI);
+            float tPitch = -atan2f(dy, hd)  * (180.0f / (float)M_PI);
+            if (tPitch >  89.0f) tPitch =  89.0f;
+            if (tPitch < -89.0f) tPitch = -89.0f;
+            float tPitchOut = tPitch < 0.0f ? tPitch + 360.0f : tPitch;
+
+            float smooth = sharedData->aimbotSmooth;
+            smooth = smooth < 0.0f ? 0.0f : (smooth > 0.95f ? 0.95f : smooth);
+            float t = 1.0f - smooth;
+
+            float newPitch, newYaw;
+            if (t >= 1.0f) {
+                newPitch = tPitchOut;
+                newYaw   = tYaw;
+            } else {
+                float dyaw = tYaw - curEuler.y;
+                if (dyaw >  180.0f) dyaw -= 360.0f;
+                if (dyaw < -180.0f) dyaw += 360.0f;
+                float dpitch = tPitchOut - curEuler.x;
+                if (dpitch >  180.0f) dpitch -= 360.0f;
+                if (dpitch < -180.0f) dpitch += 360.0f;
+                newPitch = curEuler.x + dpitch * t;
+                newYaw   = curEuler.y + dyaw   * t;
+                if (newPitch < 0.0f) newPitch += 360.0f;
+            }
+            fn_set_eulerAngles(g_camTransform, Vector3(newPitch, newYaw, curEuler.z), nullptr);
         }
+        // Salva euler pós-snap para anti-recoil
+        eulerPreOrig = fn_get_eulerAngles(g_camTransform, nullptr);
+        savedEuler   = true;
+    } else if (sharedData && sharedData->recoilEnabled &&
+               g_camTransform && fn_get_eulerAngles) {
+        // Anti-recoil sem aimbot: salva euler atual antes do orig
+        eulerPreOrig = fn_get_eulerAngles(g_camTransform, nullptr);
+        savedEuler   = true;
     }
 
-    // Chamar original (jogo processa lógica, física, raycast do tiro)
+    // Chamar original (jogo processa lógica, física, recoil)
     if (orig_OnUpdate) {
         orig_OnUpdate(self, methodInfo);
     }
 
-    // ── Silent Aim: Restore IMEDIATAMENTE após orig ───────────────────────────
-    // O tiro já foi registrado (na cabeça). Agora restaura para que o jogador
-    // não perceba o snap.
-    if (sawSnap && g_camTransform && fn_set_eulerAngles) {
-        fn_set_eulerAngles(g_camTransform, sawSaved, nullptr);
+    // ── Anti-Recoil: restaura pitch pós-orig (cancela recoil vertical) ────────
+    if (savedEuler && sharedData && sharedData->recoilEnabled &&
+        g_camTransform && fn_get_eulerAngles && fn_set_eulerAngles) {
+        Vector3 postOrig = fn_get_eulerAngles(g_camTransform, nullptr);
+        // Restaura pitch (X) e yaw (Y) ao valor pré-orig: cancela recoil
+        fn_set_eulerAngles(g_camTransform,
+            Vector3(eulerPreOrig.x, eulerPreOrig.y, postOrig.z), nullptr);
     }
 
     // Se shared memory não está pronto ou hook desativado, retorna
