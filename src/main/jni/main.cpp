@@ -621,7 +621,8 @@ void DrawMenu() {
     bool vmtApplied = shmReady && sharedData->hookApplied == 0xBEEF1234;
 
     // Fade-in na abertura
-    static float fadeAlpha = 0.0f;
+    static float fadeAlpha    = 0.0f;
+    static bool  menuMinimized = false;
     if (fadeAlpha < 1.0f) {
         fadeAlpha += ImGui::GetIO().DeltaTime * 4.0f;
         if (fadeAlpha > 1.0f) fadeAlpha = 1.0f;
@@ -655,7 +656,11 @@ void DrawMenu() {
     ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabHovered, cGreen);
     ImGui::PushStyleColor(ImGuiCol_Separator,            ImVec4(0.16f, 0.17f, 0.19f, 1.00f));
 
-    ImGui::SetNextWindowSize(ImVec2(310.0f, 490.0f), ImGuiCond_Once);
+    // Tamanho: minimizado = só header, expandido = normal
+    const float FULL_H = 490.0f;
+    const float MINI_H = 44.0f;
+    float targetH = menuMinimized ? MINI_H : FULL_H;
+    ImGui::SetNextWindowSize(ImVec2(310.0f, targetH), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.96f * fadeAlpha);
     ImGui::Begin("##jw", nullptr,
         ImGuiWindowFlags_NoTitleBar      |
@@ -693,12 +698,29 @@ void DrawMenu() {
     ImGui::SetCursorPos(ImVec2(26.0f, (HDR_H - textLineH) * 0.5f));
     ImGui::TextColored(cGreen, "JAWMODS");
 
-    const char* verStr = "v26  FF1.123";
+    // Botão minimizar/restaurar no canto direito do header
+    {
+        const float BTN_W = 22.0f;
+        const float BTN_H = 17.0f;
+        ImVec2 btnPos = ImVec2(W - BTN_W - 8.0f, (HDR_H - BTN_H) * 0.5f);
+        ImGui::SetCursorPos(btnPos);
+        ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.0f, 0.55f, 0.28f, 0.40f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.0f, 0.80f, 0.42f, 0.55f));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+        if (ImGui::Button(menuMinimized ? "+##min" : "-##min", ImVec2(BTN_W, BTN_H)))
+            menuMinimized = !menuMinimized;
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor(3);
+    }
+
+    const char* verStr = menuMinimized ? "v26" : "v26  FF1.123";
     float verW = ImGui::CalcTextSize(verStr).x;
-    ImGui::SetCursorPos(ImVec2(W - verW - 10.0f, (HDR_H - textLineH) * 0.5f));
+    ImGui::SetCursorPos(ImVec2(W - verW - 36.0f, (HDR_H - textLineH) * 0.5f));
     ImGui::TextColored(cDimText, "%s", verStr);
     ImGui::SetCursorPosY(HDR_H + 2.0f);
 
+    if (!menuMinimized) {
     // ═══════════════════════════════════════════════════════════════════════
     // CORPO com scroll
     // ═══════════════════════════════════════════════════════════════════════
@@ -931,6 +953,8 @@ void DrawMenu() {
         pthread_create(&tt, nullptr, serverCheckThread, nullptr);
         pthread_detach(tt);
     }
+
+    } // end !menuMinimized
 
     ImGui::End();
 
