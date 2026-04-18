@@ -69,6 +69,10 @@ def get_hwid(android_id, device_model):
 def index():
     return jsonify({"status": "ok", "service": "jawmods-key-server", "version": "1.0"})
 
+@app.route("/status", methods=["GET"])
+def status():
+    return jsonify({"online": True, "version": "v24"})
+
 @app.route("/validate", methods=["POST"])
 def validate_key():
     data = request.get_json(silent=True)
