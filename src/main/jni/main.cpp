@@ -375,16 +375,16 @@ void DrawESP(int screenW, int screenH) {
         }
     }
 
-    // ── Aim Assist: círculo de FOV visual ────────────────────────────────────
-    if (aimAssist) {
+    // ── Círculo de FOV visual (silentAim OU aimAssist ativo) ─────────────────
+    if (silentAim || aimAssist) {
         float fovRadiusPx = (float)screenW * (aimFovDeg / 90.0f) * 0.5f;
         bool  locked      = sharedData && sharedData->aimAssistHasTarget;
         ImU32 circleColor = locked
-            ? IM_COL32(0, 230, 100, 140)   // verde quando travado
-            : IM_COL32(255, 255, 255, 55);  // branco tênue quando procurando
+            ? IM_COL32(255, 80,  0,  200)   // laranja quando travado no alvo
+            : IM_COL32(255, 255, 255, 55);   // branco tênue quando procurando
         draw->AddCircle(
             ImVec2(screenW * 0.5f, screenH * 0.5f),
-            fovRadiusPx, circleColor, 64, 1.2f);
+            fovRadiusPx, circleColor, 64, 1.5f);
     }
     // ────────────────────────────────────────────────────────────────────────
 
@@ -800,7 +800,7 @@ void DrawMenu() {
         ImGui::PopStyleColor(3);
     }
 
-    const char* verStr = menuMinimized ? "v37" : "v37  FF1.123";
+    const char* verStr = menuMinimized ? "v37" : "v38  FF1.123";
     float verW = ImGui::CalcTextSize(verStr).x;
     ImGui::SetCursorPos(ImVec2(W - verW - 108.0f, (HDR_H - textLineH) * 0.5f));
     ImGui::TextColored(cDimText, "%s", verStr);
