@@ -58,7 +58,7 @@
   #define LOGE(...) ((void)0)
 #endif
 
-#define HOOK_BUILD_VER "v24-lookdir"
+#define HOOK_BUILD_VER "v25-euler"
 
 // ============================================================
 // Hook Log File — SOMENTE em modo debug
@@ -533,14 +533,9 @@ static Vector3 ManualWorldToScreen(Vector3 world, const Matrix4x4& vp, int sw, i
 // HOOK DO OnUpdate — Chamado pelo jogo para CADA player
 // ============================================================
 
-// ── Aimbot via _lookDir field write (v38) ─────────────────────────────────────────
-// Player::LateUpdate roda para cada inimigo e constrói g_aimCandTarget.
-// Para o player local: escrevemos Vector2(pitch,yaw) no campo _lookDir (0xF88)
-// ANTES do orig → a câmera segue o alvo no mesmo frame via o sistema nativo.
-// Offset confirmado do dump L650442: private struct UnityEngine.Vector2 LILENNDENJG // 0xF88
-#define OFF_PLAYER_LOOKDIR  0xF88
-
-struct Vector2 { float x, y; };
+// ── Aimbot via camera euler angles (v36/v39 approach) ──────────────────────────────
+// Aplicado em Hook_CameraLateUpdate DEPOIS do orig → câmera aponta para a cabeça do alvo.
+// CalculateViewAngle converte src→dst em pitch/yaw Unity.
 struct Angles  { float pitch, yaw; };
 
 static Angles CalculateViewAngle(Vector3 src, Vector3 dst) {
@@ -597,48 +592,53 @@ static void Hook_CameraLateUpdate(void* self, void* methodInfo) {
     if (!hookActive.load() || !sharedData || !g_camTransform ||
         !fn_get_eulerAngles || !fn_set_eulerAngles) return;
 
-    // Anti-recoil SÓ quando disparando (triggerHeld==1).
-    bool doAntiRecoil = sharedData->recoilEnabled && g_camEulerValid &&
-                        (sharedData->triggerHeld == 1);
-    if (!doAntiRecoil) return;
+    // ── Aimbot: camera euler snap para a cabeça do alvo (v36 approach) ───────────
+    if (sharedData->silentAimEnabled && g_aimCandValid &&
+        g_camTransform && fn_get_position) {
+        Vector3 camPos = fn_get_position(g_camTransform, nullptr);
+        if (!std::isnan(camPos.x) && !std::isnan(camPos.y) && !std::isnan(camPos.z)) {
+            Angles ang = CalculateViewAngle(camPos, g_aimCandTarget);
+            Vector3 curEuler = fn_get_eulerAngles(g_camTransform, nullptr);
+            if (!std::isnan(curEuler.x) && !std::isnan(curEuler.y) && !std::isnan(curEuler.z)) {
+                float smooth = sharedData->aimbotSmooth;
+                float tPitch = ang.pitch;
+                float tYaw   = ang.yaw;
+                if (smooth > 0.01f && smooth < 0.95f) {
+                    float t = 1.0f - smooth;
+                    float dp = tPitch - curEuler.x;
+                    if (dp >  180.0f) dp -= 360.0f;
+                    if (dp < -180.0f) dp += 360.0f;
+                    float dy = tYaw - curEuler.y;
+                    if (dy >  180.0f) dy -= 360.0f;
+                    if (dy < -180.0f) dy += 360.0f;
+                    tPitch = curEuler.x + dp * t;
+                    tYaw   = curEuler.y + dy * t;
+                }
+                fn_set_eulerAngles(g_camTransform,
+                    Vector3(tPitch, tYaw, curEuler.z), nullptr);
+            }
+        }
+        return; // aimbot rodou: pular anti-recoil neste frame
+    }
 
-    // Anti-recoil: restaura APENAS o pitch (X) pré-frame → cancela recoil vertical.
-    Vector3 postOrig = fn_get_eulerAngles(g_camTransform, nullptr);
-    if (std::isnan(postOrig.y) || std::isnan(postOrig.z)) return;
-    fn_set_eulerAngles(g_camTransform,
-        Vector3(g_cachedCamEuler.x, postOrig.y, postOrig.z), nullptr);
+    // Anti-recoil SÓ quando disparando (triggerHeld==1).
+    if (sharedData->recoilEnabled && g_camEulerValid &&
+        sharedData->triggerHeld == 1) {
+        Vector3 postOrig = fn_get_eulerAngles(g_camTransform, nullptr);
+        if (std::isnan(postOrig.y) || std::isnan(postOrig.z)) return;
+        fn_set_eulerAngles(g_camTransform,
+            Vector3(g_cachedCamEuler.x, postOrig.y, postOrig.z), nullptr);
+    }
 }
 
 static void Hook_OnUpdate(void* self, void* methodInfo) {
-    // ── Aimbot _lookDir: player local tratado ANTES do orig ─────────────────
-    // A detecção precisa de sharedData + IsLocalPlayer antes de qualquer coisa.
+    // Player local: chamar orig diretamente (sem lookDir write — v39)
     if (self && sharedData && hookActive.load() &&
         fn_IsLocalPlayer && fn_IsLocalPlayer(self, nullptr)) {
         g_localPlayer = self;
-        // Escrever _lookDir ANTES do orig → câmera aplica ângulos neste frame
-        if (sharedData->silentAimEnabled && g_aimCandValid &&
-            g_camTransform && fn_get_position) {
-            Vector3 cameraPos = fn_get_position(g_camTransform, nullptr);
-            if (!std::isnan(cameraPos.x) && !std::isnan(cameraPos.y) && !std::isnan(cameraPos.z)) {
-                Angles ang = CalculateViewAngle(cameraPos, g_aimCandTarget);
-                float smooth = sharedData->aimbotSmooth;
-                if (smooth > 0.01f && smooth < 0.95f) {
-                    // Lerp suave: lemos o campo atual e interpolamos
-                    Vector2 cur = *(Vector2*)((uint8_t*)self + OFF_PLAYER_LOOKDIR);
-                    float t = 1.0f - smooth;
-                    float dyaw = ang.yaw - cur.y;
-                    if (dyaw >  180.0f) dyaw -= 360.0f;
-                    if (dyaw < -180.0f) dyaw += 360.0f;
-                    ang.pitch = cur.x + (ang.pitch - cur.x) * t;
-                    ang.yaw   = cur.y + dyaw * t;
-                }
-                *(Vector2*)((uint8_t*)self + OFF_PLAYER_LOOKDIR) = Vector2{ang.pitch, ang.yaw};
-            }
-        }
         if (orig_OnUpdate) orig_OnUpdate(self, methodInfo);
         return;
     }
-    // ────────────────────────────────────────────────────────────────────────
 
     // Chamar original (jogo processa lógica, física) para não-local players
     if (orig_OnUpdate) {
