@@ -24,8 +24,8 @@
 
 #define SHARED_MEM_NAME  "gl_cache"
 #define SHARED_MEM_PATH  "/dev/ashmem"
-#define SHARED_MEM_SIZE  4096
-#define MAX_ESP_PLAYERS  64
+#define SHARED_MEM_SIZE  8192
+#define MAX_ESP_PLAYERS  32
 
 struct ESPEntry {
     float topX, topY, topZ;       // Posição de tela do topo do player
@@ -37,6 +37,7 @@ struct ESPEntry {
     int   curHp;                  // HP atual
     int   maxHp;                  // HP máximo
     bool  knocked;                // Player está derrubado/sangrando
+    char  nick[24];               // Nome do player (UTF-8, truncado em 23 chars)
 };
 
 struct SharedESPData {
@@ -94,6 +95,12 @@ struct SharedESPData {
     // speedValue normal: ~6.5. Valores acima aceleram o personagem.
     volatile int speedEnabled; // 1 = ativo, 0 = desativado
     float        speedValue;   // velocidade alvo (ex: 15.0 = ~2x normal)
+
+    // ── Player Hacks (v49) ───────────────────────────────────────────────
+    volatile int ammoEnabled;        // 1 = munição infinita (get_IsAmmoFree=true)
+    volatile int medkitFastEnabled;  // 1 = medkit rápido (FSModeUseMedikitFasterRate alto)
+    volatile int fastWeaponSwitch;   // 1 = troca de arma instantânea (InSwapWeaponCD=false)
+    volatile int medkitRunEnabled;   // 1 = usar medkit correndo (OnPreparationCancel skip)
 
     ESPEntry players[MAX_ESP_PLAYERS];
 };

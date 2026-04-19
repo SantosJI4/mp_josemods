@@ -58,7 +58,7 @@
   #define LOGE(...) ((void)0)
 #endif
 
-#define HOOK_BUILD_VER "v33-aimfix2"
+#define HOOK_BUILD_VER "v34-player"
 
 // ============================================================
 // Hook Log File — SOMENTE em modo debug
@@ -393,6 +393,23 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 // Offset é o RVA do código da função (como OFF_LateUpdate).
 #define OFF_CameraController_LateUpdate 0x68FCE30
 
+// ── Player Hacks (v49) ──────────────────────────────────────────────────────
+// NickName — Player::get_NickName() — string IL2CPP do nome do player
+// Dump L651414: public System.String get_NickName() // 0x676CDF0
+#define OFF_get_NickName              0x676CDF0
+// get_IsAmmoFree — PlayerAttributes::get_IsAmmoFree() — true = infinito
+// Dump L714448: public System.Boolean get_IsAmmoFree() // 0x7261D18
+#define OFF_get_IsAmmoFree            0x7261D18
+// get_FSModeUseMedikitFasterRate — PlayerAttributes — fator de velocidade do medkit
+// Dump L714436: public System.Single get_FSModeUseMedikitFasterRate() // 0x7261740
+#define OFF_get_FSModeUseMedikitFasterRate 0x7261740
+// get_InSwapWeaponCD — Player — true = em cooldown de troca de arma
+// Dump L651567: public System.Boolean get_InSwapWeaponCD() // 0x67717AC
+#define OFF_get_InSwapWeaponCD        0x67717AC
+// OnPreparationCancel — UIHudPreparationTimerController — cancela medkit ao mover
+// Dump L375882: public System.Void OnPreparationCancel(System.Object[]) // 0x4839784
+#define OFF_OnPreparationCancel       0x4839784
+
 // ============================================================
 // Function Pointers — resolvidos via base + offset direto
 // ============================================================
@@ -447,6 +464,18 @@ static float (*orig_GetWeaponRunSpeedScale)(void* self, int32_t weaponType, void
 static float (*orig_GetScatterRate)(void* self, void* method) = nullptr;
 // Cache do ponteiro PlayerAttributes do player local (para filtrar no hook)
 static void* g_localPlayerAttr = nullptr;
+
+// ── Player Hacks (v49) ───────────────────────────────────────────────────────
+// NickName — Player::get_NickName() — só chamado, não hookeado
+static void* (*fn_get_NickName)(void* self, void* method) = nullptr;
+// IsAmmoFree hook
+static bool  (*orig_get_IsAmmoFree)(void* self, void* method) = nullptr;
+// FSModeUseMedikitFasterRate hook
+static float (*orig_get_FSModeUseMedikitFasterRate)(void* self, void* method) = nullptr;
+// InSwapWeaponCD hook
+static bool  (*orig_get_InSwapWeaponCD)(void* self, void* method) = nullptr;
+// OnPreparationCancel hook (cancela medkit ao mover)
+static void  (*orig_OnPreparationCancel)(void* self, void* data, void* method) = nullptr;
 
 // Aimbot — Player::SetAimRotation
 struct Quaternion { float x, y, z, w; };
@@ -643,6 +672,75 @@ static float Hook_GetScatterRate(void* self, void* method) {
         return 0.0f;
     }
     return orig_GetScatterRate ? orig_GetScatterRate(self, method) : 1.0f;
+}
+
+// ============================================================
+// PLAYER HACKS (v49)
+// ============================================================
+
+// Helper: lê string IL2CPP (UTF-16LE) e converte para UTF-8 simples (ASCII subset)
+// Estrutura do objeto System.String no IL2CPP:
+//   +0x10: int32_t length (nº de chars UTF-16)
+//   +0x14: uint16_t[] chars
+static void il2cppStringToUtf8(void* strObj, char* out, int maxOut) {
+    if (!strObj || !out || maxOut <= 0) { if (out) out[0] = '\0'; return; }
+    out[0] = '\0';
+    int32_t len = *(int32_t*)((uint8_t*)strObj + 0x10);
+    if (len <= 0 || len > 128) return;
+    uint16_t* chars = (uint16_t*)((uint8_t*)strObj + 0x14);
+    int written = 0;
+    for (int i = 0; i < len && written < maxOut - 1; i++) {
+        uint16_t c = chars[i];
+        if (c < 0x80) {
+            out[written++] = (char)c;
+        } else if (c < 0x800) {
+            if (written + 1 >= maxOut - 1) break;
+            out[written++] = (char)(0xC0 | (c >> 6));
+            out[written++] = (char)(0x80 | (c & 0x3F));
+        } else {
+            if (written + 2 >= maxOut - 1) break;
+            out[written++] = (char)(0xE0 | (c >> 12));
+            out[written++] = (char)(0x80 | ((c >> 6) & 0x3F));
+            out[written++] = (char)(0x80 | (c & 0x3F));
+        }
+    }
+    out[written] = '\0';
+}
+
+// PlayerAttributes::get_IsAmmoFree() → true = munição infinita
+static bool Hook_GetIsAmmoFree(void* self, void* method) {
+    if (sharedData && sharedData->ammoEnabled &&
+        g_localPlayerAttr && self == g_localPlayerAttr) {
+        return true;
+    }
+    return orig_get_IsAmmoFree ? orig_get_IsAmmoFree(self, method) : false;
+}
+
+// PlayerAttributes::get_FSModeUseMedikitFasterRate() → valor alto = medkit rápido
+static float Hook_GetFSModeUseMedikitFasterRate(void* self, void* method) {
+    if (sharedData && sharedData->medkitFastEnabled &&
+        g_localPlayerAttr && self == g_localPlayerAttr) {
+        return 10.0f;
+    }
+    return orig_get_FSModeUseMedikitFasterRate
+        ? orig_get_FSModeUseMedikitFasterRate(self, method)
+        : 1.0f;
+}
+
+// Player::get_InSwapWeaponCD() → false = sem cooldown de troca de arma
+static bool Hook_GetInSwapWeaponCD(void* self, void* method) {
+    if (sharedData && sharedData->fastWeaponSwitch) {
+        return false;
+    }
+    return orig_get_InSwapWeaponCD ? orig_get_InSwapWeaponCD(self, method) : false;
+}
+
+// UIHudPreparationTimerController::OnPreparationCancel(Object[]) → skip = medkit andando
+static void Hook_OnPreparationCancel(void* self, void* data, void* method) {
+    if (sharedData && sharedData->medkitRunEnabled) {
+        return; // cancela o cancelamento → medkit continua mesmo movendo
+    }
+    if (orig_OnPreparationCancel) orig_OnPreparationCancel(self, data, method);
 }
 
 // ============================================================
@@ -1003,6 +1101,13 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     // Knocked: campo bool IsKnockedDownBleed a offset 0x1150 do objeto Player
     entry.knocked = *(bool*)((uint8_t*)self + OFF_IsKnockedDownBleed);
 
+    // Nick name: Player::get_NickName() → string IL2CPP (v49)
+    entry.nick[0] = '\0';
+    if (fn_get_NickName) {
+        void* strObj = fn_get_NickName(self, nullptr);
+        if (strObj) il2cppStringToUtf8(strObj, entry.nick, sizeof(entry.nick));
+    }
+
     sharedData->playerCount = idx + 1;
     sharedData->magic = 0xDEADF00D;
     sharedData->writeSeq.fetch_add(1, std::memory_order_release);
@@ -1100,6 +1205,8 @@ void* hack_thread(void*) {
     fn_IsVisible      = RESOLVE_OFFSET(bool(*)(void*, void*),              OFF_IsVisible);
     fn_get_IsSighting = RESOLVE_OFFSET(bool(*)(void*, void*),              OFF_get_IsSighting);
     fn_IsFiring       = RESOLVE_OFFSET(bool(*)(void*, void*),              OFF_IsFiring);
+    // Player Hacks (v49) — get_NickName só chamado (não hookeado)
+    fn_get_NickName   = RESOLVE_OFFSET(void*(*)(void*, void*),             OFF_get_NickName);
     // Speed Hack — resolvido via VmtHook em UpdateVelocity (ver adiante)
 
     LOGI("Offsets resolvidos:");
@@ -1476,9 +1583,81 @@ void* hack_thread(void*) {
             LOGE("GetScatterRate nao encontrado em PlayerAttributes");
             hookLogWrite("ERRO: GetScatterRate nao encontrado");
         }
+
+        // IsAmmoFree hook (v49)
+        void* ammoMI = p_class_get_method(playerAttrClass, "get_IsAmmoFree", 0);
+        if (ammoMI) {
+            if (VmtHook(ammoMI, (void*)Hook_GetIsAmmoFree,
+                        (void**)&orig_get_IsAmmoFree)) {
+                LOGI("VMT Hook PlayerAttributes::get_IsAmmoFree: orig=%p", orig_get_IsAmmoFree);
+                hookLogWrite("VMT get_IsAmmoFree: orig=%p", orig_get_IsAmmoFree);
+            } else {
+                LOGE("VMT Hook get_IsAmmoFree FALHOU");
+            }
+        } else {
+            LOGE("get_IsAmmoFree nao encontrado em PlayerAttributes");
+        }
+
+        // FSModeUseMedikitFasterRate hook (v49)
+        void* medkitMI = p_class_get_method(playerAttrClass, "get_FSModeUseMedikitFasterRate", 0);
+        if (medkitMI) {
+            if (VmtHook(medkitMI, (void*)Hook_GetFSModeUseMedikitFasterRate,
+                        (void**)&orig_get_FSModeUseMedikitFasterRate)) {
+                LOGI("VMT Hook PlayerAttributes::get_FSModeUseMedikitFasterRate: orig=%p", orig_get_FSModeUseMedikitFasterRate);
+                hookLogWrite("VMT get_FSModeUseMedikitFasterRate: orig=%p", orig_get_FSModeUseMedikitFasterRate);
+            } else {
+                LOGE("VMT Hook get_FSModeUseMedikitFasterRate FALHOU");
+            }
+        } else {
+            LOGE("get_FSModeUseMedikitFasterRate nao encontrado em PlayerAttributes");
+        }
     } else {
         LOGE("Classe PlayerAttributes nao encontrada");
         hookLogWrite("ERRO: PlayerAttributes nao encontrada");
+    }
+
+    // ── Hook Player::get_InSwapWeaponCD (v49) ───────────────────────────────
+    LOGI("[+] Buscando Player class para InSwapWeaponCD...");
+    void* playerClassForCD = p_class_from_name(cs_image, "COW.GamePlay", "Player");
+    if (playerClassForCD) {
+        void* cdMI = p_class_get_method(playerClassForCD, "get_InSwapWeaponCD", 0);
+        if (cdMI) {
+            if (VmtHook(cdMI, (void*)Hook_GetInSwapWeaponCD,
+                        (void**)&orig_get_InSwapWeaponCD)) {
+                LOGI("VMT Hook Player::get_InSwapWeaponCD: orig=%p", orig_get_InSwapWeaponCD);
+                hookLogWrite("VMT get_InSwapWeaponCD: orig=%p", orig_get_InSwapWeaponCD);
+            } else {
+                LOGE("VMT Hook get_InSwapWeaponCD FALHOU");
+            }
+        } else {
+            LOGE("get_InSwapWeaponCD nao encontrado em Player");
+        }
+    } else {
+        LOGE("Player class nao encontrada para InSwapWeaponCD");
+    }
+
+    // ── Hook UIHudPreparationTimerController::OnPreparationCancel (v49) ─────
+    LOGI("[+] Buscando UIHudPreparationTimerController...");
+    // Tenta namespaces comuns do Free Fire UI
+    void* uiPrepClass = p_class_from_name(cs_image, "COW.UI", "UIHudPreparationTimerController");
+    if (!uiPrepClass) uiPrepClass = p_class_from_name(cs_image, "", "UIHudPreparationTimerController");
+    if (!uiPrepClass) uiPrepClass = p_class_from_name(cs_image, "COW", "UIHudPreparationTimerController");
+    if (uiPrepClass) {
+        void* cancelMI = p_class_get_method(uiPrepClass, "OnPreparationCancel", 1);
+        if (cancelMI) {
+            if (VmtHook(cancelMI, (void*)Hook_OnPreparationCancel,
+                        (void**)&orig_OnPreparationCancel)) {
+                LOGI("VMT Hook UIHudPreparationTimerController::OnPreparationCancel: orig=%p", orig_OnPreparationCancel);
+                hookLogWrite("VMT OnPreparationCancel: orig=%p", orig_OnPreparationCancel);
+            } else {
+                LOGE("VMT Hook OnPreparationCancel FALHOU");
+            }
+        } else {
+            LOGE("OnPreparationCancel nao encontrado");
+        }
+    } else {
+        LOGE("UIHudPreparationTimerController nao encontrada");
+        hookLogWrite("ERRO: UIHudPreparationTimerController nao encontrada");
     }
 
     return nullptr;

@@ -95,6 +95,15 @@ static float aimRageOffsetY = 0.0f;   // offset Y sobre a cabeça (0=bone da cab
 static int   triggerKey     = 0;      // 0=sempre ativo, 114=Vol-, 115=Vol+
 
 // ============================================================
+// Player Hacks (v49)
+// ============================================================
+static bool ammoEnabled       = false;
+static bool medkitFastEnabled = false;
+static bool fastWeaponSwitch  = false;
+static bool medkitRunEnabled  = false;
+static bool drawNickName      = true;
+
+// ============================================================
 // Hotkeys State  (Linux keycodes: Vol- = 114, Vol+ = 115)
 // ============================================================
 static int hotkeyAim    = 115;  // KEY_VOLUMEUP  — toggle Head Magnetism
@@ -240,6 +249,11 @@ void DrawESP(int screenW, int screenH) {
     sharedData->aimbotSmooth       = aimbotSmooth;
     sharedData->speedEnabled       = speedEnabled ? 1 : 0;
     sharedData->speedValue         = speedValue;
+    // Player Hacks (v49)
+    sharedData->ammoEnabled        = ammoEnabled       ? 1 : 0;
+    sharedData->medkitFastEnabled  = medkitFastEnabled ? 1 : 0;
+    sharedData->fastWeaponSwitch   = fastWeaponSwitch  ? 1 : 0;
+    sharedData->medkitRunEnabled   = medkitRunEnabled  ? 1 : 0;
     // triggerHeld é gerenciado exclusivamente pelo hotkeyThread
     // ────────────────────────────────────────────────────────────────────────
 
@@ -336,6 +350,16 @@ void DrawESP(int screenW, int screenH) {
         // Box
         if (drawEnemyBox) {
             draw->AddRect(boxMin, boxMax, boxColor, 1.0f, 15, 1.5f);
+        }
+
+        // Nick name acima da caixa (v49)
+        if (drawNickName && entry.nick[0] != '\0') {
+            ImVec2 textSz = ImGui::CalcTextSize(entry.nick);
+            float  tx     = centerX - textSz.x * 0.5f;
+            float  ty     = boxMin.y - textSz.y - 2.0f;
+            // Sombra
+            draw->AddText(ImVec2(tx + 1, ty + 1), IM_COL32(0, 0, 0, 200), entry.nick);
+            draw->AddText(ImVec2(tx,     ty),     boxColor,               entry.nick);
         }
 
         // Barra de HP: lado esquerdo do box, vertical
@@ -446,7 +470,7 @@ static void readHookLog() {
 // Config — persiste em /data/local/tmp/.jawmods_cfg
 // ============================================================
 #define JAW_CONFIG_PATH  "/data/local/tmp/.jawmods_cfg"
-#define JAW_CONFIG_MAGIC 0x4A415708u  // "JAW" v8
+#define JAW_CONFIG_MAGIC 0x4A415709u  // "JAW" v9
 
 #pragma pack(push, 1)
 struct JawConfig {
@@ -470,6 +494,12 @@ struct JawConfig {
     // v8 fields
     uint8_t  speedEnabled;
     float    speedValue;
+    // v9 fields (player hacks)
+    uint8_t  ammoEnabled;
+    uint8_t  medkitFastEnabled;
+    uint8_t  fastWeaponSwitch;
+    uint8_t  medkitRunEnabled;
+    uint8_t  drawNickName;
 };
 #pragma pack(pop)
 
@@ -506,6 +536,12 @@ static void saveConfig() {
     // v8
     c.speedEnabled       = speedEnabled;
     c.speedValue         = speedValue;
+    // v9
+    c.ammoEnabled        = ammoEnabled;
+    c.medkitFastEnabled  = medkitFastEnabled;
+    c.fastWeaponSwitch   = fastWeaponSwitch;
+    c.medkitRunEnabled   = medkitRunEnabled;
+    c.drawNickName       = drawNickName;
     int fd = open(JAW_CONFIG_PATH, O_CREAT | O_WRONLY | O_TRUNC, 0666);
     if (fd >= 0) { write(fd, &c, sizeof(c)); close(fd); }
 }
@@ -544,6 +580,12 @@ static void loadConfig() {
     // v8
     speedEnabled       = c.speedEnabled;
     speedValue         = c.speedValue;
+    // v9
+    ammoEnabled        = c.ammoEnabled;
+    medkitFastEnabled  = c.medkitFastEnabled;
+    fastWeaponSwitch   = c.fastWeaponSwitch;
+    medkitRunEnabled   = c.medkitRunEnabled;
+    drawNickName       = c.drawNickName;
 }
 
 // ============================================================
@@ -922,6 +964,7 @@ void DrawMenu() {
                 ToggleRow("Caixas",    &drawEnemyBox);
                 ToggleRow("Snapline",  &drawSnapLine);
                 ToggleRow("Distancia", &drawDistance);
+                ToggleRow("Nick Name", &drawNickName);
                 Sep();
                 ValueLabel("Max Distance", "%.0f m", espMaxDistance);
                 ImGui::SetNextItemWidth(-1.0f);
@@ -1079,6 +1122,21 @@ void DrawMenu() {
             Sep();
             if (ImGui::Button("Salvar Configuracoes", ImVec2(-1.0f, 28.0f)))
                 saveConfig();
+            ImGui::EndTabItem();
+        }
+
+        // ──────────────────────────────────────────────────────────────────
+        // ABA: PLAYER
+        // ──────────────────────────────────────────────────────────────────
+        if (ImGui::BeginTabItem("PLAYER")) {
+            ImGui::Spacing();
+            ToggleRow("Municao Infinita",     &ammoEnabled);
+            Sep();
+            ToggleRow("Medkit Rapido",        &medkitFastEnabled);
+            Sep();
+            ToggleRow("Trocar Arma Rapido",   &fastWeaponSwitch);
+            Sep();
+            ToggleRow("Medkit Andando",       &medkitRunEnabled);
             ImGui::EndTabItem();
         }
 
