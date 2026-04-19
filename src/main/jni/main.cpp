@@ -103,6 +103,7 @@ static bool ammoEnabled       = false;
 static bool medkitFastEnabled = false;
 static bool fastWeaponSwitch  = false;
 static bool medkitRunEnabled  = false;
+static bool silentFire        = false;  // v55: silent aim (bala vai para cabeça sem mover câmera)
 static bool drawNickName      = true;
 
 // ============================================================
@@ -320,6 +321,7 @@ void DrawESP(int screenW, int screenH) {
     sharedData->medkitFastEnabled  = medkitFastEnabled ? 1 : 0;
     sharedData->fastWeaponSwitch   = fastWeaponSwitch  ? 1 : 0;
     sharedData->medkitRunEnabled   = medkitRunEnabled  ? 1 : 0;
+    sharedData->silentFireEnabled  = silentFire        ? 1 : 0;
     // triggerHeld é gerenciado exclusivamente pelo hotkeyThread
     // ────────────────────────────────────────────────────────────────────────
 
@@ -536,7 +538,7 @@ static void readHookLog() {
 // Config — persiste em /data/local/tmp/.jawmods_cfg
 // ============================================================
 #define JAW_CONFIG_PATH  "/data/local/tmp/.jawmods_cfg"
-#define JAW_CONFIG_MAGIC 0x4A415709u  // "JAW" v9
+#define JAW_CONFIG_MAGIC 0x4A41570Au  // "JAW" v10
 
 #pragma pack(push, 1)
 struct JawConfig {
@@ -566,6 +568,8 @@ struct JawConfig {
     uint8_t  fastWeaponSwitch;
     uint8_t  medkitRunEnabled;
     uint8_t  drawNickName;
+    // v10 fields
+    uint8_t  silentFire;  // silent aim (bala vai para cabeça)
 };
 #pragma pack(pop)
 
@@ -608,6 +612,7 @@ static void saveConfig() {
     c.fastWeaponSwitch   = fastWeaponSwitch;
     c.medkitRunEnabled   = medkitRunEnabled;
     c.drawNickName       = drawNickName;
+    c.silentFire         = silentFire;
     int fd = open(JAW_CONFIG_PATH, O_CREAT | O_WRONLY | O_TRUNC, 0666);
     if (fd >= 0) { write(fd, &c, sizeof(c)); close(fd); }
 }
@@ -652,6 +657,7 @@ static void loadConfig() {
     fastWeaponSwitch   = c.fastWeaponSwitch;
     medkitRunEnabled   = c.medkitRunEnabled;
     drawNickName       = c.drawNickName;
+    silentFire         = c.silentFire;
 }
 
 // ============================================================
@@ -1143,22 +1149,24 @@ void DrawMenu() {
             }
             Sep();
 
-            // Speed Hack
-            bool prevSP = speedEnabled;
-            ToggleRow("Speed", &speedEnabled);
-            if (speedEnabled != prevSP && sharedData)
-                sharedData->speedEnabled = speedEnabled ? 1 : 0;
-            if (speedEnabled) {
+            // Silent Aim — bala vai para cabeça do alvo sem mover a câmera
+            bool prevSF = silentFire;
+            ToggleRow("Silent Aim", &silentFire);
+            if (silentFire != prevSF && sharedData)
+                sharedData->silentFireEnabled = silentFire ? 1 : 0;
+            if (silentFire) {
                 ImGui::Spacing();
-                ValueLabel("Velocidade", "%.1f", speedValue);
-                ImGui::SetNextItemWidth(-1.0f);
-                if (ImGui::SliderFloat("##spd", &speedValue, 6.5f, 30.0f, ""))
-                    if (sharedData) sharedData->speedValue = speedValue;
-                ImGui::Spacing();
+                bool hasTarget = sharedData && sharedData->aimAssistHasTarget;
                 float rw = ImGui::GetContentRegionAvail().x;
-                float tw = ImGui::CalcTextSize("SPEED ON").x;
-                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (rw - tw) * 0.5f);
-                ImGui::TextColored(cGreen, "SPEED ON");
+                if (hasTarget) {
+                    float tw = ImGui::CalcTextSize("[ BALA -> CABECA ]").x;
+                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (rw - tw) * 0.5f);
+                    ImGui::TextColored(cGreen, "[ BALA -> CABECA ]");
+                } else {
+                    float tw = ImGui::CalcTextSize("Sem alvo no ESP").x;
+                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (rw - tw) * 0.5f);
+                    ImGui::TextColored(cDimText, "Sem alvo no ESP");
+                }
             }
             ImGui::EndTabItem();
         }
@@ -1223,6 +1231,25 @@ void DrawMenu() {
             ToggleRow("Trocar Arma Rapido",   &fastWeaponSwitch);
             Sep();
             ToggleRow("Medkit Andando",       &medkitRunEnabled);
+            Sep();
+
+            // Speed Hack
+            bool prevSP = speedEnabled;
+            ToggleRow("Speed", &speedEnabled);
+            if (speedEnabled != prevSP && sharedData)
+                sharedData->speedEnabled = speedEnabled ? 1 : 0;
+            if (speedEnabled) {
+                ImGui::Spacing();
+                ValueLabel("Velocidade", "%.1f", speedValue);
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::SliderFloat("##spd", &speedValue, 6.5f, 30.0f, ""))
+                    if (sharedData) sharedData->speedValue = speedValue;
+                ImGui::Spacing();
+                float rw = ImGui::GetContentRegionAvail().x;
+                float tw = ImGui::CalcTextSize("SPEED ON").x;
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (rw - tw) * 0.5f);
+                ImGui::TextColored(cGreen, "SPEED ON");
+            }
             ImGui::EndTabItem();
         }
 

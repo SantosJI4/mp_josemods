@@ -59,7 +59,7 @@
   #define LOGE(...) ((void)0)
 #endif
 
-#define HOOK_BUILD_VER "v38-bugfix"
+#define HOOK_BUILD_VER "v39-silentfire"
 
 // ============================================================
 // Hook Log File — SOMENTE em modo debug
@@ -417,6 +417,21 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 // Dump L714414: public System.Single get_EatSpeedScale(); // 0x7261068
 #define OFF_get_EatSpeedScale         0x7261068
 
+// ── Silent Fire (v55) ───────────────────────────────────────────────────────
+// GetFireDirection — UIVerticleViewGameScene — direção do projétil no momento do tiro
+// Hook: quando silentFireEnabled, retorna vetor normalizado cam→cabeça do alvo.
+// Bala vai para a cabeça independente de onde o jogador está mirando.
+// Dump L519959: public Vector3 GetFireDirection(ref bool& isSkill) // 0x5DFD96C
+#define OFF_GetFireDirection          0x5DFD96C
+
+// ── Anti-recoil adicional (v55) ─────────────────────────────────────────────
+// get_SkillScatterRate — PlayerAttributes — scatter adicional de habilidade
+// Dump L714455: public float get_SkillScatterRate() // 0x7261DE4
+#define OFF_get_SkillScatterRate      0x7261DE4
+// get_SkillScatterRateSighting — PlayerAttributes — scatter extra durante ADS de habilidade
+// Dump L714457: public float get_SkillScatterRateSighting() // 0x7261E98
+#define OFF_get_SkillScatterRateSighting 0x7261E98
+
 // ============================================================
 // Function Pointers — resolvidos via base + offset direto
 // ============================================================
@@ -487,6 +502,15 @@ static bool  (*orig_IsMoving)(void* self, void* method) = nullptr;
 static bool  (*orig_get_CanMedkitOnMove)(void* self, void* method) = nullptr;
 // get_EatSpeedScale hook — valor alto = usa itens mais rápido (medkit fast)
 static float (*orig_get_EatSpeedScale)(void* self, void* method) = nullptr;
+
+// ── Silent Fire (v55) ────────────────────────────────────────────────────────
+// UIVerticleViewGameScene::GetFireDirection(ref bool& isSkill) → Vector3
+// Retorna a direção do projétil. Hook redireciona para a cabeça do alvo.
+static Vector3 (*orig_GetFireDirection)(void* self, bool* isSkill, void* method) = nullptr;
+
+// ── Anti-recoil adicional (v55) ──────────────────────────────────────────────
+static float (*orig_get_SkillScatterRate)(void* self, void* method) = nullptr;
+static float (*orig_get_SkillScatterRateSighting)(void* self, void* method) = nullptr;
 
 // Aimbot — Player::SetAimRotation
 struct Quaternion { float x, y, z, w; };
@@ -765,6 +789,39 @@ static bool Hook_IsMoving(void* self, void* method) {
         return false;
     }
     return orig_IsMoving ? orig_IsMoving(self, method) : false;
+}
+
+// ── Silent Fire (v55) ────────────────────────────────────────────────────────
+// UIVerticleViewGameScene::GetFireDirection(ref bool& isSkill) → Vector3
+// Retorna a direção NORMALIZADA do projétil. Quando silentFireEnabled,
+// substituímos pela direção câmera→cabeça do alvo. Câmera NÃO se move.
+static Vector3 Hook_GetFireDirection(void* self, bool* isSkill, void* method) {
+    if (sharedData && sharedData->silentFireEnabled && g_aimCandValid &&
+        g_camTransform && fn_get_position) {
+        Vector3 cam = fn_get_position(g_camTransform, nullptr);
+        float dx = g_aimCandTarget.x - cam.x;
+        float dy = g_aimCandTarget.y - cam.y;
+        float dz = g_aimCandTarget.z - cam.z;
+        float len = sqrtf(dx*dx + dy*dy + dz*dz);
+        if (len > 0.01f) {
+            return Vector3(dx / len, dy / len, dz / len);
+        }
+    }
+    return orig_GetFireDirection
+        ? orig_GetFireDirection(self, isSkill, method)
+        : Vector3(0.0f, 0.0f, 1.0f);
+}
+
+// Anti-recoil adicional: SkillScatterRate (bônus de dispersão de habilidade)
+static float Hook_get_SkillScatterRate(void* self, void* method) {
+    if (sharedData && sharedData->recoilEnabled) return 0.0f;
+    return orig_get_SkillScatterRate ? orig_get_SkillScatterRate(self, method) : 1.0f;
+}
+
+// Anti-recoil adicional: SkillScatterRateSighting (dispersão durante ADS de habilidade)
+static float Hook_get_SkillScatterRateSighting(void* self, void* method) {
+    if (sharedData && sharedData->recoilEnabled) return 0.0f;
+    return orig_get_SkillScatterRateSighting ? orig_get_SkillScatterRateSighting(self, method) : 1.0f;
 }
 
 // ============================================================
@@ -1686,6 +1743,48 @@ void* hack_thread(void*) {
         } else {
             LOGE("Dobby get_EatSpeedScale FALHOU (r=%d)", r);
             hookLogWrite("ERRO: Dobby get_EatSpeedScale r=%d", r);
+        }
+    }
+
+    // Silent Fire: UIVerticleViewGameScene::GetFireDirection()
+    {
+        void* addr = (void*)(il2cpp_base + OFF_GetFireDirection);
+        int r = DobbyHook(addr, (void*)Hook_GetFireDirection,
+                          (void**)&orig_GetFireDirection);
+        if (r == 0) {
+            LOGI("Dobby GetFireDirection OK: orig=%p", orig_GetFireDirection);
+            hookLogWrite("Dobby GetFireDirection: orig=%p", orig_GetFireDirection);
+        } else {
+            LOGE("Dobby GetFireDirection FALHOU (r=%d)", r);
+            hookLogWrite("ERRO: Dobby GetFireDirection r=%d", r);
+        }
+    }
+
+    // Anti-recoil adicional: PlayerAttributes::get_SkillScatterRate()
+    {
+        void* addr = (void*)(il2cpp_base + OFF_get_SkillScatterRate);
+        int r = DobbyHook(addr, (void*)Hook_get_SkillScatterRate,
+                          (void**)&orig_get_SkillScatterRate);
+        if (r == 0) {
+            LOGI("Dobby get_SkillScatterRate OK: orig=%p", orig_get_SkillScatterRate);
+            hookLogWrite("Dobby get_SkillScatterRate: orig=%p", orig_get_SkillScatterRate);
+        } else {
+            LOGE("Dobby get_SkillScatterRate FALHOU (r=%d)", r);
+            hookLogWrite("ERRO: Dobby get_SkillScatterRate r=%d", r);
+        }
+    }
+
+    // Anti-recoil adicional: PlayerAttributes::get_SkillScatterRateSighting()
+    {
+        void* addr = (void*)(il2cpp_base + OFF_get_SkillScatterRateSighting);
+        int r = DobbyHook(addr, (void*)Hook_get_SkillScatterRateSighting,
+                          (void**)&orig_get_SkillScatterRateSighting);
+        if (r == 0) {
+            LOGI("Dobby get_SkillScatterRateSighting OK: orig=%p", orig_get_SkillScatterRateSighting);
+            hookLogWrite("Dobby get_SkillScatterRateSighting: orig=%p", orig_get_SkillScatterRateSighting);
+        } else {
+            LOGE("Dobby get_SkillScatterRateSighting FALHOU (r=%d)", r);
+            hookLogWrite("ERRO: Dobby get_SkillScatterRateSighting r=%d", r);
         }
     }
 

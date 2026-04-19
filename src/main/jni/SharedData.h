@@ -98,9 +98,14 @@ struct SharedESPData {
 
     // ── Player Hacks (v49) ───────────────────────────────────────────────
     volatile int ammoEnabled;        // 1 = munição infinita (get_IsAmmoFree=true)
-    volatile int medkitFastEnabled;  // 1 = medkit rápido (FSModeUseMedikitFasterRate alto)
+    volatile int medkitFastEnabled;  // 1 = medkit rápido (EatSpeedScale alto)
     volatile int fastWeaponSwitch;   // 1 = troca de arma instantânea (InSwapWeaponCD=false)
-    volatile int medkitRunEnabled;   // 1 = usar medkit correndo (OnPreparationCancel skip)
+    volatile int medkitRunEnabled;   // 1 = usar medkit correndo (CanMedkitOnMove=true)
+
+    // ── Silent Fire (v55) ─────────────────────────────────────────────────
+    // Hook em GetFireDirection: bala vai para cabeça do alvo sem mover a câmera.
+    // Diferente do Aimbot (que move a câmera), a mira NÃO se mexe — apenas a bala.
+    volatile int silentFireEnabled;  // 1 = ativo
 
     ESPEntry players[MAX_ESP_PLAYERS];
 };
