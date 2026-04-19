@@ -1,6 +1,14 @@
 LOCAL_PATH := $(call my-dir)
 
 # ============================================================
+# PREBUILT: libdobby.a — Inline hook library
+# ============================================================
+include $(CLEAR_VARS)
+LOCAL_MODULE := dobby
+LOCAL_SRC_FILES := lib/$(TARGET_ARCH_ABI)/libdobby.a
+include $(PREBUILT_STATIC_LIBRARY)
+
+# ============================================================
 # MODULE 1: libMEOW.so — OVERLAY EXTERNO (APK)
 # Processo separado - NÃO injeta no jogo
 # Lê dados do SharedMemory e desenha ImGui
@@ -51,11 +59,13 @@ LOCAL_ARM_MODE := arm
 LOCAL_C_INCLUDES := $(LOCAL_PATH)
 LOCAL_C_INCLUDES += $(LOCAL_PATH)/include/Utils
 LOCAL_C_INCLUDES += $(LOCAL_PATH)/include/Utils/Unity
+LOCAL_C_INCLUDES += $(LOCAL_PATH)/include/Hook/Dobby
 
 # Sources - GameHook only (direct offsets, no ByNameModding)
 HOOK_FILES := $(LOCAL_PATH)/GameHook.cpp
 
 LOCAL_SRC_FILES := $(HOOK_FILES:$(LOCAL_PATH)/%=%)
+LOCAL_STATIC_LIBRARIES := dobby
 
 include $(BUILD_SHARED_LIBRARY)
 

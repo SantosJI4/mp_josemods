@@ -42,6 +42,7 @@
 #include "Vector3.h"
 #include "obfuscate.h"
 #include "SharedData.h"
+#include "dobby.h"
 
 // ============================================================
 // STEALTH CONFIG — desativar logging e traces em release
@@ -58,7 +59,7 @@
   #define LOGE(...) ((void)0)
 #endif
 
-#define HOOK_BUILD_VER "v36-nofilter"
+#define HOOK_BUILD_VER "v37-dobby"
 
 // ============================================================
 // Hook Log File — SOMENTE em modo debug
@@ -1541,106 +1542,96 @@ void* hack_thread(void*) {
         hookLogWrite("ERRO: CameraControllerBase nao encontrada");
     }
 
-    // ── Hook PlayerAttributes::GetWeaponRunSpeedScale + GetScatterRate (v41) ──
-    LOGI("[+] Buscando PlayerAttributes class...");
-    hookLogWrite("Buscando PlayerAttributes...");
-    void* playerAttrClass = p_class_from_name(cs_image, "COW.GamePlay", "PlayerAttributes");
-    if (playerAttrClass) {
-        LOGI("playerAttrClass = %p", playerAttrClass);
-        hookLogWrite("playerAttrClass = %p", playerAttrClass);
+    // ── Hook inline (Dobby) para metodos nao-virtuais (v53) ──────────────────
+    LOGI("[+] Instalando Dobby hooks (metodos nao-virtuais)...");
+    hookLogWrite("Instalando hooks Dobby (metodos nao-virtuais)...");
+    // ── NOTA: GetWeaponRunSpeedScale, GetScatterRate, get_IsAmmoFree,
+    // get_FSModeUseMedikitFasterRate, get_InSwapWeaponCD e IsMoving sao
+    // metodos NAO-VIRTUAIS no IL2CPP. O VmtHook (patch em methodInfo->methodPointer)
+    // NAO funciona para eles porque o codigo AOT os chama diretamente.
+    // DobbyHook faz inline hook no endereco real da funcao — intercepta todos os callers.
 
-        // Speed hack: GetWeaponRunSpeedScale(int) — 1 parametro
-        void* speedMI = p_class_get_method(playerAttrClass, "GetWeaponRunSpeedScale", 1);
-        if (speedMI) {
-            if (VmtHook(speedMI, (void*)Hook_GetWeaponRunSpeedScale,
-                        (void**)&orig_GetWeaponRunSpeedScale)) {
-                LOGI("VMT Hook PlayerAttributes::GetWeaponRunSpeedScale: orig=%p", orig_GetWeaponRunSpeedScale);
-                hookLogWrite("VMT GetWeaponRunSpeedScale: orig=%p", orig_GetWeaponRunSpeedScale);
-            } else {
-                LOGE("VMT Hook GetWeaponRunSpeedScale FALHOU");
-                hookLogWrite("ERRO: VMT GetWeaponRunSpeedScale falhou");
-            }
+    // Speed hack: PlayerAttributes::GetWeaponRunSpeedScale(int)
+    {
+        void* addr = (void*)(il2cpp_base + OFF_GetWeaponRunSpeedScale);
+        int r = DobbyHook(addr, (void*)Hook_GetWeaponRunSpeedScale,
+                          (void**)&orig_GetWeaponRunSpeedScale);
+        if (r == 0) {
+            LOGI("Dobby GetWeaponRunSpeedScale OK: orig=%p", orig_GetWeaponRunSpeedScale);
+            hookLogWrite("Dobby GetWeaponRunSpeedScale: orig=%p", orig_GetWeaponRunSpeedScale);
         } else {
-            LOGE("GetWeaponRunSpeedScale nao encontrado em PlayerAttributes");
-            hookLogWrite("ERRO: GetWeaponRunSpeedScale nao encontrado");
+            LOGE("Dobby GetWeaponRunSpeedScale FALHOU (r=%d)", r);
+            hookLogWrite("ERRO: Dobby GetWeaponRunSpeedScale r=%d", r);
         }
-
-        // Recoil: GetScatterRate() — 0 parametros
-        void* scatterMI = p_class_get_method(playerAttrClass, "GetScatterRate", 0);
-        if (scatterMI) {
-            if (VmtHook(scatterMI, (void*)Hook_GetScatterRate,
-                        (void**)&orig_GetScatterRate)) {
-                LOGI("VMT Hook PlayerAttributes::GetScatterRate: orig=%p", orig_GetScatterRate);
-                hookLogWrite("VMT GetScatterRate: orig=%p", orig_GetScatterRate);
-            } else {
-                LOGE("VMT Hook GetScatterRate FALHOU");
-                hookLogWrite("ERRO: VMT GetScatterRate falhou");
-            }
-        } else {
-            LOGE("GetScatterRate nao encontrado em PlayerAttributes");
-            hookLogWrite("ERRO: GetScatterRate nao encontrado");
-        }
-
-        // IsAmmoFree hook (v49)
-        void* ammoMI = p_class_get_method(playerAttrClass, "get_IsAmmoFree", 0);
-        if (ammoMI) {
-            if (VmtHook(ammoMI, (void*)Hook_GetIsAmmoFree,
-                        (void**)&orig_get_IsAmmoFree)) {
-                LOGI("VMT Hook PlayerAttributes::get_IsAmmoFree: orig=%p", orig_get_IsAmmoFree);
-                hookLogWrite("VMT get_IsAmmoFree: orig=%p", orig_get_IsAmmoFree);
-            } else {
-                LOGE("VMT Hook get_IsAmmoFree FALHOU");
-            }
-        } else {
-            LOGE("get_IsAmmoFree nao encontrado em PlayerAttributes");
-        }
-
-        // FSModeUseMedikitFasterRate hook (v49)
-        void* medkitMI = p_class_get_method(playerAttrClass, "get_FSModeUseMedikitFasterRate", 0);
-        if (medkitMI) {
-            if (VmtHook(medkitMI, (void*)Hook_GetFSModeUseMedikitFasterRate,
-                        (void**)&orig_get_FSModeUseMedikitFasterRate)) {
-                LOGI("VMT Hook PlayerAttributes::get_FSModeUseMedikitFasterRate: orig=%p", orig_get_FSModeUseMedikitFasterRate);
-                hookLogWrite("VMT get_FSModeUseMedikitFasterRate: orig=%p", orig_get_FSModeUseMedikitFasterRate);
-            } else {
-                LOGE("VMT Hook get_FSModeUseMedikitFasterRate FALHOU");
-            }
-        } else {
-            LOGE("get_FSModeUseMedikitFasterRate nao encontrado em PlayerAttributes");
-        }
-    } else {
-        LOGE("Classe PlayerAttributes nao encontrada");
-        hookLogWrite("ERRO: PlayerAttributes nao encontrada");
     }
 
-    // ── Hook Player::get_InSwapWeaponCD + IsMoving (v50 fix) ──────────────────
-    // Reutiliza playerClass (já buscado acima) — sem segunda chamada p_class_from_name
-    LOGI("[+] Hooks extras na classe Player (InSwapWeaponCD, IsMoving)...");
+    // Recoil: PlayerAttributes::GetScatterRate()
     {
-        void* cdMI = p_class_get_method(playerClass, "get_InSwapWeaponCD", 0);
-        if (cdMI) {
-            if (VmtHook(cdMI, (void*)Hook_GetInSwapWeaponCD,
-                        (void**)&orig_get_InSwapWeaponCD)) {
-                LOGI("VMT Hook Player::get_InSwapWeaponCD: orig=%p", orig_get_InSwapWeaponCD);
-                hookLogWrite("VMT get_InSwapWeaponCD: orig=%p", orig_get_InSwapWeaponCD);
-            } else {
-                LOGE("VMT Hook get_InSwapWeaponCD FALHOU");
-            }
+        void* addr = (void*)(il2cpp_base + OFF_GetScatterRate);
+        int r = DobbyHook(addr, (void*)Hook_GetScatterRate,
+                          (void**)&orig_GetScatterRate);
+        if (r == 0) {
+            LOGI("Dobby GetScatterRate OK: orig=%p", orig_GetScatterRate);
+            hookLogWrite("Dobby GetScatterRate: orig=%p", orig_GetScatterRate);
         } else {
-            LOGE("get_InSwapWeaponCD nao encontrado em Player");
+            LOGE("Dobby GetScatterRate FALHOU (r=%d)", r);
+            hookLogWrite("ERRO: Dobby GetScatterRate r=%d", r);
         }
+    }
 
-        void* movingMI = p_class_get_method(playerClass, "IsMoving", 0);
-        if (movingMI) {
-            if (VmtHook(movingMI, (void*)Hook_IsMoving,
-                        (void**)&orig_IsMoving)) {
-                LOGI("VMT Hook Player::IsMoving: orig=%p", orig_IsMoving);
-                hookLogWrite("VMT IsMoving: orig=%p", orig_IsMoving);
-            } else {
-                LOGE("VMT Hook IsMoving FALHOU");
-            }
+    // Munição infinita: PlayerAttributes::get_IsAmmoFree()
+    {
+        void* addr = (void*)(il2cpp_base + OFF_get_IsAmmoFree);
+        int r = DobbyHook(addr, (void*)Hook_GetIsAmmoFree,
+                          (void**)&orig_get_IsAmmoFree);
+        if (r == 0) {
+            LOGI("Dobby get_IsAmmoFree OK: orig=%p", orig_get_IsAmmoFree);
+            hookLogWrite("Dobby get_IsAmmoFree: orig=%p", orig_get_IsAmmoFree);
         } else {
-            LOGE("IsMoving nao encontrado em Player");
+            LOGE("Dobby get_IsAmmoFree FALHOU (r=%d)", r);
+            hookLogWrite("ERRO: Dobby get_IsAmmoFree r=%d", r);
+        }
+    }
+
+    // Medkit rapido: PlayerAttributes::get_FSModeUseMedikitFasterRate()
+    {
+        void* addr = (void*)(il2cpp_base + OFF_get_FSModeUseMedikitFasterRate);
+        int r = DobbyHook(addr, (void*)Hook_GetFSModeUseMedikitFasterRate,
+                          (void**)&orig_get_FSModeUseMedikitFasterRate);
+        if (r == 0) {
+            LOGI("Dobby get_FSModeUseMedikitFasterRate OK: orig=%p", orig_get_FSModeUseMedikitFasterRate);
+            hookLogWrite("Dobby get_FSModeUseMedikitFasterRate: orig=%p", orig_get_FSModeUseMedikitFasterRate);
+        } else {
+            LOGE("Dobby get_FSModeUseMedikitFasterRate FALHOU (r=%d)", r);
+            hookLogWrite("ERRO: Dobby get_FSModeUseMedikitFasterRate r=%d", r);
+        }
+    }
+
+    // Troca rapida de arma: Player::get_InSwapWeaponCD()
+    {
+        void* addr = (void*)(il2cpp_base + OFF_get_InSwapWeaponCD);
+        int r = DobbyHook(addr, (void*)Hook_GetInSwapWeaponCD,
+                          (void**)&orig_get_InSwapWeaponCD);
+        if (r == 0) {
+            LOGI("Dobby get_InSwapWeaponCD OK: orig=%p", orig_get_InSwapWeaponCD);
+            hookLogWrite("Dobby get_InSwapWeaponCD: orig=%p", orig_get_InSwapWeaponCD);
+        } else {
+            LOGE("Dobby get_InSwapWeaponCD FALHOU (r=%d)", r);
+            hookLogWrite("ERRO: Dobby get_InSwapWeaponCD r=%d", r);
+        }
+    }
+
+    // Medkit andando: Player::IsMoving()
+    {
+        void* addr = (void*)(il2cpp_base + OFF_IsMoving);
+        int r = DobbyHook(addr, (void*)Hook_IsMoving,
+                          (void**)&orig_IsMoving);
+        if (r == 0) {
+            LOGI("Dobby IsMoving OK: orig=%p", orig_IsMoving);
+            hookLogWrite("Dobby IsMoving: orig=%p", orig_IsMoving);
+        } else {
+            LOGE("Dobby IsMoving FALHOU (r=%d)", r);
+            hookLogWrite("ERRO: Dobby IsMoving r=%d", r);
         }
     }
 
