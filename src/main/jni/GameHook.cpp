@@ -384,6 +384,9 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 // ADS check — Player::get_IsSighting() — true quando o player está mirando (ADS)
 // Dump L653775: public System.Boolean get_IsSighting() // 0x676689C
 #define OFF_get_IsSighting          0x676689C
+// IsFiring — Player::IsFiring() — true quando o player está atirando
+// Dump L652303: public System.Boolean IsFiring() // 0x675D420
+#define OFF_IsFiring                0x675D420
 
 // Camera Controller — CameraControllerBase::LateUpdate
 // Hookeado para aplicar aimbot/anti-recoil DEPOIS que o controlador posiciona a câmera.
@@ -436,6 +439,8 @@ static void    (*fn_Collider_get_bounds_Injected)(void* collider, BoundsVal* out
 static bool (*fn_IsVisible)(void* self, void* method) = nullptr;
 // ADS check — Player::get_IsSighting() (v43)
 static bool (*fn_get_IsSighting)(void* self, void* method) = nullptr;
+// IsFiring — Player::IsFiring() (v44)
+static bool (*fn_IsFiring)(void* self, void* method) = nullptr;
 // Speed hack — PlayerAttributes::GetWeaponRunSpeedScale(int) (v41)
 static float (*orig_GetWeaponRunSpeedScale)(void* self, int32_t weaponType, void* method) = nullptr;
 // Recoil — PlayerAttributes::GetScatterRate() (v41)
@@ -688,19 +693,16 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
                 { // scope
                 Quaternion aimQ = LookQuatFromDir(dx, dy, dz);
 
-                // v43: ADS check — sem mira = assistência fraca (câmera livre)
-                //                   com mira = força total configurada
-                bool isSighting = fn_get_IsSighting && fn_get_IsSighting(self, nullptr);
-                float smooth;
-                if (!isSighting) {
-                    // Sem ADS: smooth muito alto = aimbot quase invisível, câmera livre
-                    smooth = 0.92f;
-                } else {
-                    // Com ADS: usa o smooth configurado pelo usuário
-                    smooth = sharedData->aimbotSmooth;
-                }
+                // v44: aimbot só quando IsFiring==true
+                // Lógica única forte: usa smooth configurado pelo usuário (ADS ou hip-fire)
+                // Sem ADS a maioria dos jogadores não atira — condição IsFiring garante
+                // que a câmera só é forçada durante o disparo real.
+                bool isFiring = fn_IsFiring && fn_IsFiring(self, nullptr);
+                if (!isFiring) goto skip_aim;
 
-                // Sempre aplica lerp (smooth nunca zero para evitar snap abrupto)
+                {
+                float smooth = sharedData->aimbotSmooth;
+                // Clamp: garante lerp suave sem snap nem trava
                 if (smooth < 0.01f) smooth = 0.01f;
                 if (smooth > 0.98f) smooth = 0.98f;
                 Quaternion curQ = *(Quaternion*)((uint8_t*)self + OFF_m_CurrentAimRotation);
@@ -713,6 +715,7 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
                 if (qlen > 0.0001f) { aimQ.x/=qlen; aimQ.y/=qlen; aimQ.z/=qlen; aimQ.w/=qlen; }
 
                 fn_SetAimRotation(self, aimQ, false, nullptr);
+                } // end firing scope
                 } // end scope
                 skip_aim:;
             }
@@ -1095,6 +1098,7 @@ void* hack_thread(void*) {
     fn_SetAimRotation = RESOLVE_OFFSET(SetAimRotationFn, OFF_SetAimRotation);
     fn_IsVisible      = RESOLVE_OFFSET(bool(*)(void*, void*),              OFF_IsVisible);
     fn_get_IsSighting = RESOLVE_OFFSET(bool(*)(void*, void*),              OFF_get_IsSighting);
+    fn_IsFiring       = RESOLVE_OFFSET(bool(*)(void*, void*),              OFF_IsFiring);
     // Speed Hack — resolvido via VmtHook em UpdateVelocity (ver adiante)
 
     LOGI("Offsets resolvidos:");
