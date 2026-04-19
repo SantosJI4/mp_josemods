@@ -58,7 +58,7 @@
   #define LOGE(...) ((void)0)
 #endif
 
-#define HOOK_BUILD_VER "v34-player"
+#define HOOK_BUILD_VER "v35-player2"
 
 // ============================================================
 // Hook Log File — SOMENTE em modo debug
@@ -406,9 +406,10 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 // get_InSwapWeaponCD — Player — true = em cooldown de troca de arma
 // Dump L651567: public System.Boolean get_InSwapWeaponCD() // 0x67717AC
 #define OFF_get_InSwapWeaponCD        0x67717AC
-// OnPreparationCancel — UIHudPreparationTimerController — cancela medkit ao mover
-// Dump L375882: public System.Void OnPreparationCancel(System.Object[]) // 0x4839784
-#define OFF_OnPreparationCancel       0x4839784
+// OFF_OnPreparationCancel era de um controlador de bomba — não serve para medkit
+// Use IsMoving() na classe Player: retornar false = player "não está movendo" = medkit não cancela
+// Dump L651981: public System.Boolean IsMoving(); // 0x676650C
+#define OFF_IsMoving                  0x676650C
 
 // ============================================================
 // Function Pointers — resolvidos via base + offset direto
@@ -474,8 +475,8 @@ static bool  (*orig_get_IsAmmoFree)(void* self, void* method) = nullptr;
 static float (*orig_get_FSModeUseMedikitFasterRate)(void* self, void* method) = nullptr;
 // InSwapWeaponCD hook
 static bool  (*orig_get_InSwapWeaponCD)(void* self, void* method) = nullptr;
-// OnPreparationCancel hook (cancela medkit ao mover)
-static void  (*orig_OnPreparationCancel)(void* self, void* data, void* method) = nullptr;
+// IsMoving hook — retornar false = jogo pensa que player está parado → medkit não cancela
+static bool  (*orig_IsMoving)(void* self, void* method) = nullptr;
 
 // Aimbot — Player::SetAimRotation
 struct Quaternion { float x, y, z, w; };
@@ -735,12 +736,12 @@ static bool Hook_GetInSwapWeaponCD(void* self, void* method) {
     return orig_get_InSwapWeaponCD ? orig_get_InSwapWeaponCD(self, method) : false;
 }
 
-// UIHudPreparationTimerController::OnPreparationCancel(Object[]) → skip = medkit andando
-static void Hook_OnPreparationCancel(void* self, void* data, void* method) {
+// Player::IsMoving() → false = jogo pensa que player está parado → medkit não cancela
+static bool Hook_IsMoving(void* self, void* method) {
     if (sharedData && sharedData->medkitRunEnabled) {
-        return; // cancela o cancelamento → medkit continua mesmo movendo
+        return false;
     }
-    if (orig_OnPreparationCancel) orig_OnPreparationCancel(self, data, method);
+    return orig_IsMoving ? orig_IsMoving(self, method) : false;
 }
 
 // ============================================================
@@ -1616,11 +1617,11 @@ void* hack_thread(void*) {
         hookLogWrite("ERRO: PlayerAttributes nao encontrada");
     }
 
-    // ── Hook Player::get_InSwapWeaponCD (v49) ───────────────────────────────
-    LOGI("[+] Buscando Player class para InSwapWeaponCD...");
-    void* playerClassForCD = p_class_from_name(cs_image, "COW.GamePlay", "Player");
-    if (playerClassForCD) {
-        void* cdMI = p_class_get_method(playerClassForCD, "get_InSwapWeaponCD", 0);
+    // ── Hook Player::get_InSwapWeaponCD + IsMoving (v50 fix) ──────────────────
+    // Reutiliza playerClass (já buscado acima) — sem segunda chamada p_class_from_name
+    LOGI("[+] Hooks extras na classe Player (InSwapWeaponCD, IsMoving)...");
+    {
+        void* cdMI = p_class_get_method(playerClass, "get_InSwapWeaponCD", 0);
         if (cdMI) {
             if (VmtHook(cdMI, (void*)Hook_GetInSwapWeaponCD,
                         (void**)&orig_get_InSwapWeaponCD)) {
@@ -1632,32 +1633,19 @@ void* hack_thread(void*) {
         } else {
             LOGE("get_InSwapWeaponCD nao encontrado em Player");
         }
-    } else {
-        LOGE("Player class nao encontrada para InSwapWeaponCD");
-    }
 
-    // ── Hook UIHudPreparationTimerController::OnPreparationCancel (v49) ─────
-    LOGI("[+] Buscando UIHudPreparationTimerController...");
-    // Tenta namespaces comuns do Free Fire UI
-    void* uiPrepClass = p_class_from_name(cs_image, "COW.UI", "UIHudPreparationTimerController");
-    if (!uiPrepClass) uiPrepClass = p_class_from_name(cs_image, "", "UIHudPreparationTimerController");
-    if (!uiPrepClass) uiPrepClass = p_class_from_name(cs_image, "COW", "UIHudPreparationTimerController");
-    if (uiPrepClass) {
-        void* cancelMI = p_class_get_method(uiPrepClass, "OnPreparationCancel", 1);
-        if (cancelMI) {
-            if (VmtHook(cancelMI, (void*)Hook_OnPreparationCancel,
-                        (void**)&orig_OnPreparationCancel)) {
-                LOGI("VMT Hook UIHudPreparationTimerController::OnPreparationCancel: orig=%p", orig_OnPreparationCancel);
-                hookLogWrite("VMT OnPreparationCancel: orig=%p", orig_OnPreparationCancel);
+        void* movingMI = p_class_get_method(playerClass, "IsMoving", 0);
+        if (movingMI) {
+            if (VmtHook(movingMI, (void*)Hook_IsMoving,
+                        (void**)&orig_IsMoving)) {
+                LOGI("VMT Hook Player::IsMoving: orig=%p", orig_IsMoving);
+                hookLogWrite("VMT IsMoving: orig=%p", orig_IsMoving);
             } else {
-                LOGE("VMT Hook OnPreparationCancel FALHOU");
+                LOGE("VMT Hook IsMoving FALHOU");
             }
         } else {
-            LOGE("OnPreparationCancel nao encontrado");
+            LOGE("IsMoving nao encontrado em Player");
         }
-    } else {
-        LOGE("UIHudPreparationTimerController nao encontrada");
-        hookLogWrite("ERRO: UIHudPreparationTimerController nao encontrada");
     }
 
     return nullptr;
