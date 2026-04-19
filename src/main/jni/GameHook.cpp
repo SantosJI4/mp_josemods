@@ -58,7 +58,7 @@
   #define LOGE(...) ((void)0)
 #endif
 
-#define HOOK_BUILD_VER "v35-player2"
+#define HOOK_BUILD_VER "v36-nofilter"
 
 // ============================================================
 // Hook Log File — SOMENTE em modo debug
@@ -656,8 +656,7 @@ static float Hook_GetWeaponRunSpeedScale(void* self, int32_t weaponType, void* m
     float result = orig_GetWeaponRunSpeedScale
         ? orig_GetWeaponRunSpeedScale(self, weaponType, method)
         : 1.0f;
-    if (sharedData && sharedData->speedEnabled && sharedData->speedValue > 0.5f &&
-        g_localPlayerAttr && self == g_localPlayerAttr) {
+    if (sharedData && sharedData->speedEnabled && sharedData->speedValue > 0.5f) {
         return sharedData->speedValue;
     }
     return result;
@@ -668,8 +667,7 @@ static float Hook_GetWeaponRunSpeedScale(void* self, int32_t weaponType, void* m
 // Controla o spread/scatter das balas. Retornar 0 = sem espalhamento.
 // ============================================================
 static float Hook_GetScatterRate(void* self, void* method) {
-    if (sharedData && sharedData->recoilEnabled &&
-        g_localPlayerAttr && self == g_localPlayerAttr) {
+    if (sharedData && sharedData->recoilEnabled) {
         return 0.0f;
     }
     return orig_GetScatterRate ? orig_GetScatterRate(self, method) : 1.0f;
@@ -710,8 +708,7 @@ static void il2cppStringToUtf8(void* strObj, char* out, int maxOut) {
 
 // PlayerAttributes::get_IsAmmoFree() → true = munição infinita
 static bool Hook_GetIsAmmoFree(void* self, void* method) {
-    if (sharedData && sharedData->ammoEnabled &&
-        g_localPlayerAttr && self == g_localPlayerAttr) {
+    if (sharedData && sharedData->ammoEnabled) {
         return true;
     }
     return orig_get_IsAmmoFree ? orig_get_IsAmmoFree(self, method) : false;
@@ -719,8 +716,7 @@ static bool Hook_GetIsAmmoFree(void* self, void* method) {
 
 // PlayerAttributes::get_FSModeUseMedikitFasterRate() → valor alto = medkit rápido
 static float Hook_GetFSModeUseMedikitFasterRate(void* self, void* method) {
-    if (sharedData && sharedData->medkitFastEnabled &&
-        g_localPlayerAttr && self == g_localPlayerAttr) {
+    if (sharedData && sharedData->medkitFastEnabled) {
         return 10.0f;
     }
     return orig_get_FSModeUseMedikitFasterRate
