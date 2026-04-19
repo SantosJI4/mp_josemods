@@ -91,7 +91,7 @@ static int   aimTargetPriority = 0;
 // ============================================================
 static int   aimMode        = 0;      // 0=Legit, 1=Rage
 static float aimLegitSmooth = 0.12f;  // fator lerp (0.01–0.50)
-static float aimRageOffsetY = 0.15f;  // offset Y sobre a cabeça (capa)
+static float aimRageOffsetY = 0.0f;   // offset Y sobre a cabeça (0=bone da cabeça exato)
 static int   triggerKey     = 0;      // 0=sempre ativo, 114=Vol-, 115=Vol+
 
 // ============================================================
@@ -269,6 +269,19 @@ void DrawESP(int screenW, int screenH) {
     auto* draw = ImGui::GetBackgroundDrawList();
 
     // Verificar se há pelo menos um alvo válido na tela
+    // ── Círculo de FOV visual ─ desenhado ANTES do early-return, sempre visível quando aimbot ativo
+    if (silentAim || aimAssist) {
+        float fovRadiusPx = (float)screenW * (aimFovDeg / 90.0f) * 0.5f;
+        bool  locked      = sharedData && sharedData->aimAssistHasTarget;
+        ImU32 circleColor = locked
+            ? IM_COL32(255, 80,  0,  200)
+            : IM_COL32(255, 255, 255, 55);
+        auto* drawBg = ImGui::GetBackgroundDrawList();
+        drawBg->AddCircle(
+            ImVec2(screenW * 0.5f, screenH * 0.5f),
+            fovRadiusPx, circleColor, 64, 1.5f);
+    }
+
     bool hasTarget = false;
     for (int i = 0; i < count; i++) {
         const ESPEntry& e = sharedData->players[i];

@@ -58,7 +58,7 @@
   #define LOGE(...) ((void)0)
 #endif
 
-#define HOOK_BUILD_VER "v32-fullcapa"
+#define HOOK_BUILD_VER "v33-aimfix2"
 
 // ============================================================
 // Hook Log File — SOMENTE em modo debug
@@ -664,8 +664,11 @@ static void Hook_CameraLateUpdate(void* self, void* methodInfo) {
         !fn_get_eulerAngles || !fn_set_eulerAngles) return;
 
     // Anti-recoil SÓ quando disparando (triggerHeld==1).
+    // v47: não conflitar com aimbot — quando silentAim ativo e com alvo válido,
+    // o aimbot já controla a mira. Anti-recoil rodando junto desfaz o snap frame a frame.
+    bool aimbotControlling = sharedData->silentAimEnabled && g_aimCandValid;
     if (sharedData->recoilEnabled && g_camEulerValid &&
-        sharedData->triggerHeld == 1) {
+        sharedData->triggerHeld == 1 && !aimbotControlling) {
         Vector3 postOrig = fn_get_eulerAngles(g_camTransform, nullptr);
         if (std::isnan(postOrig.y) || std::isnan(postOrig.z)) return;
         fn_set_eulerAngles(g_camTransform,
