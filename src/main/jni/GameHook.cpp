@@ -59,7 +59,7 @@
   #define LOGE(...) ((void)0)
 #endif
 
-#define HOOK_BUILD_VER "v37-dobby"
+#define HOOK_BUILD_VER "v38-bugfix"
 
 // ============================================================
 // Hook Log File — SOMENTE em modo debug
@@ -407,10 +407,15 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 // get_InSwapWeaponCD — Player — true = em cooldown de troca de arma
 // Dump L651567: public System.Boolean get_InSwapWeaponCD() // 0x67717AC
 #define OFF_get_InSwapWeaponCD        0x67717AC
-// OFF_OnPreparationCancel era de um controlador de bomba — não serve para medkit
-// Use IsMoving() na classe Player: retornar false = player "não está movendo" = medkit não cancela
+// IsMoving — Player — false = player não se move (backup para medkit andando)
 // Dump L651981: public System.Boolean IsMoving(); // 0x676650C
 #define OFF_IsMoving                  0x676650C
+// get_CanMedkitOnMove — Player — true = pode usar medkit andando (função principal)
+// Dump L653473: public System.Boolean get_CanMedkitOnMove(); // 0x6766680
+#define OFF_get_CanMedkitOnMove       0x6766680
+// get_EatSpeedScale — PlayerAttributes — multiplicador de velocidade de uso de itens
+// Dump L714414: public System.Single get_EatSpeedScale(); // 0x7261068
+#define OFF_get_EatSpeedScale         0x7261068
 
 // ============================================================
 // Function Pointers — resolvidos via base + offset direto
@@ -476,8 +481,12 @@ static bool  (*orig_get_IsAmmoFree)(void* self, void* method) = nullptr;
 static float (*orig_get_FSModeUseMedikitFasterRate)(void* self, void* method) = nullptr;
 // InSwapWeaponCD hook
 static bool  (*orig_get_InSwapWeaponCD)(void* self, void* method) = nullptr;
-// IsMoving hook — retornar false = jogo pensa que player está parado → medkit não cancela
+// IsMoving hook — retornar false = backup para medkit andando
 static bool  (*orig_IsMoving)(void* self, void* method) = nullptr;
+// get_CanMedkitOnMove hook — true = permite usar medkit enquanto anda (função principal)
+static bool  (*orig_get_CanMedkitOnMove)(void* self, void* method) = nullptr;
+// get_EatSpeedScale hook — valor alto = usa itens mais rápido (medkit fast)
+static float (*orig_get_EatSpeedScale)(void* self, void* method) = nullptr;
 
 // Aimbot — Player::SetAimRotation
 struct Quaternion { float x, y, z, w; };
@@ -715,14 +724,31 @@ static bool Hook_GetIsAmmoFree(void* self, void* method) {
     return orig_get_IsAmmoFree ? orig_get_IsAmmoFree(self, method) : false;
 }
 
-// PlayerAttributes::get_FSModeUseMedikitFasterRate() → valor alto = medkit rápido
+// PlayerAttributes::get_FSModeUseMedikitFasterRate() — rate ADITIVO do modo FS
+// ERRO ANTERIOR: retornar 10.0 causava medkit de 29 segundos (rate é tempo extra, não velocidade)
+// Fix: passa pelo original sem interferir. Medkit fast é via get_EatSpeedScale.
 static float Hook_GetFSModeUseMedikitFasterRate(void* self, void* method) {
-    if (sharedData && sharedData->medkitFastEnabled) {
-        return 10.0f;
-    }
     return orig_get_FSModeUseMedikitFasterRate
         ? orig_get_FSModeUseMedikitFasterRate(self, method)
-        : 1.0f;
+        : 0.0f;
+}
+
+// PlayerAttributes::get_EatSpeedScale() → multiplicador de velocidade de uso de itens
+// Maior = usa medkit/itens mais rápido. Default ≈ 1.0
+static float Hook_GetEatSpeedScale(void* self, void* method) {
+    if (sharedData && sharedData->medkitFastEnabled) {
+        return 10.0f;  // 10x mais rapido
+    }
+    return orig_get_EatSpeedScale ? orig_get_EatSpeedScale(self, method) : 1.0f;
+}
+
+// Player::get_CanMedkitOnMove() → true = pode usar medkit em movimento
+// Esta é a função principal — mais específica que IsMoving()
+static bool Hook_GetCanMedkitOnMove(void* self, void* method) {
+    if (sharedData && sharedData->medkitRunEnabled) {
+        return true;
+    }
+    return orig_get_CanMedkitOnMove ? orig_get_CanMedkitOnMove(self, method) : false;
 }
 
 // Player::get_InSwapWeaponCD() → false = sem cooldown de troca de arma
@@ -1621,7 +1647,7 @@ void* hack_thread(void*) {
         }
     }
 
-    // Medkit andando: Player::IsMoving()
+    // Medkit andando (backup): Player::IsMoving()
     {
         void* addr = (void*)(il2cpp_base + OFF_IsMoving);
         int r = DobbyHook(addr, (void*)Hook_IsMoving,
@@ -1632,6 +1658,34 @@ void* hack_thread(void*) {
         } else {
             LOGE("Dobby IsMoving FALHOU (r=%d)", r);
             hookLogWrite("ERRO: Dobby IsMoving r=%d", r);
+        }
+    }
+
+    // Medkit andando (principal): Player::get_CanMedkitOnMove()
+    {
+        void* addr = (void*)(il2cpp_base + OFF_get_CanMedkitOnMove);
+        int r = DobbyHook(addr, (void*)Hook_GetCanMedkitOnMove,
+                          (void**)&orig_get_CanMedkitOnMove);
+        if (r == 0) {
+            LOGI("Dobby get_CanMedkitOnMove OK: orig=%p", orig_get_CanMedkitOnMove);
+            hookLogWrite("Dobby get_CanMedkitOnMove: orig=%p", orig_get_CanMedkitOnMove);
+        } else {
+            LOGE("Dobby get_CanMedkitOnMove FALHOU (r=%d)", r);
+            hookLogWrite("ERRO: Dobby get_CanMedkitOnMove r=%d", r);
+        }
+    }
+
+    // Medkit rapido (principal): PlayerAttributes::get_EatSpeedScale()
+    {
+        void* addr = (void*)(il2cpp_base + OFF_get_EatSpeedScale);
+        int r = DobbyHook(addr, (void*)Hook_GetEatSpeedScale,
+                          (void**)&orig_get_EatSpeedScale);
+        if (r == 0) {
+            LOGI("Dobby get_EatSpeedScale OK: orig=%p", orig_get_EatSpeedScale);
+            hookLogWrite("Dobby get_EatSpeedScale: orig=%p", orig_get_EatSpeedScale);
+        } else {
+            LOGE("Dobby get_EatSpeedScale FALHOU (r=%d)", r);
+            hookLogWrite("ERRO: Dobby get_EatSpeedScale r=%d", r);
         }
     }
 
