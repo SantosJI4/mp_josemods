@@ -96,7 +96,12 @@ public class OverlayService extends Service {
         overlaySurface.getHolder().addCallback(new SurfaceHolder.Callback() {
             @Override
             public void surfaceCreated(SurfaceHolder holder) {
-                DisplayMetrics dm = getResources().getDisplayMetrics();
+                // Usar dimensões reais da surface (surfaceChanged é chamado logo após
+                // surfaceCreated com os valores corretos), mas passamos um tamanho inicial
+                // usando getRealMetrics() que inclui barras do sistema (nav bar, status bar)
+                // para garantir alinhamento correto em qualquer device/resolução.
+                DisplayMetrics dm = new DisplayMetrics();
+                windowManager.getDefaultDisplay().getRealMetrics(dm);
                 nativeOnSurfaceCreated(holder.getSurface(), dm.widthPixels, dm.heightPixels);
             }
 

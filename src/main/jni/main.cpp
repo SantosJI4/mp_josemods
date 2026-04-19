@@ -264,22 +264,22 @@ void DrawESP(int screenW, int screenH) {
     float scaleY = (float)screenH / (float)gameH;
 
     ImU32 color = ImGui::ColorConvertFloat4ToU32(espLineColor);
-    // Snapline: origem no TOPO da tela (posicao original)
-    ImVec2 snapOrigin = ImVec2(screenW * linePositionX, 0.0f);
+    // Snapline: origem no centro inferior/topo da tela — usa scaleX para alinhar com o jogo
+    ImVec2 snapOrigin = ImVec2((float)gameW * linePositionX * scaleX, 0.0f);
     auto* draw = ImGui::GetBackgroundDrawList();
 
-    // Verificar se há pelo menos um alvo válido na tela
     // ── Círculo de FOV visual ─ desenhado ANTES do early-return, sempre visível quando aimbot ativo
+    // Centro e raio calculados em game coords e escalados → alinha perfeitamente com a mira
+    // independente da resolução do device ou do jogo.
     if (silentAim || aimAssist) {
-        float fovRadiusPx = (float)screenW * (aimFovDeg / 90.0f) * 0.5f;
+        float cx          = (float)gameW * 0.5f * scaleX;   // centro X do viewport do jogo
+        float cy          = (float)gameH * 0.5f * scaleY;   // centro Y do viewport do jogo
+        float fovRadiusPx = (float)gameW * (aimFovDeg / 90.0f) * 0.5f * scaleX;
         bool  locked      = sharedData && sharedData->aimAssistHasTarget;
         ImU32 circleColor = locked
             ? IM_COL32(255, 80,  0,  200)
             : IM_COL32(255, 255, 255, 55);
-        auto* drawBg = ImGui::GetBackgroundDrawList();
-        drawBg->AddCircle(
-            ImVec2(screenW * 0.5f, screenH * 0.5f),
-            fovRadiusPx, circleColor, 64, 1.5f);
+        draw->AddCircle(ImVec2(cx, cy), fovRadiusPx, circleColor, 64, 1.5f);
     }
 
     bool hasTarget = false;
