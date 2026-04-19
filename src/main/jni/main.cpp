@@ -1156,7 +1156,7 @@ void DrawMenu() {
                 sharedData->silentFireEnabled = silentFire ? 1 : 0;
             if (silentFire) {
                 ImGui::Spacing();
-                bool hasTarget = sharedData && sharedData->aimAssistHasTarget;
+                bool hasTarget = sharedData && sharedData->silentFireHasTarget;
                 float rw = ImGui::GetContentRegionAvail().x;
                 if (hasTarget) {
                     float tw = ImGui::CalcTextSize("[ BALA -> CABECA ]").x;

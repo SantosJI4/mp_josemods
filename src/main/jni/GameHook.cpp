@@ -59,7 +59,7 @@
   #define LOGE(...) ((void)0)
 #endif
 
-#define HOOK_BUILD_VER "v39-silentfire"
+#define HOOK_BUILD_VER "v40-silentfix"
 
 // ============================================================
 // Hook Log File — SOMENTE em modo debug
@@ -757,11 +757,12 @@ static float Hook_GetFSModeUseMedikitFasterRate(void* self, void* method) {
         : 0.0f;
 }
 
-// PlayerAttributes::get_EatSpeedScale() → multiplicador de velocidade de uso de itens
-// Maior = usa medkit/itens mais rápido. Default ≈ 1.0
+// PlayerAttributes::get_EatSpeedScale() → multiplicador de TEMPO de uso de itens
+// IMPORTANTE: valor alto = MAIS tempo (mais lento). Valor baixo = menos tempo (mais rápido).
+// 0.01f = quase instantâneo. Default ≈ 1.0
 static float Hook_GetEatSpeedScale(void* self, void* method) {
     if (sharedData && sharedData->medkitFastEnabled) {
-        return 10.0f;  // 10x mais rapido
+        return 0.01f;  // quase instantâneo
     }
     return orig_get_EatSpeedScale ? orig_get_EatSpeedScale(self, method) : 1.0f;
 }
@@ -993,6 +994,8 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
         // HUD: tinha alvo no frame anterior?
         sharedData->aimAssistHasTarget =
             (g_aimCandValid && sharedData->silentAimEnabled) ? 1 : 0;
+        // Silent Fire: atualiza indicador de alvo independente do aimbot
+        sharedData->silentFireHasTarget = g_aimCandValid ? 1 : 0;
 
         // Resetar candidatos para este frame
         g_aimBestScreenDist = 1e9f;

@@ -105,7 +105,8 @@ struct SharedESPData {
     // ── Silent Fire (v55) ─────────────────────────────────────────────────
     // Hook em GetFireDirection: bala vai para cabeça do alvo sem mover a câmera.
     // Diferente do Aimbot (que move a câmera), a mira NÃO se mexe — apenas a bala.
-    volatile int silentFireEnabled;  // 1 = ativo
+    volatile int silentFireEnabled;      // 1 = ativo
+    volatile int silentFireHasTarget;    // Hook escreve 1 quando há alvo válido no ESP
 
     ESPEntry players[MAX_ESP_PLAYERS];
 };
