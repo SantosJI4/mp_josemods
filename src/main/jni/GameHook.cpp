@@ -690,8 +690,8 @@ static Vector3 g_aimCandTarget{0.0f, 0.0f, 0.0f};  // melhor alvo deste frame
 static float   g_aimCandDist  = 1e9f;
 static bool    g_aimCandValid = false;
 static std::atomic<int>  g_pendingAutoFire{0};  // countdown de frames para disparo automático
-static std::atomic<bool> g_doAutoFire{false};   // sinaliza Hook_VVP_LateUpdate para disparar
-static void*   g_localPlayer  = nullptr;  // ponteiro do player local (cache por frame)
+static void*   g_localVVP     = nullptr;        // ponteiro do VerticleViewPlayer local
+static void*   g_localPlayer  = nullptr;        // ponteiro do player local (cache por frame)
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ============================================================
@@ -842,13 +842,11 @@ static void Hook_OnChangeWeaponFinished(void* self, void* method) {
 // ============================================================
 // AUTO AIM — VerticleViewPlayer::LateUpdate
 // Captura o self do VVP (classe correta para OnTriggerShoot).
-// Quando g_doAutoFire=true, dispara uma bala automática.
+// Guardamos em g_localVVP para ser usado diretamente por Hook_OnUpdate.
 // ============================================================
 static void Hook_VVP_LateUpdate(void* self, void* method) {
+    if (self) g_localVVP = self;  // captura ponteiro do VVP local
     if (orig_VVP_LateUpdate) orig_VVP_LateUpdate(self, method);
-    if (g_doAutoFire.exchange(false) && fn_OnTriggerShoot && self) {
-        fn_OnTriggerShoot(self, false, nullptr);
-    }
 }
 
 // ============================================================
@@ -917,10 +915,12 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
             }
         }
 
-        // ── Auto Aim: snap + sinaliza disparo no último frame do countdown ───
+        // ── Auto Aim: snap + disparo direto quando countdown chega a zero ───
+        // g_localVVP é capturado por Hook_VVP_LateUpdate (DobbyHook) — chamamos
+        // fn_OnTriggerShoot diretamente aqui, sem dependência de ordem de frame.
         if (sharedData->autoAimEnabled && g_pendingAutoFire.load() > 0) {
             int pending = g_pendingAutoFire.fetch_sub(1) - 1;
-            if (pending == 0 && g_aimCandValid &&
+            if (pending == 0 && g_aimCandValid && g_localVVP &&
                 fn_SetAimRotation && g_camTransform && fn_get_position) {
                 Vector3 camPos = fn_get_position(g_camTransform, nullptr);
                 if (!std::isnan(camPos.x) && !std::isnan(camPos.y) && !std::isnan(camPos.z)) {
@@ -938,7 +938,10 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
                             aimQ.x=-aimQ.x; aimQ.y=-aimQ.y; aimQ.z=-aimQ.z; aimQ.w=-aimQ.w;
                         }
                         fn_SetAimRotation(self, aimQ, true, nullptr);
-                        g_doAutoFire.store(true);
+                        // Disparo direto: chamar OnTriggerShoot no VVP já capturado
+                        if (fn_OnTriggerShoot) {
+                            fn_OnTriggerShoot(g_localVVP, false, nullptr);
+                        }
                     }
                 }
             }
