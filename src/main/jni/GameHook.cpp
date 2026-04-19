@@ -58,7 +58,7 @@
   #define LOGE(...) ((void)0)
 #endif
 
-#define HOOK_BUILD_VER "v29-ads-aim"
+#define HOOK_BUILD_VER "v31-quatfix"
 
 // ============================================================
 // Hook Log File — SOMENTE em modo debug
@@ -706,6 +706,10 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
                 if (smooth < 0.01f) smooth = 0.01f;
                 if (smooth > 0.98f) smooth = 0.98f;
                 Quaternion curQ = *(Quaternion*)((uint8_t*)self + OFF_m_CurrentAimRotation);
+                // FIX v45: shortest-arc check — sem isso dot<0 faz lerp ir pelo caminho
+                // longo (>180°) invertendo a câmera. Negar aimQ garante arco curto.
+                float dot = curQ.x*aimQ.x + curQ.y*aimQ.y + curQ.z*aimQ.z + curQ.w*aimQ.w;
+                if (dot < 0.0f) { aimQ.x=-aimQ.x; aimQ.y=-aimQ.y; aimQ.z=-aimQ.z; aimQ.w=-aimQ.w; }
                 float t = 1.0f - smooth;
                 aimQ.x = curQ.x + (aimQ.x - curQ.x) * t;
                 aimQ.y = curQ.y + (aimQ.y - curQ.y) * t;
