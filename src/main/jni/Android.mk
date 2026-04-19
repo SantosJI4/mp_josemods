@@ -90,12 +90,14 @@ LOCAL_ARM_MODE := arm
 LOCAL_C_INCLUDES := $(LOCAL_PATH)
 LOCAL_C_INCLUDES += $(LOCAL_PATH)/include/Utils
 LOCAL_C_INCLUDES += $(LOCAL_PATH)/include/Utils/Unity
+LOCAL_C_INCLUDES += $(LOCAL_PATH)/include/Hook/Dobby
 
 # zygisk_main.cpp (Zygisk entry) + GameHook.cpp (hook logic)
 ZYGISK_FILES := $(LOCAL_PATH)/zygisk_main.cpp
 ZYGISK_FILES += $(LOCAL_PATH)/GameHook.cpp
 
 LOCAL_SRC_FILES := $(ZYGISK_FILES:$(LOCAL_PATH)/%=%)
+LOCAL_STATIC_LIBRARIES := dobby
 
 include $(BUILD_SHARED_LIBRARY)
 
