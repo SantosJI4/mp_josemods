@@ -59,7 +59,7 @@
   #define LOGE(...) ((void)0)
 #endif
 
-#define HOOK_BUILD_VER "v41-medkit-aim-fix"
+#define HOOK_BUILD_VER "v42-silentfire-fix"
 
 // ============================================================
 // Hook Log File — SOMENTE em modo debug
@@ -421,13 +421,6 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 // Dump L714414: public System.Single get_EatSpeedScale(); // 0x7261068
 #define OFF_get_EatSpeedScale         0x7261068
 
-// ── Silent Fire (v55) ───────────────────────────────────────────────────────
-// GetFireDirection — UIVerticleViewGameScene — direção do projétil no momento do tiro
-// Hook: quando silentFireEnabled, retorna vetor normalizado cam→cabeça do alvo.
-// Bala vai para a cabeça independente de onde o jogador está mirando.
-// Dump L519959: public Vector3 GetFireDirection(ref bool& isSkill) // 0x5DFD96C
-#define OFF_GetFireDirection          0x5DFD96C
-
 // ── Anti-recoil adicional (v55) ─────────────────────────────────────────────
 // get_SkillScatterRate — PlayerAttributes — scatter adicional de habilidade
 // Dump L714455: public float get_SkillScatterRate() // 0x7261DE4
@@ -508,11 +501,6 @@ static bool  (*orig_get_CanMedkitOnMove)(void* self, void* method) = nullptr;
 static void  (*orig_CancelPreparation)(void* self, void* method) = nullptr;
 // get_EatSpeedScale hook — valor alto = usa itens mais rápido (medkit fast)
 static float (*orig_get_EatSpeedScale)(void* self, void* method) = nullptr;
-
-// ── Silent Fire (v55) ────────────────────────────────────────────────────────
-// UIVerticleViewGameScene::GetFireDirection(ref bool& isSkill) → Vector3
-// Retorna a direção do projétil. Hook redireciona para a cabeça do alvo.
-static Vector3 (*orig_GetFireDirection)(void* self, bool* isSkill, void* method) = nullptr;
 
 // ── Anti-recoil adicional (v55) ──────────────────────────────────────────────
 static float (*orig_get_SkillScatterRate)(void* self, void* method) = nullptr;
@@ -805,27 +793,6 @@ static bool Hook_IsMoving(void* self, void* method) {
     return orig_IsMoving ? orig_IsMoving(self, method) : false;
 }
 
-// ── Silent Fire (v55) ────────────────────────────────────────────────────────
-// UIVerticleViewGameScene::GetFireDirection(ref bool& isSkill) → Vector3
-// Retorna a direção NORMALIZADA do projétil. Quando silentFireEnabled,
-// substituímos pela direção câmera→cabeça do alvo. Câmera NÃO se move.
-static Vector3 Hook_GetFireDirection(void* self, bool* isSkill, void* method) {
-    if (sharedData && sharedData->silentFireEnabled && g_aimCandValid &&
-        g_camTransform && fn_get_position) {
-        Vector3 cam = fn_get_position(g_camTransform, nullptr);
-        float dx = g_aimCandTarget.x - cam.x;
-        float dy = g_aimCandTarget.y - cam.y;
-        float dz = g_aimCandTarget.z - cam.z;
-        float len = sqrtf(dx*dx + dy*dy + dz*dz);
-        if (len > 0.01f) {
-            return Vector3(dx / len, dy / len, dz / len);
-        }
-    }
-    return orig_GetFireDirection
-        ? orig_GetFireDirection(self, isSkill, method)
-        : Vector3(0.0f, 0.0f, 1.0f);
-}
-
 // Anti-recoil adicional: SkillScatterRate (bônus de dispersão de habilidade)
 static float Hook_get_SkillScatterRate(void* self, void* method) {
     if (sharedData && sharedData->recoilEnabled) return 0.0f;
@@ -877,44 +844,55 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
         // Cachear PlayerAttributes do player local para filtro nos hooks de speed/recoil
         void* attrPtr = *(void**)((uint8_t*)self + OFF_PlayerAttributes_field);
         if (attrPtr && (uintptr_t)attrPtr > 0x1000) g_localPlayerAttr = attrPtr;
-        if (sharedData->silentAimEnabled && g_aimCandValid &&
-            fn_SetAimRotation && g_camTransform && fn_get_position) {
-            Vector3 camPos = fn_get_position(g_camTransform, nullptr);
-            if (!std::isnan(camPos.x) && !std::isnan(camPos.y) && !std::isnan(camPos.z)) {
-                float dx = g_aimCandTarget.x - camPos.x;
-                float dy = g_aimCandTarget.y - camPos.y;
-                float dz = g_aimCandTarget.z - camPos.z;
-                float len = sqrtf(dx*dx + dy*dy + dz*dz);
-                if (len < 0.01f) goto skip_aim;
-                { // scope
-                Quaternion aimQ = LookQuatFromDir(dx, dy, dz);
+        // ── Aimbot (câmera) e Silent Fire (bala redireciona) ─────────────────
+        // Ambos usam SetAimRotation para direcionar a bala.
+        // silentAimEnabled: snap contínuo enquanto dispara (câmera se move com alvo).
+        // silentFireEnabled: snap apenas no frame do disparo + restaura após orig
+        //                    → câmera NÃO se move visivelmente para o player.
+        bool doSnap  = false;
+        bool doRestore = false;
+        Quaternion savedAimQ = {};
 
-                // v46 fullcapa: aimbot só quando IsFiring==true
-                // Snap direto sem lerp — forceUpdate=true garante aplicação imediata.
-                // aimRageOffsetY eleva levemente o alvo para cobrir o topo da cabeça.
-                bool isFiring = fn_IsFiring && fn_IsFiring(self, nullptr);
-                if (!isFiring) goto skip_aim;
+        if (g_aimCandValid && fn_SetAimRotation && g_camTransform && fn_get_position &&
+            (sharedData->silentAimEnabled || sharedData->silentFireEnabled)) {
 
-                {
-                // Aplicar offset vertical (rage) sobre a posição do alvo
-                float rageOff = sharedData->aimRageOffsetY;
-                if (rageOff != 0.0f) {
-                    // recalcula direção com offset Y
-                    float ody = dy + rageOff;
-                    aimQ = LookQuatFromDir(dx, ody, dz);
+            bool isFiring = fn_IsFiring && fn_IsFiring(self, nullptr);
+            if (isFiring) {
+                Vector3 camPos = fn_get_position(g_camTransform, nullptr);
+                if (!std::isnan(camPos.x) && !std::isnan(camPos.y) && !std::isnan(camPos.z)) {
+                    float dx = g_aimCandTarget.x - camPos.x;
+                    float dy = g_aimCandTarget.y - camPos.y;
+                    float dz = g_aimCandTarget.z - camPos.z;
+                    float len = sqrtf(dx*dx + dy*dy + dz*dz);
+                    if (len >= 0.01f) {
+                        // Offset vertical (rage aim)
+                        float rageOff = sharedData->aimRageOffsetY;
+                        if (rageOff != 0.0f) dy += rageOff;
+                        Quaternion aimQ = LookQuatFromDir(dx, dy, dz);
+                        // Shortest-arc: evita inversão de câmera
+                        Quaternion curQ = *(Quaternion*)((uint8_t*)self + OFF_m_CurrentAimRotation);
+                        float dot = curQ.x*aimQ.x + curQ.y*aimQ.y + curQ.z*aimQ.z + curQ.w*aimQ.w;
+                        if (dot < 0.0f) {
+                            aimQ.x=-aimQ.x; aimQ.y=-aimQ.y; aimQ.z=-aimQ.z; aimQ.w=-aimQ.w;
+                        }
+                        if (sharedData->silentFireEnabled && !sharedData->silentAimEnabled) {
+                            // Silent Fire: salva rotação atual para restaurar após orig
+                            savedAimQ = curQ;
+                            doRestore = true;
+                        }
+                        fn_SetAimRotation(self, aimQ, true, nullptr);
+                        doSnap = true;
+                    }
                 }
-                // FIX v45: shortest-arc check — sem isso dot<0 inverte a câmera
-                Quaternion curQ = *(Quaternion*)((uint8_t*)self + OFF_m_CurrentAimRotation);
-                float dot = curQ.x*aimQ.x + curQ.y*aimQ.y + curQ.z*aimQ.z + curQ.w*aimQ.w;
-                if (dot < 0.0f) { aimQ.x=-aimQ.x; aimQ.y=-aimQ.y; aimQ.z=-aimQ.z; aimQ.w=-aimQ.w; }
-                // Snap instantâneo — sem lerp, força máxima
-                fn_SetAimRotation(self, aimQ, true, nullptr);
-                } // end firing scope
-                } // end scope
-                skip_aim:;
             }
         }
+
         if (orig_OnUpdate) orig_OnUpdate(self, methodInfo);
+
+        // Silent Fire: restaura rotação original após orig (câmera não muda)
+        if (doRestore && fn_SetAimRotation) {
+            fn_SetAimRotation(self, savedAimQ, true, nullptr);
+        }
         return;
     }
     // ─────────────────────────────────────────────────────────────────────────
@@ -1774,20 +1752,6 @@ void* hack_thread(void*) {
         } else {
             LOGE("Dobby get_EatSpeedScale FALHOU (r=%d)", r);
             hookLogWrite("ERRO: Dobby get_EatSpeedScale r=%d", r);
-        }
-    }
-
-    // Silent Fire: UIVerticleViewGameScene::GetFireDirection()
-    {
-        void* addr = (void*)(il2cpp_base + OFF_GetFireDirection);
-        int r = DobbyHook(addr, (void*)Hook_GetFireDirection,
-                          (void**)&orig_GetFireDirection);
-        if (r == 0) {
-            LOGI("Dobby GetFireDirection OK: orig=%p", orig_GetFireDirection);
-            hookLogWrite("Dobby GetFireDirection: orig=%p", orig_GetFireDirection);
-        } else {
-            LOGE("Dobby GetFireDirection FALHOU (r=%d)", r);
-            hookLogWrite("ERRO: Dobby GetFireDirection r=%d", r);
         }
     }
 
