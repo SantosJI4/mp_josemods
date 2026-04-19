@@ -59,7 +59,7 @@
   #define LOGE(...) ((void)0)
 #endif
 
-#define HOOK_BUILD_VER "v40-silentfix"
+#define HOOK_BUILD_VER "v41-medkit-aim-fix"
 
 // ============================================================
 // Hook Log File — SOMENTE em modo debug
@@ -413,6 +413,10 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 // get_CanMedkitOnMove — Player — true = pode usar medkit andando (função principal)
 // Dump L653473: public System.Boolean get_CanMedkitOnMove(); // 0x6766680
 #define OFF_get_CanMedkitOnMove       0x6766680
+// CancelPreparation — Player — cancela o uso de item em andamento (medkit/item)
+// Hook: quando medkitRunEnabled, ignoramos o cancelamento para manter o medkit ativo.
+// Dump L652441: public System.Void CancelPreparation(); // 0x6805AC8
+#define OFF_CancelPreparation         0x6805AC8
 // get_EatSpeedScale — PlayerAttributes — multiplicador de velocidade de uso de itens
 // Dump L714414: public System.Single get_EatSpeedScale(); // 0x7261068
 #define OFF_get_EatSpeedScale         0x7261068
@@ -500,6 +504,8 @@ static bool  (*orig_get_InSwapWeaponCD)(void* self, void* method) = nullptr;
 static bool  (*orig_IsMoving)(void* self, void* method) = nullptr;
 // get_CanMedkitOnMove hook — true = permite usar medkit enquanto anda (função principal)
 static bool  (*orig_get_CanMedkitOnMove)(void* self, void* method) = nullptr;
+// CancelPreparation hook — no-op quando medkitRunEnabled para não cancelar o medkit
+static void  (*orig_CancelPreparation)(void* self, void* method) = nullptr;
 // get_EatSpeedScale hook — valor alto = usa itens mais rápido (medkit fast)
 static float (*orig_get_EatSpeedScale)(void* self, void* method) = nullptr;
 
@@ -762,7 +768,7 @@ static float Hook_GetFSModeUseMedikitFasterRate(void* self, void* method) {
 // 0.01f = quase instantâneo. Default ≈ 1.0
 static float Hook_GetEatSpeedScale(void* self, void* method) {
     if (sharedData && sharedData->medkitFastEnabled) {
-        return 0.01f;  // quase instantâneo
+        return 0.15f;  // ~0.5s (default ≈ 3s × 0.15 = 0.45s)
     }
     return orig_get_EatSpeedScale ? orig_get_EatSpeedScale(self, method) : 1.0f;
 }
@@ -774,6 +780,13 @@ static bool Hook_GetCanMedkitOnMove(void* self, void* method) {
         return true;
     }
     return orig_get_CanMedkitOnMove ? orig_get_CanMedkitOnMove(self, method) : false;
+}
+
+// Player::CancelPreparation() — jogo chama quando detecta movimento durante uso de item
+// No-op quando medkitRunEnabled: impede o jogo de cancelar o medkit ao andar.
+static void Hook_CancelPreparation(void* self, void* method) {
+    if (sharedData && sharedData->medkitRunEnabled) return;
+    if (orig_CancelPreparation) orig_CancelPreparation(self, method);
 }
 
 // Player::get_InSwapWeaponCD() → false = sem cooldown de troca de arma
@@ -1118,45 +1131,46 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     float dY = screenTop.y - screenH * 0.5f;
     float screenDist = sqrtf(dX * dX + dY * dY);
 
-    // ── Silent Aim: selecionar candidato ao alvo (com FOV e prioridade) ───────
-    // silentAim é o único aimbot (v29) — câmera NÃO é movida permanentemente.
-    // O snap acontece pré-orig (LateUpdate) e é restaurado pós-orig: invisível.
-    if (sharedData->silentAimEnabled && chp > 0) {
-        float fovDeg = sharedData->aimAssistFovDeg;
-        if (fovDeg < 1.0f || fovDeg > 90.0f) fovDeg = 90.0f;
-        float fovRadiusPx = (float)screenW * (fovDeg / 90.0f) * 0.5f;
-
-        // v43: limite distância (120m) + wall check via vtable IsVisible()
-        // IsVisible() é virtual na AttackableEntity — chamamos via vtable do objeto
-        // (offset 3 na vtable Unity IL2CPP: vtable[3] = primeiro virtual apos 3 internos)
-        // Fallback seguro: se fn_IsVisible nulo, aceita o alvo
+    // ── Seleção de candidato ao alvo (aimbot câmera E/OU silent fire) ─────────
+    // silentAimEnabled  → aimbot câmera (snap pré/pós LateUpdate)
+    // silentFireEnabled → bala vai para a cabeça, câmera NÃO se move
+    // Ambos usam g_aimCandTarget — selecionamos para qualquer um dos dois ativos.
+    if ((sharedData->silentAimEnabled || sharedData->silentFireEnabled) && chp > 0) {
+        // v43: wall check via vtable IsVisible()
         bool isVis = true;
         if (fn_IsVisible) {
-            // vtable call: *(*(void**)self + vtable_slot * 8) para ARM64
-            // Usar fn_IsVisible direto como virtual dispatch (offset e do Player)
             isVis = fn_IsVisible(self, nullptr);
         }
-        if (screenDist < fovRadiusPx && screenTop.z <= 120.0f && isVis) {
-            int  priority = sharedData->aimTargetPriority;
-            bool isBetter = false;
-            if (priority == 1) {
-                // Menor HP
-                isBetter = (chp < g_aimBestHp);
-            } else if (priority == 2) {
-                // Menor distância (profundidade)
-                float depth = screenTop.z;
-                isBetter = (depth < g_aimBestDepth);
-            } else {
-                // Mais próximo do centro da tela (padrão)
-                isBetter = (screenDist < g_aimBestScreenDist);
+        if (screenTop.z <= 120.0f && isVis) {
+            // Aimbot câmera: respeita FOV configurado pelo usuário
+            bool inFov = true;
+            if (sharedData->silentAimEnabled) {
+                float fovDeg = sharedData->aimAssistFovDeg;
+                if (fovDeg < 1.0f || fovDeg > 90.0f) fovDeg = 90.0f;
+                float fovRadiusPx = (float)screenW * (fovDeg / 90.0f) * 0.5f;
+                inFov = (screenDist < fovRadiusPx);
             }
-            if (isBetter) {
-                g_aimBestScreenDist = screenDist;
-                g_aimBestHp         = chp;
-                g_aimBestDepth      = screenTop.z;
-                g_aimCandDist       = screenDist;
-                g_aimCandTarget     = topWorld;
-                g_aimCandValid      = true;
+            // Silent fire sem aimbot ativo: sem restrição FOV — pega alvo mais
+            // próximo ao centro (ideal para redirecionar a bala naturalmente).
+            if (inFov) {
+                int  priority = sharedData->aimTargetPriority;
+                bool isBetter = false;
+                if (priority == 1) {
+                    isBetter = (chp < g_aimBestHp);
+                } else if (priority == 2) {
+                    float depth = screenTop.z;
+                    isBetter = (depth < g_aimBestDepth);
+                } else {
+                    isBetter = (screenDist < g_aimBestScreenDist);
+                }
+                if (isBetter) {
+                    g_aimBestScreenDist = screenDist;
+                    g_aimBestHp         = chp;
+                    g_aimBestDepth      = screenTop.z;
+                    g_aimCandDist       = screenDist;
+                    g_aimCandTarget     = topWorld;
+                    g_aimCandValid      = true;
+                }
             }
         }
     }
@@ -1732,6 +1746,20 @@ void* hack_thread(void*) {
         } else {
             LOGE("Dobby get_CanMedkitOnMove FALHOU (r=%d)", r);
             hookLogWrite("ERRO: Dobby get_CanMedkitOnMove r=%d", r);
+        }
+    }
+
+    // Medkit andando (nuclear): Player::CancelPreparation() — impede cancelamento direto
+    {
+        void* addr = (void*)(il2cpp_base + OFF_CancelPreparation);
+        int r = DobbyHook(addr, (void*)Hook_CancelPreparation,
+                          (void**)&orig_CancelPreparation);
+        if (r == 0) {
+            LOGI("Dobby CancelPreparation OK: orig=%p", orig_CancelPreparation);
+            hookLogWrite("Dobby CancelPreparation: orig=%p", orig_CancelPreparation);
+        } else {
+            LOGE("Dobby CancelPreparation FALHOU (r=%d)", r);
+            hookLogWrite("ERRO: Dobby CancelPreparation r=%d", r);
         }
     }
 
