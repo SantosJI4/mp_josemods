@@ -58,7 +58,7 @@
   #define LOGE(...) ((void)0)
 #endif
 
-#define HOOK_BUILD_VER "v27-playerattr"
+#define HOOK_BUILD_VER "v28-wallcheck"
 
 // ============================================================
 // Hook Log File — SOMENTE em modo debug
@@ -377,6 +377,10 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 #define OFF_SetAimRotation          0x67718B8
 // m_CurrentAimRotation @ 0x1834 — Quaternion atual (para smooth/slerp)
 #define OFF_m_CurrentAimRotation    0x1834
+// Wall check — AttackableEntity::IsVisible() — game-native visibility query
+// Dump L645952: public virtual System.Boolean IsVisible() // 0x68C83F8
+// Player herda de AttackableEntity e NAO faz override → chamar direto por offset é correto.
+#define OFF_IsVisible               0x68C83F8
 
 // Camera Controller — CameraControllerBase::LateUpdate
 // Hookeado para aplicar aimbot/anti-recoil DEPOIS que o controlador posiciona a câmera.
@@ -425,6 +429,8 @@ static void*   (*fn_get_HeadCollider)(void* player, void* method) = nullptr;
 // _Injected: assinatura nativa real — sem SRET, ponteiro de saída em x1
 static void    (*fn_Collider_get_bounds_Injected)(void* collider, BoundsVal* outBounds, void* method) = nullptr;
 
+// Wall check — AttackableEntity::IsVisible() (v42)
+static bool (*fn_IsVisible)(void* self, void* method) = nullptr;
 // Speed hack — PlayerAttributes::GetWeaponRunSpeedScale(int) (v41)
 static float (*orig_GetWeaponRunSpeedScale)(void* self, int32_t weaponType, void* method) = nullptr;
 // Recoil — PlayerAttributes::GetScatterRate() (v41)
@@ -931,7 +937,9 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
         if (fovDeg < 1.0f || fovDeg > 90.0f) fovDeg = 90.0f;
         float fovRadiusPx = (float)screenW * (fovDeg / 90.0f) * 0.5f;
 
-        if (screenDist < fovRadiusPx) {
+        // v42: limite distância (120m) + wall check via IsVisible()
+        if (screenDist < fovRadiusPx && screenTop.z <= 120.0f &&
+            (!fn_IsVisible || fn_IsVisible(self, nullptr))) {
             int  priority = sharedData->aimTargetPriority;
             bool isBetter = false;
             if (priority == 1) {
@@ -1074,6 +1082,7 @@ void* hack_thread(void*) {
     fn_Collider_get_bounds_Injected  = RESOLVE_OFFSET(void(*)(void*, BoundsVal*, void*),  OFF_Collider_get_bounds_Injected);
     // Aimbot SetAimRotation
     fn_SetAimRotation = RESOLVE_OFFSET(SetAimRotationFn, OFF_SetAimRotation);
+    fn_IsVisible      = RESOLVE_OFFSET(bool(*)(void*, void*),              OFF_IsVisible);
     // Speed Hack — resolvido via VmtHook em UpdateVelocity (ver adiante)
 
     LOGI("Offsets resolvidos:");
