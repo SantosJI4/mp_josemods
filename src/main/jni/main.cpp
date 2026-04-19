@@ -44,6 +44,8 @@
 #include <android/log.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <sys/wait.h>
+#include <signal.h>
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -102,6 +104,70 @@ static bool medkitFastEnabled = false;
 static bool fastWeaponSwitch  = false;
 static bool medkitRunEnabled  = false;
 static bool drawNickName      = true;
+
+// ============================================================
+// Captura de Tela (v51)
+// Usa su + screencap/screenrecord — requer root no overlay APK
+// Arquivos salvos em /sdcard/DCIM/jawmods/
+// ============================================================
+static pid_t g_recordPid       = -1;
+static bool  g_recordingActive = false;
+static char  g_captureMsg[64]  = "";
+static float g_captureMsgTimer = 0.0f;
+
+static void setCaptureMsg(const char* msg) {
+    snprintf(g_captureMsg, sizeof(g_captureMsg), "%s", msg);
+    g_captureMsgTimer = 2.0f; // exibe por 2 segundos
+}
+
+static void doScreenshot() {
+    char cmd[320];
+    time_t t = time(nullptr);
+    snprintf(cmd, sizeof(cmd),
+        "su -c \"mkdir -p /sdcard/DCIM/jawmods && screencap -p /sdcard/DCIM/jawmods/ss_%ld.png\"",
+        (long)t);
+    pid_t pid = fork();
+    if (pid == 0) {
+        setsid();
+        execl("/system/bin/sh", "sh", "-c", cmd, nullptr);
+        _exit(0);
+    } else if (pid > 0) {
+        waitpid(pid, nullptr, 0);
+        setCaptureMsg("Screenshot salvo!");
+    } else {
+        setCaptureMsg("Erro: sem root?");
+    }
+}
+
+static void startRecording() {
+    char cmd[320];
+    time_t t = time(nullptr);
+    snprintf(cmd, sizeof(cmd),
+        "su -c \"mkdir -p /sdcard/DCIM/jawmods && screenrecord --bit-rate 8000000 /sdcard/DCIM/jawmods/rec_%ld.mp4\"",
+        (long)t);
+    pid_t pid = fork();
+    if (pid == 0) {
+        setsid();
+        execl("/system/bin/sh", "sh", "-c", cmd, nullptr);
+        _exit(0);
+    } else if (pid > 0) {
+        g_recordPid = pid;
+        g_recordingActive = true;
+        setCaptureMsg("Gravando...");
+    } else {
+        setCaptureMsg("Erro: sem root?");
+    }
+}
+
+static void stopRecording() {
+    if (g_recordPid > 0) {
+        kill(g_recordPid, SIGINT); // screenrecord salva o MP4 ao receber SIGINT
+        waitpid(g_recordPid, nullptr, WNOHANG);
+        g_recordPid = -1;
+    }
+    g_recordingActive = false;
+    setCaptureMsg("Gravacao salva!");
+}
 
 // ============================================================
 // Hotkeys State  (Linux keycodes: Vol- = 114, Vol+ = 115)
@@ -1120,6 +1186,26 @@ void DrawMenu() {
                 hotkeyEsp = (eidx == 1) ? 114 : (eidx == 2) ? 115 : 0;
 
             Sep();
+            // ── Captura de Tela (v51) ─────────────────────────────────────
+            ImGui::TextColored(cDimText, "CAPTURA  (requer root no overlay)");
+            ImGui::Spacing();
+            if (ImGui::Button("Screenshot", ImVec2(-1.0f, 28.0f)))
+                doScreenshot();
+            ImGui::Spacing();
+            if (g_recordingActive) {
+                // botao vermelho pulsante quando gravando
+                ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.7f, 0.0f, 0.0f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.9f, 0.1f, 0.1f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(1.0f, 0.2f, 0.2f, 1.0f));
+                if (ImGui::Button("PARAR Gravacao", ImVec2(-1.0f, 28.0f)))
+                    stopRecording();
+                ImGui::PopStyleColor(3);
+            } else {
+                if (ImGui::Button("Gravar Tela", ImVec2(-1.0f, 28.0f)))
+                    startRecording();
+            }
+            ImGui::Spacing();
+            Sep();
             if (ImGui::Button("Salvar Configuracoes", ImVec2(-1.0f, 28.0f)))
                 saveConfig();
             ImGui::EndTabItem();
@@ -1174,14 +1260,33 @@ void DrawMenu() {
 // ============================================================
 void onOverlayDraw(int screenW, int screenH) {
     // Gravar dimensoes como fallback SOMENTE se o hook ainda nao inicializou.
-    // Quando o hook esta ativo, ele sobrescreve screenW/H com a resolucao
-    // interna do jogo (Screen.width/height), que pode ser menor que a surface
-    // do overlay (ex: jogo em 720p, overlay em 1080p).
-    // Assim o overlay pode escalar corretamente as coordenadas W2S.
     if (sharedData && shmConnected.load() && sharedData->screenW <= 0) {
         sharedData->screenW = screenW;
         sharedData->screenH = screenH;
     }
+
+    // Atualizar timer do toast de captura
+    static uint64_t lastFrameUs = 0;
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    uint64_t nowUs = (uint64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
+    float dt = lastFrameUs ? (float)(nowUs - lastFrameUs) / 1000000.0f : 0.016f;
+    lastFrameUs = nowUs;
+    if (g_captureMsgTimer > 0.0f) g_captureMsgTimer -= dt;
+
+    // Toast de captura (aparece sobre tudo)
+    if (g_captureMsgTimer > 0.0f && g_captureMsg[0]) {
+        ImDrawList* bg = ImGui::GetBackgroundDrawList();
+        ImVec2 center((float)screenW * 0.5f, (float)screenH * 0.85f);
+        ImVec2 tsz = ImGui::CalcTextSize(g_captureMsg);
+        float alpha = (g_captureMsgTimer > 0.5f) ? 1.0f : (g_captureMsgTimer / 0.5f);
+        bg->AddRectFilled(
+            ImVec2(center.x - tsz.x * 0.5f - 10, center.y - tsz.y * 0.5f - 6),
+            ImVec2(center.x + tsz.x * 0.5f + 10, center.y + tsz.y * 0.5f + 6),
+            IM_COL32(0, 0, 0, (int)(180 * alpha)), 8.0f);
+        bg->AddText(ImVec2(center.x - tsz.x * 0.5f, center.y - tsz.y * 0.5f),
+            IM_COL32(255, 255, 255, (int)(255 * alpha)), g_captureMsg);
+    }
+
     DrawESP(screenW, screenH);
     DrawMenu();
 }
