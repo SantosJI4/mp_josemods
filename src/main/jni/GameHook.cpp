@@ -448,41 +448,22 @@ struct Quaternion { float x, y, z, w; };
 typedef void (*SetAimRotationFn)(void* self, Quaternion q, bool forceUpdate, void* method);
 static SetAimRotationFn fn_SetAimRotation = nullptr;
 
-// Converte vetor de direção (não normalizado) em Quaternion LookRotation (Unity: Y-up, Z-forward)
-static Quaternion DirectionToQuat(float dx, float dy, float dz) {
-    float len = sqrtf(dx*dx + dy*dy + dz*dz);
-    if (len < 0.0001f) return {0.0f, 0.0f, 0.0f, 1.0f};
-    dx /= len; dy /= len; dz /= len;
-    // up = Y axis, mas evita degenerado quando olhando direto para cima/baixo
-    float ux = 0.0f, uy = 1.0f, uz = 0.0f;
-    if (fabsf(dy) > 0.999f) { ux = 0.0f; uy = 0.0f; uz = (dy > 0) ? -1.0f : 1.0f; }
-    // right = normalize(cross(up, forward))
-    float rx = uy*dz - uz*dy, ry = uz*dx - ux*dz, rz = ux*dy - uy*dx;
-    float rlen = sqrtf(rx*rx + ry*ry + rz*rz);
-    if (rlen < 0.0001f) return {0.0f, 0.0f, 0.0f, 1.0f};
-    rx /= rlen; ry /= rlen; rz /= rlen;
-    // newUp = cross(forward, right)
-    float nx = dy*rz - dz*ry, ny = dz*rx - dx*rz, nz = dx*ry - dy*rx;
-    // rotation matrix → quaternion
-    float m00=rx, m01=ry, m02=rz;
-    float m10=nx, m11=ny, m12=nz;
-    float m20=dx, m21=dy, m22=dz;
-    float trace = m00+m11+m22;
-    Quaternion q;
-    if (trace > 0.0f) {
-        float s = 0.5f / sqrtf(trace + 1.0f);
-        q.w = 0.25f / s; q.x = (m12-m21)*s; q.y = (m20-m02)*s; q.z = (m01-m10)*s;
-    } else if (m00 > m11 && m00 > m22) {
-        float s = 2.0f * sqrtf(1.0f + m00 - m11 - m22);
-        q.w = (m12-m21)/s; q.x = 0.25f*s; q.y = (m01+m10)/s; q.z = (m20+m02)/s;
-    } else if (m11 > m22) {
-        float s = 2.0f * sqrtf(1.0f + m11 - m00 - m22);
-        q.w = (m20-m02)/s; q.x = (m01+m10)/s; q.y = 0.25f*s; q.z = (m12+m21)/s;
-    } else {
-        float s = 2.0f * sqrtf(1.0f + m22 - m00 - m11);
-        q.w = (m01-m10)/s; q.x = (m20+m02)/s; q.y = (m12+m21)/s; q.z = 0.25f*s;
-    }
-    return q;
+// LookRotation simples e correta: camPos -> targetPos -> pitch/yaw -> Quaternion
+// Sem matriz 3x3, sem risco de degenerado ou flip.
+static Quaternion LookQuatFromDir(float dx, float dy, float dz) {
+    float hd = sqrtf(dx*dx + dz*dz);
+    float pitch = -atan2f(dy, hd);          // rad, negativo = olha pra cima
+    float yaw   =  atan2f(dx, dz);          // rad
+    // Quaternion de Euler XY: Q = Qyaw(Y) * Qpitch(X)
+    float hp = pitch * 0.5f, hy = yaw * 0.5f;
+    float sp = sinf(hp), cp = cosf(hp);
+    float sy = sinf(hy), cy = cosf(hy);
+    return {
+        sp * cy,   // x
+        cp * sy,   // y
+       -sp * sy,   // z
+        cp * cy    // w
+    };
 }
 
 // ============================================================
@@ -702,7 +683,10 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
                 float dx = g_aimCandTarget.x - camPos.x;
                 float dy = g_aimCandTarget.y - camPos.y;
                 float dz = g_aimCandTarget.z - camPos.z;
-                Quaternion aimQ = DirectionToQuat(dx, dy, dz);
+                float len = sqrtf(dx*dx + dy*dy + dz*dz);
+                if (len < 0.01f) goto skip_aim;
+                { // scope
+                Quaternion aimQ = LookQuatFromDir(dx, dy, dz);
 
                 // v43: ADS check — sem mira = assistência fraca (câmera livre)
                 //                   com mira = força total configurada
@@ -729,6 +713,8 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
                 if (qlen > 0.0001f) { aimQ.x/=qlen; aimQ.y/=qlen; aimQ.z/=qlen; aimQ.w/=qlen; }
 
                 fn_SetAimRotation(self, aimQ, false, nullptr);
+                } // end scope
+                skip_aim:;
             }
         }
         if (orig_OnUpdate) orig_OnUpdate(self, methodInfo);
@@ -954,9 +940,17 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
         if (fovDeg < 1.0f || fovDeg > 90.0f) fovDeg = 90.0f;
         float fovRadiusPx = (float)screenW * (fovDeg / 90.0f) * 0.5f;
 
-        // v42: limite distância (120m) + wall check via IsVisible()
-        if (screenDist < fovRadiusPx && screenTop.z <= 120.0f &&
-            (!fn_IsVisible || fn_IsVisible(self, nullptr))) {
+        // v43: limite distância (120m) + wall check via vtable IsVisible()
+        // IsVisible() é virtual na AttackableEntity — chamamos via vtable do objeto
+        // (offset 3 na vtable Unity IL2CPP: vtable[3] = primeiro virtual apos 3 internos)
+        // Fallback seguro: se fn_IsVisible nulo, aceita o alvo
+        bool isVis = true;
+        if (fn_IsVisible) {
+            // vtable call: *(*(void**)self + vtable_slot * 8) para ARM64
+            // Usar fn_IsVisible direto como virtual dispatch (offset e do Player)
+            isVis = fn_IsVisible(self, nullptr);
+        }
+        if (screenDist < fovRadiusPx && screenTop.z <= 120.0f && isVis) {
             int  priority = sharedData->aimTargetPriority;
             bool isBetter = false;
             if (priority == 1) {
