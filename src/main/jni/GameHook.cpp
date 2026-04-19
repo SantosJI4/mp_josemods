@@ -58,7 +58,7 @@
   #define LOGE(...) ((void)0)
 #endif
 
-#define HOOK_BUILD_VER "v31-quatfix"
+#define HOOK_BUILD_VER "v32-fullcapa"
 
 // ============================================================
 // Hook Log File — SOMENTE em modo debug
@@ -693,32 +693,26 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
                 { // scope
                 Quaternion aimQ = LookQuatFromDir(dx, dy, dz);
 
-                // v44: aimbot só quando IsFiring==true
-                // Lógica única forte: usa smooth configurado pelo usuário (ADS ou hip-fire)
-                // Sem ADS a maioria dos jogadores não atira — condição IsFiring garante
-                // que a câmera só é forçada durante o disparo real.
+                // v46 fullcapa: aimbot só quando IsFiring==true
+                // Snap direto sem lerp — forceUpdate=true garante aplicação imediata.
+                // aimRageOffsetY eleva levemente o alvo para cobrir o topo da cabeça.
                 bool isFiring = fn_IsFiring && fn_IsFiring(self, nullptr);
                 if (!isFiring) goto skip_aim;
 
                 {
-                float smooth = sharedData->aimbotSmooth;
-                // Clamp: garante lerp suave sem snap nem trava
-                if (smooth < 0.01f) smooth = 0.01f;
-                if (smooth > 0.98f) smooth = 0.98f;
+                // Aplicar offset vertical (rage) sobre a posição do alvo
+                float rageOff = sharedData->aimRageOffsetY;
+                if (rageOff != 0.0f) {
+                    // recalcula direção com offset Y
+                    float ody = dy + rageOff;
+                    aimQ = LookQuatFromDir(dx, ody, dz);
+                }
+                // FIX v45: shortest-arc check — sem isso dot<0 inverte a câmera
                 Quaternion curQ = *(Quaternion*)((uint8_t*)self + OFF_m_CurrentAimRotation);
-                // FIX v45: shortest-arc check — sem isso dot<0 faz lerp ir pelo caminho
-                // longo (>180°) invertendo a câmera. Negar aimQ garante arco curto.
                 float dot = curQ.x*aimQ.x + curQ.y*aimQ.y + curQ.z*aimQ.z + curQ.w*aimQ.w;
                 if (dot < 0.0f) { aimQ.x=-aimQ.x; aimQ.y=-aimQ.y; aimQ.z=-aimQ.z; aimQ.w=-aimQ.w; }
-                float t = 1.0f - smooth;
-                aimQ.x = curQ.x + (aimQ.x - curQ.x) * t;
-                aimQ.y = curQ.y + (aimQ.y - curQ.y) * t;
-                aimQ.z = curQ.z + (aimQ.z - curQ.z) * t;
-                aimQ.w = curQ.w + (aimQ.w - curQ.w) * t;
-                float qlen = sqrtf(aimQ.x*aimQ.x + aimQ.y*aimQ.y + aimQ.z*aimQ.z + aimQ.w*aimQ.w);
-                if (qlen > 0.0001f) { aimQ.x/=qlen; aimQ.y/=qlen; aimQ.z/=qlen; aimQ.w/=qlen; }
-
-                fn_SetAimRotation(self, aimQ, false, nullptr);
+                // Snap instantâneo — sem lerp, força máxima
+                fn_SetAimRotation(self, aimQ, true, nullptr);
                 } // end firing scope
                 } // end scope
                 skip_aim:;
