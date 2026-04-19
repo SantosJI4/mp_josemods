@@ -1159,7 +1159,7 @@ void DrawMenu() {
         IM_COL32(28, 30, 33, 255));
 
     ImGui::SetCursorPos(ImVec2(14.0f, winH - FOOTER_H + 8.0f));
-    ImGui::TextColored(cDimText, "jawmods.app  v29");
+    ImGui::TextColored(cDimText, "jawmods.app  v49");
 
     } // end !menuMinimized
 
