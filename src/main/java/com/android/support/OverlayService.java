@@ -70,7 +70,6 @@ public class OverlayService extends Service {
 
     /**
      * Cria a surface OpenGL fullscreen para rendering do ImGui
-     * FLAG_SECURE = Exclusão de Captura de Tela
      */
     private void createOverlaySurface(int screenW, int screenH) {
         overlayParams = new WindowManager.LayoutParams(
@@ -83,8 +82,7 @@ public class OverlayService extends Service {
                         | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                         | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
                         | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-                        | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
-                        | WindowManager.LayoutParams.FLAG_SECURE, // EXCLUSÃO DE CAPTURA
+                        | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
                 PixelFormat.TRANSLUCENT
         );
         overlayParams.gravity = Gravity.TOP | Gravity.START;

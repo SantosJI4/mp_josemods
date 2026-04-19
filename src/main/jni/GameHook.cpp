@@ -58,7 +58,7 @@
   #define LOGE(...) ((void)0)
 #endif
 
-#define HOOK_BUILD_VER "v28-wallcheck"
+#define HOOK_BUILD_VER "v29-ads-aim"
 
 // ============================================================
 // Hook Log File — SOMENTE em modo debug
@@ -381,6 +381,9 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 // Dump L645952: public virtual System.Boolean IsVisible() // 0x68C83F8
 // Player herda de AttackableEntity e NAO faz override → chamar direto por offset é correto.
 #define OFF_IsVisible               0x68C83F8
+// ADS check — Player::get_IsSighting() — true quando o player está mirando (ADS)
+// Dump L653775: public System.Boolean get_IsSighting() // 0x676689C
+#define OFF_get_IsSighting          0x676689C
 
 // Camera Controller — CameraControllerBase::LateUpdate
 // Hookeado para aplicar aimbot/anti-recoil DEPOIS que o controlador posiciona a câmera.
@@ -431,6 +434,8 @@ static void    (*fn_Collider_get_bounds_Injected)(void* collider, BoundsVal* out
 
 // Wall check — AttackableEntity::IsVisible() (v42)
 static bool (*fn_IsVisible)(void* self, void* method) = nullptr;
+// ADS check — Player::get_IsSighting() (v43)
+static bool (*fn_get_IsSighting)(void* self, void* method) = nullptr;
 // Speed hack — PlayerAttributes::GetWeaponRunSpeedScale(int) (v41)
 static float (*orig_GetWeaponRunSpeedScale)(void* self, int32_t weaponType, void* method) = nullptr;
 // Recoil — PlayerAttributes::GetScatterRate() (v41)
@@ -698,19 +703,31 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
                 float dy = g_aimCandTarget.y - camPos.y;
                 float dz = g_aimCandTarget.z - camPos.z;
                 Quaternion aimQ = DirectionToQuat(dx, dy, dz);
-                float smooth = sharedData->aimbotSmooth;
-                if (smooth > 0.01f && smooth < 0.95f) {
-                    // Lerp suave com m_CurrentAimRotation
-                    Quaternion curQ = *(Quaternion*)((uint8_t*)self + OFF_m_CurrentAimRotation);
-                    float t = 1.0f - smooth;
-                    aimQ.x = curQ.x + (aimQ.x - curQ.x) * t;
-                    aimQ.y = curQ.y + (aimQ.y - curQ.y) * t;
-                    aimQ.z = curQ.z + (aimQ.z - curQ.z) * t;
-                    aimQ.w = curQ.w + (aimQ.w - curQ.w) * t;
-                    // normalizar
-                    float qlen = sqrtf(aimQ.x*aimQ.x + aimQ.y*aimQ.y + aimQ.z*aimQ.z + aimQ.w*aimQ.w);
-                    if (qlen > 0.0001f) { aimQ.x/=qlen; aimQ.y/=qlen; aimQ.z/=qlen; aimQ.w/=qlen; }
+
+                // v43: ADS check — sem mira = assistência fraca (câmera livre)
+                //                   com mira = força total configurada
+                bool isSighting = fn_get_IsSighting && fn_get_IsSighting(self, nullptr);
+                float smooth;
+                if (!isSighting) {
+                    // Sem ADS: smooth muito alto = aimbot quase invisível, câmera livre
+                    smooth = 0.92f;
+                } else {
+                    // Com ADS: usa o smooth configurado pelo usuário
+                    smooth = sharedData->aimbotSmooth;
                 }
+
+                // Sempre aplica lerp (smooth nunca zero para evitar snap abrupto)
+                if (smooth < 0.01f) smooth = 0.01f;
+                if (smooth > 0.98f) smooth = 0.98f;
+                Quaternion curQ = *(Quaternion*)((uint8_t*)self + OFF_m_CurrentAimRotation);
+                float t = 1.0f - smooth;
+                aimQ.x = curQ.x + (aimQ.x - curQ.x) * t;
+                aimQ.y = curQ.y + (aimQ.y - curQ.y) * t;
+                aimQ.z = curQ.z + (aimQ.z - curQ.z) * t;
+                aimQ.w = curQ.w + (aimQ.w - curQ.w) * t;
+                float qlen = sqrtf(aimQ.x*aimQ.x + aimQ.y*aimQ.y + aimQ.z*aimQ.z + aimQ.w*aimQ.w);
+                if (qlen > 0.0001f) { aimQ.x/=qlen; aimQ.y/=qlen; aimQ.z/=qlen; aimQ.w/=qlen; }
+
                 fn_SetAimRotation(self, aimQ, false, nullptr);
             }
         }
@@ -1083,6 +1100,7 @@ void* hack_thread(void*) {
     // Aimbot SetAimRotation
     fn_SetAimRotation = RESOLVE_OFFSET(SetAimRotationFn, OFF_SetAimRotation);
     fn_IsVisible      = RESOLVE_OFFSET(bool(*)(void*, void*),              OFF_IsVisible);
+    fn_get_IsSighting = RESOLVE_OFFSET(bool(*)(void*, void*),              OFF_get_IsSighting);
     // Speed Hack — resolvido via VmtHook em UpdateVelocity (ver adiante)
 
     LOGI("Offsets resolvidos:");
