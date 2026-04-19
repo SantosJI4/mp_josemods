@@ -102,11 +102,11 @@ struct SharedESPData {
     volatile int fastWeaponSwitch;   // 1 = troca de arma instantânea (InSwapWeaponCD=false)
     volatile int medkitRunEnabled;   // 1 = usar medkit correndo (CanMedkitOnMove=true)
 
-    // ── Silent Fire (v55) ─────────────────────────────────────────────────
-    // Hook em GetFireDirection: bala vai para cabeça do alvo sem mover a câmera.
-    // Diferente do Aimbot (que move a câmera), a mira NÃO se mexe — apenas a bala.
-    volatile int silentFireEnabled;      // 1 = ativo
-    volatile int silentFireHasTarget;    // Hook escreve 1 quando há alvo válido no ESP
+    // ── Auto Aim (v59) ───────────────────────────────────────────────────────
+    // Troca de arma → snap automático na cabeça do inimigo + disparo automático.
+    // OnChangeWeaponFinished hook → g_pendingAutoFire → snap + OnTriggerShoot(VVP).
+    volatile int autoAimEnabled;         // 1 = ativo
+    volatile int autoAimHasTarget;       // Hook escreve 1 quando há alvo válido no ESP
 
     ESPEntry players[MAX_ESP_PLAYERS];
 };

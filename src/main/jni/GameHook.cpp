@@ -59,7 +59,7 @@
   #define LOGE(...) ((void)0)
 #endif
 
-#define HOOK_BUILD_VER "v42-silentfire-fix"
+#define HOOK_BUILD_VER "v43-autoaim"
 
 // ============================================================
 // Hook Log File — SOMENTE em modo debug
@@ -429,6 +429,17 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 // Dump L714457: public float get_SkillScatterRateSighting() // 0x7261E98
 #define OFF_get_SkillScatterRateSighting 0x7261E98
 
+// ── Auto Aim (v59) — disparo automático ao trocar de arma ──────────────────
+// Player::OnChangeWeaponFinished() — chamado ao terminar animação de troca de arma
+// Dump L652277: public System.Void OnChangeWeaponFinished() // 0x67D5678
+#define OFF_OnChangeWeaponFinished   0x67D5678
+// VerticleViewPlayer::LateUpdate — DobbyHook para capturar self do VVP e disparar
+// Dump: private System.Void LateUpdate() // 0x75EB88C
+#define OFF_VVP_LateUpdate           0x75EB88C
+// VerticleViewPlayer::OnTriggerShoot(bool isSkill) — dispara a arma
+// Dump: public System.Void OnTriggerShoot(bool) // 0x75ED800
+#define OFF_OnTriggerShoot_VVP       0x75ED800
+
 // ============================================================
 // Function Pointers — resolvidos via base + offset direto
 // ============================================================
@@ -505,6 +516,12 @@ static float (*orig_get_EatSpeedScale)(void* self, void* method) = nullptr;
 // ── Anti-recoil adicional (v55) ──────────────────────────────────────────────
 static float (*orig_get_SkillScatterRate)(void* self, void* method) = nullptr;
 static float (*orig_get_SkillScatterRateSighting)(void* self, void* method) = nullptr;
+
+// ── Auto Aim (v59) ───────────────────────────────────────────────────────────
+typedef void (*OnTriggerShootFn)(void* self, bool isSkill, void* method);
+static OnTriggerShootFn fn_OnTriggerShoot = nullptr;
+static void (*orig_OnChangeWeaponFinished)(void* self, void* method) = nullptr;
+static void (*orig_VVP_LateUpdate)(void* self, void* method) = nullptr;
 
 // Aimbot — Player::SetAimRotation
 struct Quaternion { float x, y, z, w; };
@@ -672,6 +689,8 @@ static Angles CalculateViewAngle(Vector3 src, Vector3 dst) {
 static Vector3 g_aimCandTarget{0.0f, 0.0f, 0.0f};  // melhor alvo deste frame
 static float   g_aimCandDist  = 1e9f;
 static bool    g_aimCandValid = false;
+static std::atomic<int>  g_pendingAutoFire{0};  // countdown de frames para disparo automático
+static std::atomic<bool> g_doAutoFire{false};   // sinaliza Hook_VVP_LateUpdate para disparar
 static void*   g_localPlayer  = nullptr;  // ponteiro do player local (cache por frame)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -806,6 +825,33 @@ static float Hook_get_SkillScatterRateSighting(void* self, void* method) {
 }
 
 // ============================================================
+// AUTO AIM — Player::OnChangeWeaponFinished
+// Chamado quando a animação de troca de arma termina.
+// Se autoAimEnabled + alvo válido → inicia countdown de auto-fire.
+// ============================================================
+static void Hook_OnChangeWeaponFinished(void* self, void* method) {
+    if (orig_OnChangeWeaponFinished) orig_OnChangeWeaponFinished(self, method);
+    if (!self || !sharedData || !hookActive.load()) return;
+    if (!sharedData->autoAimEnabled) return;
+    if (!fn_IsLocalPlayer || !fn_IsLocalPlayer(self, nullptr)) return;
+    if (g_aimCandValid) {
+        g_pendingAutoFire.store(4);  // snap no frame 0, dispara no frame 0 do VVP
+    }
+}
+
+// ============================================================
+// AUTO AIM — VerticleViewPlayer::LateUpdate
+// Captura o self do VVP (classe correta para OnTriggerShoot).
+// Quando g_doAutoFire=true, dispara uma bala automática.
+// ============================================================
+static void Hook_VVP_LateUpdate(void* self, void* method) {
+    if (orig_VVP_LateUpdate) orig_VVP_LateUpdate(self, method);
+    if (g_doAutoFire.exchange(false) && fn_OnTriggerShoot && self) {
+        fn_OnTriggerShoot(self, false, nullptr);
+    }
+}
+
+// ============================================================
 // HOOK DA CÂMERA — CameraControllerBase::LateUpdate
 // Aplicado DEPOIS que o controlador posiciona a câmera.
 // Aimbot e anti-recoil correm aqui (v33).
@@ -844,17 +890,9 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
         // Cachear PlayerAttributes do player local para filtro nos hooks de speed/recoil
         void* attrPtr = *(void**)((uint8_t*)self + OFF_PlayerAttributes_field);
         if (attrPtr && (uintptr_t)attrPtr > 0x1000) g_localPlayerAttr = attrPtr;
-        // ── Aimbot (câmera) e Silent Fire (bala redireciona) ─────────────────
-        // Ambos usam SetAimRotation para direcionar a bala.
-        // silentAimEnabled: snap contínuo enquanto dispara (câmera se move com alvo).
-        // silentFireEnabled: snap apenas no frame do disparo + restaura após orig
-        //                    → câmera NÃO se move visivelmente para o player.
-        bool doSnap  = false;
-        bool doRestore = false;
-        Quaternion savedAimQ = {};
-
+        // ── Aimbot (câmera): snap contínuo enquanto dispara ──────────────────
         if (g_aimCandValid && fn_SetAimRotation && g_camTransform && fn_get_position &&
-            (sharedData->silentAimEnabled || sharedData->silentFireEnabled)) {
+            sharedData->silentAimEnabled) {
 
             bool isFiring = fn_IsFiring && fn_IsFiring(self, nullptr);
             if (isFiring) {
@@ -865,23 +903,42 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
                     float dz = g_aimCandTarget.z - camPos.z;
                     float len = sqrtf(dx*dx + dy*dy + dz*dz);
                     if (len >= 0.01f) {
-                        // Offset vertical (rage aim)
                         float rageOff = sharedData->aimRageOffsetY;
                         if (rageOff != 0.0f) dy += rageOff;
                         Quaternion aimQ = LookQuatFromDir(dx, dy, dz);
-                        // Shortest-arc: evita inversão de câmera
                         Quaternion curQ = *(Quaternion*)((uint8_t*)self + OFF_m_CurrentAimRotation);
                         float dot = curQ.x*aimQ.x + curQ.y*aimQ.y + curQ.z*aimQ.z + curQ.w*aimQ.w;
                         if (dot < 0.0f) {
                             aimQ.x=-aimQ.x; aimQ.y=-aimQ.y; aimQ.z=-aimQ.z; aimQ.w=-aimQ.w;
                         }
-                        if (sharedData->silentFireEnabled && !sharedData->silentAimEnabled) {
-                            // Silent Fire: salva rotação atual para restaurar após orig
-                            savedAimQ = curQ;
-                            doRestore = true;
+                        fn_SetAimRotation(self, aimQ, true, nullptr);
+                    }
+                }
+            }
+        }
+
+        // ── Auto Aim: snap + sinaliza disparo no último frame do countdown ───
+        if (sharedData->autoAimEnabled && g_pendingAutoFire.load() > 0) {
+            int pending = g_pendingAutoFire.fetch_sub(1) - 1;
+            if (pending == 0 && g_aimCandValid &&
+                fn_SetAimRotation && g_camTransform && fn_get_position) {
+                Vector3 camPos = fn_get_position(g_camTransform, nullptr);
+                if (!std::isnan(camPos.x) && !std::isnan(camPos.y) && !std::isnan(camPos.z)) {
+                    float dx = g_aimCandTarget.x - camPos.x;
+                    float dy = g_aimCandTarget.y - camPos.y;
+                    float dz = g_aimCandTarget.z - camPos.z;
+                    float len = sqrtf(dx*dx + dy*dy + dz*dz);
+                    if (len >= 0.01f) {
+                        float rageOff = sharedData->aimRageOffsetY;
+                        if (rageOff != 0.0f) dy += rageOff;
+                        Quaternion aimQ = LookQuatFromDir(dx, dy, dz);
+                        Quaternion curQ = *(Quaternion*)((uint8_t*)self + OFF_m_CurrentAimRotation);
+                        float dot = curQ.x*aimQ.x + curQ.y*aimQ.y + curQ.z*aimQ.z + curQ.w*aimQ.w;
+                        if (dot < 0.0f) {
+                            aimQ.x=-aimQ.x; aimQ.y=-aimQ.y; aimQ.z=-aimQ.z; aimQ.w=-aimQ.w;
                         }
                         fn_SetAimRotation(self, aimQ, true, nullptr);
-                        doSnap = true;
+                        g_doAutoFire.store(true);
                     }
                 }
             }
@@ -889,10 +946,6 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
 
         if (orig_OnUpdate) orig_OnUpdate(self, methodInfo);
 
-        // Silent Fire: restaura rotação original após orig (câmera não muda)
-        if (doRestore && fn_SetAimRotation) {
-            fn_SetAimRotation(self, savedAimQ, true, nullptr);
-        }
         return;
     }
     // ─────────────────────────────────────────────────────────────────────────
@@ -985,8 +1038,8 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
         // HUD: tinha alvo no frame anterior?
         sharedData->aimAssistHasTarget =
             (g_aimCandValid && sharedData->silentAimEnabled) ? 1 : 0;
-        // Silent Fire: atualiza indicador de alvo independente do aimbot
-        sharedData->silentFireHasTarget = g_aimCandValid ? 1 : 0;
+        // Auto Aim: atualiza indicador de alvo
+        sharedData->autoAimHasTarget = g_aimCandValid ? 1 : 0;
 
         // Resetar candidatos para este frame
         g_aimBestScreenDist = 1e9f;
@@ -1109,11 +1162,11 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     float dY = screenTop.y - screenH * 0.5f;
     float screenDist = sqrtf(dX * dX + dY * dY);
 
-    // ── Seleção de candidato ao alvo (aimbot câmera E/OU silent fire) ─────────
-    // silentAimEnabled  → aimbot câmera (snap pré/pós LateUpdate)
-    // silentFireEnabled → bala vai para a cabeça, câmera NÃO se move
+    // ── Seleção de candidato ao alvo (aimbot câmera E/OU auto aim) ──────────────
+    // silentAimEnabled → aimbot câmera (snap contínuo enquanto dispara)
+    // autoAimEnabled   → auto-snap + disparo automático ao trocar de arma
     // Ambos usam g_aimCandTarget — selecionamos para qualquer um dos dois ativos.
-    if ((sharedData->silentAimEnabled || sharedData->silentFireEnabled) && chp > 0) {
+    if ((sharedData->silentAimEnabled || sharedData->autoAimEnabled) && chp > 0) {
         // v43: wall check via vtable IsVisible()
         bool isVis = true;
         if (fn_IsVisible) {
@@ -1128,8 +1181,8 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
                 float fovRadiusPx = (float)screenW * (fovDeg / 90.0f) * 0.5f;
                 inFov = (screenDist < fovRadiusPx);
             }
-            // Silent fire sem aimbot ativo: sem restrição FOV — pega alvo mais
-            // próximo ao centro (ideal para redirecionar a bala naturalmente).
+            // Auto Aim sem aimbot: sem restrição FOV — pega alvo mais próximo
+            // ao centro (cabeça do inimigo mais acessível na tela).
             if (inFov) {
                 int  priority = sharedData->aimTargetPriority;
                 bool isBetter = false;
@@ -1281,6 +1334,8 @@ void* hack_thread(void*) {
     fn_IsVisible      = RESOLVE_OFFSET(bool(*)(void*, void*),              OFF_IsVisible);
     fn_get_IsSighting = RESOLVE_OFFSET(bool(*)(void*, void*),              OFF_get_IsSighting);
     fn_IsFiring       = RESOLVE_OFFSET(bool(*)(void*, void*),              OFF_IsFiring);
+    // Auto Aim (v59) — OnTriggerShoot: disparar uma bala na VerticleViewPlayer
+    fn_OnTriggerShoot = RESOLVE_OFFSET(OnTriggerShootFn, OFF_OnTriggerShoot_VVP);
     // Player Hacks (v49) — get_NickName só chamado (não hookeado)
     fn_get_NickName   = RESOLVE_OFFSET(void*(*)(void*, void*),             OFF_get_NickName);
     // Speed Hack — resolvido via VmtHook em UpdateVelocity (ver adiante)
@@ -1780,6 +1835,34 @@ void* hack_thread(void*) {
         } else {
             LOGE("Dobby get_SkillScatterRateSighting FALHOU (r=%d)", r);
             hookLogWrite("ERRO: Dobby get_SkillScatterRateSighting r=%d", r);
+        }
+    }
+
+    // Auto Aim: Player::OnChangeWeaponFinished() — detecta fim da troca de arma
+    {
+        void* addr = (void*)(il2cpp_base + OFF_OnChangeWeaponFinished);
+        int r = DobbyHook(addr, (void*)Hook_OnChangeWeaponFinished,
+                          (void**)&orig_OnChangeWeaponFinished);
+        if (r == 0) {
+            LOGI("Dobby OnChangeWeaponFinished OK: orig=%p", orig_OnChangeWeaponFinished);
+            hookLogWrite("Dobby OnChangeWeaponFinished: orig=%p", orig_OnChangeWeaponFinished);
+        } else {
+            LOGE("Dobby OnChangeWeaponFinished FALHOU (r=%d)", r);
+            hookLogWrite("ERRO: Dobby OnChangeWeaponFinished r=%d", r);
+        }
+    }
+
+    // Auto Aim: VerticleViewPlayer::LateUpdate — disparo automático
+    {
+        void* addr = (void*)(il2cpp_base + OFF_VVP_LateUpdate);
+        int r = DobbyHook(addr, (void*)Hook_VVP_LateUpdate,
+                          (void**)&orig_VVP_LateUpdate);
+        if (r == 0) {
+            LOGI("Dobby VVP_LateUpdate OK: orig=%p", orig_VVP_LateUpdate);
+            hookLogWrite("Dobby VVP_LateUpdate: orig=%p", orig_VVP_LateUpdate);
+        } else {
+            LOGE("Dobby VVP_LateUpdate FALHOU (r=%d)", r);
+            hookLogWrite("ERRO: Dobby VVP_LateUpdate r=%d", r);
         }
     }
 

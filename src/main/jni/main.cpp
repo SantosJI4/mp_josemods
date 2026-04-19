@@ -103,7 +103,7 @@ static bool ammoEnabled       = false;
 static bool medkitFastEnabled = false;
 static bool fastWeaponSwitch  = false;
 static bool medkitRunEnabled  = false;
-static bool silentFire        = false;  // v55: silent aim (bala vai para cabeça sem mover câmera)
+static bool autoAim           = false;  // v59: auto aim (snap + disparo ao trocar arma)
 static bool drawNickName      = true;
 
 // ============================================================
@@ -321,7 +321,7 @@ void DrawESP(int screenW, int screenH) {
     sharedData->medkitFastEnabled  = medkitFastEnabled ? 1 : 0;
     sharedData->fastWeaponSwitch   = fastWeaponSwitch  ? 1 : 0;
     sharedData->medkitRunEnabled   = medkitRunEnabled  ? 1 : 0;
-    sharedData->silentFireEnabled  = silentFire        ? 1 : 0;
+    sharedData->autoAimEnabled        = autoAim          ? 1 : 0;
     // triggerHeld é gerenciado exclusivamente pelo hotkeyThread
     // ────────────────────────────────────────────────────────────────────────
 
@@ -569,7 +569,7 @@ struct JawConfig {
     uint8_t  medkitRunEnabled;
     uint8_t  drawNickName;
     // v10 fields
-    uint8_t  silentFire;  // silent aim (bala vai para cabeça)
+    uint8_t  autoAim;  // auto aim (snap + disparo ao trocar arma)
 };
 #pragma pack(pop)
 
@@ -612,7 +612,7 @@ static void saveConfig() {
     c.fastWeaponSwitch   = fastWeaponSwitch;
     c.medkitRunEnabled   = medkitRunEnabled;
     c.drawNickName       = drawNickName;
-    c.silentFire         = silentFire;
+    c.autoAim            = autoAim;
     int fd = open(JAW_CONFIG_PATH, O_CREAT | O_WRONLY | O_TRUNC, 0666);
     if (fd >= 0) { write(fd, &c, sizeof(c)); close(fd); }
 }
@@ -657,7 +657,7 @@ static void loadConfig() {
     fastWeaponSwitch   = c.fastWeaponSwitch;
     medkitRunEnabled   = c.medkitRunEnabled;
     drawNickName       = c.drawNickName;
-    silentFire         = c.silentFire;
+    autoAim            = c.autoAim;
 }
 
 // ============================================================
@@ -1149,19 +1149,19 @@ void DrawMenu() {
             }
             Sep();
 
-            // Silent Aim — bala vai para cabeça do alvo sem mover a câmera
-            bool prevSF = silentFire;
-            ToggleRow("Silent Aim", &silentFire);
-            if (silentFire != prevSF && sharedData)
-                sharedData->silentFireEnabled = silentFire ? 1 : 0;
-            if (silentFire) {
+            // Auto Aim — snap na cabeça + disparo automático ao trocar de arma
+            bool prevAA = autoAim;
+            ToggleRow("Auto Aim", &autoAim);
+            if (autoAim != prevAA && sharedData)
+                sharedData->autoAimEnabled = autoAim ? 1 : 0;
+            if (autoAim) {
                 ImGui::Spacing();
-                bool hasTarget = sharedData && sharedData->silentFireHasTarget;
+                bool hasTarget = sharedData && sharedData->autoAimHasTarget;
                 float rw = ImGui::GetContentRegionAvail().x;
                 if (hasTarget) {
-                    float tw = ImGui::CalcTextSize("[ BALA -> CABECA ]").x;
+                    float tw = ImGui::CalcTextSize("[ AUTO FIRE ]").x;
                     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (rw - tw) * 0.5f);
-                    ImGui::TextColored(cGreen, "[ BALA -> CABECA ]");
+                    ImGui::TextColored(cGreen, "[ AUTO FIRE ]");
                 } else {
                     float tw = ImGui::CalcTextSize("Sem alvo no ESP").x;
                     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (rw - tw) * 0.5f);
