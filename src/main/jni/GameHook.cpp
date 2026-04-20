@@ -59,7 +59,7 @@
   #define LOGE(...) ((void)0)
 #endif
 
-#define HOOK_BUILD_VER "v59-fix3"
+#define HOOK_BUILD_VER "v59-fix4"
 
 // ============================================================
 // Hook Log File — SOMENTE em modo debug
@@ -429,17 +429,16 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 // Dump L714457: public float get_SkillScatterRateSighting() // 0x7261E98
 #define OFF_get_SkillScatterRateSighting 0x7261E98
 
-// ── Auto Aim (v59-fix3) — auto-fire direto via VVP::LateUpdate ─────────────
-// VerticleViewPlayer::LateUpdate — DobbyHook direto (LateUpdate é private→não está em vtable→VmtHook falha)
-// Dump: private System.Void LateUpdate() // 0x75EB88C
-#define OFF_VVP_LateUpdate           0x75EB88C
-// VerticleViewPlayer::OnTriggerShoot(bool isSkill) — dispara a arma
-// Dump: public System.Void OnTriggerShoot(bool) // 0x75ED800
-#define OFF_OnTriggerShoot_VVP       0x75ED800
-// PlayerNetwork::SwapWeapon — override do Player (local player é PlayerNetwork, não Player base)
+// ── Auto Aim (v59-fix4) — SyncStartFire via PlayerNetwork ──────────────────
+// PlayerNetwork::SwapWeapon override — chamado SEMPRE (via vtable) ao trocar arma
 // Dump L661975: public override System.Void SwapWeapon(int,bool,List) // 0x6A30774
-// NOTA: 0x67D6194 é o VIRTUAL base (Player), nunca chamado via vtable. Use 0x6A30774.
 #define OFF_SwapWeapon_PlayerNetwork  0x6A30774
+// PlayerNetwork::SyncStartFire(byte) — sincroniza disparo com o servidor
+// Dump L661892: public virtual System.Void SyncStartFire(byte) // 0x6A1F670
+#define OFF_SyncStartFire             0x6A1F670
+// PlayerNetwork::SyncStopFire() — para o disparo
+// Dump L661898: public virtual System.Void SyncStopFire() // 0x6A21304
+#define OFF_SyncStopFire              0x6A21304
 
 // ============================================================
 // Function Pointers — resolvidos via base + offset direto
@@ -689,8 +688,8 @@ static Angles CalculateViewAngle(Vector3 src, Vector3 dst) {
 static Vector3 g_aimCandTarget{0.0f, 0.0f, 0.0f};  // melhor alvo deste frame
 static float   g_aimCandDist  = 1e9f;
 static bool    g_aimCandValid = false;
-static int     g_autoFireCooldown = 0;          // frames de cooldown entre disparos automáticos
-static void*   g_localVVP     = nullptr;        // ponteiro do VerticleViewPlayer local
+static int     g_pendingAutoFire = 0;   // countdown para disparar após swap
+static int     g_pendingStopFire = 0;  // countdown para parar disparo
 static void*   g_localPlayer  = nullptr;        // ponteiro do player local (cache por frame)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -825,49 +824,18 @@ static float Hook_get_SkillScatterRateSighting(void* self, void* method) {
 }
 
 // ============================================================
-// AUTO AIM (fix3) — VerticleViewPlayer::LateUpdate
-// DobbyHook no endereço direto 0x75EB88C (LateUpdate é private, fora do vtable).
-// Captura g_localVVP e executa snap + OnTriggerShoot quando Auto Aim está ativo.
+// AUTO AIM (fix4) — PlayerNetwork::SwapWeapon override
+// DobbyHook no endereço direto 0x6A30774 (override correto — nunca é o base 0x67D6194).
+// Detecta troca de arma do player local e agenda snap+fire via SyncStartFire.
 // ============================================================
-static void Hook_VVP_LateUpdate(void* self, void* method) {
-    if (self) g_localVVP = self;
-    if (orig_VVP_LateUpdate) orig_VVP_LateUpdate(self, method);
-
-    // ── Auto-fire: snap na cabeça + disparo automático ────────────────────────
+static void Hook_SwapWeapon(void* self, int32_t slot, bool force, void* list, void* method) {
+    if (orig_SwapWeapon) orig_SwapWeapon(self, slot, force, list, method);
     if (!self || !sharedData || !hookActive.load()) return;
-    if (!sharedData->autoAimEnabled || !g_aimCandValid) {
-        g_autoFireCooldown = 0;
-        return;
+    if (!sharedData->autoAimEnabled) return;
+    if (!fn_IsLocalPlayer || !fn_IsLocalPlayer(self, nullptr)) return;
+    if (g_aimCandValid) {
+        g_pendingAutoFire = 5;  // 5 frames: deixa a troca completar antes de atirar
     }
-    if (!g_localPlayer || !fn_SetAimRotation || !fn_get_position || !g_camTransform) return;
-    if (!fn_OnTriggerShoot) return;
-
-    // Cooldown: não disparar em todos os frames (dá tempo ao jogo processar)
-    if (g_autoFireCooldown > 0) { g_autoFireCooldown--; return; }
-
-    Vector3 camPos = fn_get_position(g_camTransform, nullptr);
-    if (std::isnan(camPos.x) || std::isnan(camPos.y) || std::isnan(camPos.z)) return;
-
-    float dx = g_aimCandTarget.x - camPos.x;
-    float dy = g_aimCandTarget.y - camPos.y;
-    float dz = g_aimCandTarget.z - camPos.z;
-    float len = sqrtf(dx*dx + dy*dy + dz*dz);
-    if (len < 0.01f) return;
-
-    float rageOff = sharedData->aimRageOffsetY;
-    if (rageOff != 0.0f) dy += rageOff;
-
-    Quaternion aimQ = LookQuatFromDir(dx, dy, dz);
-    Quaternion curQ = *(Quaternion*)((uint8_t*)g_localPlayer + OFF_m_CurrentAimRotation);
-    float dot = curQ.x*aimQ.x + curQ.y*aimQ.y + curQ.z*aimQ.z + curQ.w*aimQ.w;
-    if (dot < 0.0f) { aimQ.x=-aimQ.x; aimQ.y=-aimQ.y; aimQ.z=-aimQ.z; aimQ.w=-aimQ.w; }
-
-    // Snap mira para a cabeça do alvo
-    fn_SetAimRotation(g_localPlayer, aimQ, true, nullptr);
-    // Disparar — self = VVP*, classe correta para OnTriggerShoot
-    fn_OnTriggerShoot(self, false, nullptr);
-
-    g_autoFireCooldown = 2;  // esperar 2 frames antes do próximo disparo
 }
 
 // ============================================================
@@ -931,6 +899,42 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
                             aimQ.x=-aimQ.x; aimQ.y=-aimQ.y; aimQ.z=-aimQ.z; aimQ.w=-aimQ.w;
                         }
                         fn_SetAimRotation(self, aimQ, true, nullptr);
+                    }
+                }
+            }
+        }
+
+        // ── Auto Aim (fix4): snap + SyncStartFire quando countdown chega a zero ──
+        if (sharedData->autoAimEnabled) {
+            // Parar disparo anterior se estava rodando
+            if (g_pendingStopFire > 0) {
+                g_pendingStopFire--;
+                if (g_pendingStopFire == 0 && fn_SyncStopFire)
+                    fn_SyncStopFire(self, nullptr);
+            }
+            // Disparar quando swap detectado
+            if (g_pendingAutoFire > 0) {
+                g_pendingAutoFire--;
+                if (g_pendingAutoFire == 0 && g_aimCandValid &&
+                    fn_SyncStartFire && fn_SetAimRotation &&
+                    g_camTransform && fn_get_position) {
+                    Vector3 camPos = fn_get_position(g_camTransform, nullptr);
+                    if (!std::isnan(camPos.x) && !std::isnan(camPos.y) && !std::isnan(camPos.z)) {
+                        float dx = g_aimCandTarget.x - camPos.x;
+                        float dy = g_aimCandTarget.y - camPos.y;
+                        float dz = g_aimCandTarget.z - camPos.z;
+                        float len = sqrtf(dx*dx + dy*dy + dz*dz);
+                        if (len >= 0.01f) {
+                            float rageOff = sharedData->aimRageOffsetY;
+                            if (rageOff != 0.0f) dy += rageOff;
+                            Quaternion aimQ = LookQuatFromDir(dx, dy, dz);
+                            Quaternion curQ = *(Quaternion*)((uint8_t*)self + OFF_m_CurrentAimRotation);
+                            float dot = curQ.x*aimQ.x+curQ.y*aimQ.y+curQ.z*aimQ.z+curQ.w*aimQ.w;
+                            if (dot < 0.0f) { aimQ.x=-aimQ.x; aimQ.y=-aimQ.y; aimQ.z=-aimQ.z; aimQ.w=-aimQ.w; }
+                            fn_SetAimRotation(self, aimQ, true, nullptr);
+                            fn_SyncStartFire(self, 0, nullptr);  // self = PlayerNetwork*
+                            g_pendingStopFire = 4;  // parar após 4 frames (~66ms)
+                        }
                     }
                 }
             }
@@ -1326,8 +1330,9 @@ void* hack_thread(void*) {
     fn_IsVisible      = RESOLVE_OFFSET(bool(*)(void*, void*),              OFF_IsVisible);
     fn_get_IsSighting = RESOLVE_OFFSET(bool(*)(void*, void*),              OFF_get_IsSighting);
     fn_IsFiring       = RESOLVE_OFFSET(bool(*)(void*, void*),              OFF_IsFiring);
-    // Auto Aim (v59) — OnTriggerShoot: disparar uma bala na VerticleViewPlayer
-    fn_OnTriggerShoot = RESOLVE_OFFSET(OnTriggerShootFn, OFF_OnTriggerShoot_VVP);
+    // Auto Aim (fix4) — SyncStartFire e SyncStopFire da PlayerNetwork
+    fn_SyncStartFire  = RESOLVE_OFFSET(SyncStartFireFn, OFF_SyncStartFire);
+    fn_SyncStopFire   = RESOLVE_OFFSET(SyncStopFireFn,  OFF_SyncStopFire);
     // Player Hacks (v49) — get_NickName só chamado (não hookeado)
     fn_get_NickName   = RESOLVE_OFFSET(void*(*)(void*, void*),             OFF_get_NickName);
     // Speed Hack — resolvido via VmtHook em UpdateVelocity (ver adiante)
@@ -1667,19 +1672,19 @@ void* hack_thread(void*) {
         hookLogWrite("ERRO: CameraControllerBase nao encontrada");
     }
 
-    // AUTO AIM (fix3) — DobbyHook direto em VerticleViewPlayer::LateUpdate
-    // LateUpdate() é private no dump => não está em vtable => VmtHook falha.
-    // DobbyHook no endereço direto (il2cpp_base + 0x75EB88C) funciona sempre.
+    // AUTO AIM (fix4) — DobbyHook em PlayerNetwork::SwapWeapon (override correto)
+    // 0x6A30774 é o override da PlayerNetwork — chamado via vtable quando player troca arma.
+    // 0x67D6194 (base Player) nunca é chamado diretamente.
     {
-        void* addr = (void*)(il2cpp_base + OFF_VVP_LateUpdate);
-        int r = DobbyHook(addr, (void*)Hook_VVP_LateUpdate,
-                          (void**)&orig_VVP_LateUpdate);
+        void* addr = (void*)(il2cpp_base + OFF_SwapWeapon_PlayerNetwork);
+        int r = DobbyHook(addr, (void*)Hook_SwapWeapon,
+                          (void**)&orig_SwapWeapon);
         if (r == 0) {
-            LOGI("Dobby VVP_LateUpdate OK: orig=%p", orig_VVP_LateUpdate);
-            hookLogWrite("Dobby VVP_LateUpdate: orig=%p", orig_VVP_LateUpdate);
+            LOGI("Dobby SwapWeapon (PlayerNetwork) OK: orig=%p", orig_SwapWeapon);
+            hookLogWrite("Dobby SwapWeapon: orig=%p", orig_SwapWeapon);
         } else {
-            LOGE("Dobby VVP_LateUpdate FALHOU (r=%d)", r);
-            hookLogWrite("ERRO: Dobby VVP_LateUpdate r=%d", r);
+            LOGE("Dobby SwapWeapon FALHOU (r=%d)", r);
+            hookLogWrite("ERRO: Dobby SwapWeapon r=%d", r);
         }
     }
 
