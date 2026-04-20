@@ -517,10 +517,13 @@ static float (*orig_get_EatSpeedScale)(void* self, void* method) = nullptr;
 static float (*orig_get_SkillScatterRate)(void* self, void* method) = nullptr;
 static float (*orig_get_SkillScatterRateSighting)(void* self, void* method) = nullptr;
 
-// ── Auto Aim (v59-fix3) ──────────────────────────────────────────────────────
-typedef void (*OnTriggerShootFn)(void* self, bool isSkill, void* method);
-static OnTriggerShootFn fn_OnTriggerShoot = nullptr;
-static void (*orig_VVP_LateUpdate)(void* self, void* method) = nullptr;
+// ── Auto Aim (v59-fix4) ──────────────────────────────────────────────────────
+typedef void (*SyncStartFireFn)(void* self, uint8_t slot, void* method);
+static SyncStartFireFn fn_SyncStartFire = nullptr;
+typedef void (*SyncStopFireFn)(void* self, void* method);
+static SyncStopFireFn fn_SyncStopFire = nullptr;
+typedef void (*SwapWeaponFn)(void* self, int32_t slot, bool force, void* list, void* method);
+static SwapWeaponFn orig_SwapWeapon = nullptr;
 
 // Aimbot — Player::SetAimRotation
 struct Quaternion { float x, y, z, w; };
