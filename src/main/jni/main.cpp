@@ -104,7 +104,11 @@ static bool medkitFastEnabled = false;
 static bool fastWeaponSwitch  = false;
 static bool medkitRunEnabled  = false;
 static bool autoAim           = false;  // v59: auto aim (snap + disparo ao trocar arma)
-static bool aimbot2           = false;  // v59-ab2: snap via field offset cabeça (sem HeadCollider)
+static bool aimbot2           = false;  // v59-ab2v2: snap head direto via GetHeadTF
+static float ab2Fov           = 60.0f; // FOV em graus para aimbot2 (5-180)
+static float ab2Smooth        = 0.15f; // Suavidade: 0=snap, 0.9=muito suave
+static bool ab2IgnoreProne    = true;  // Ignorar players deitados/agachados
+static bool showFovCircle     = true;  // Desenhar círculo de FOV na tela (qualquer aimbot)
 static bool drawNickName      = true;
 
 // ============================================================
@@ -324,6 +328,10 @@ void DrawESP(int screenW, int screenH) {
     sharedData->medkitRunEnabled   = medkitRunEnabled  ? 1 : 0;
     sharedData->autoAimEnabled        = autoAim          ? 1 : 0;
     sharedData->aimbot2Enabled        = aimbot2          ? 1 : 0;
+    sharedData->aimbot2FovDeg         = ab2Fov;
+    sharedData->aimbot2Smooth         = ab2Smooth;
+    sharedData->aimbot2IgnoreProne    = ab2IgnoreProne   ? 1 : 0;
+    sharedData->aimbot2ShowFov        = (showFovCircle && aimbot2) ? 1 : 0;
     // triggerHeld é gerenciado exclusivamente pelo hotkeyThread
     // ────────────────────────────────────────────────────────────────────────
 
@@ -353,13 +361,14 @@ void DrawESP(int screenW, int screenH) {
     auto* draw = ImGui::GetBackgroundDrawList();
 
     // ── Círculo de FOV visual ─ desenhado ANTES do early-return, sempre visível quando aimbot ativo
-    // Centro e raio calculados em game coords e escalados → alinha perfeitamente com a mira
-    // independente da resolução do device ou do jogo.
-    if (silentAim || aimAssist) {
-        float cx          = (float)gameW * 0.5f * scaleX;   // centro X do viewport do jogo
-        float cy          = (float)gameH * 0.5f * scaleY;   // centro Y do viewport do jogo
-        float fovRadiusPx = (float)gameW * (aimFovDeg / 90.0f) * 0.5f * scaleX;
-        bool  locked      = sharedData && sharedData->aimAssistHasTarget;
+    // Controlado por showFovCircle (toggle na aba ESP). Suporta aimbot1 e aimbot2.
+    if (showFovCircle && (silentAim || aimAssist || aimbot2)) {
+        float cx          = (float)gameW * 0.5f * scaleX;
+        float cy          = (float)gameH * 0.5f * scaleY;
+        // aimbot2 usa seu próprio FOV, aimbot1 usa aimFovDeg
+        float activeFov   = aimbot2 ? ab2Fov : aimFovDeg;
+        float fovRadiusPx = (float)gameW * (activeFov / 90.0f) * 0.5f * scaleX;
+        bool  locked      = sharedData && (sharedData->aimAssistHasTarget || sharedData->aimbot2HasTarget);
         ImU32 circleColor = locked
             ? IM_COL32(255, 80,  0,  200)
             : IM_COL32(255, 255, 255, 55);
@@ -482,13 +491,14 @@ void DrawESP(int screenW, int screenH) {
         }
     }
 
-    // ── Círculo de FOV visual (silentAim OU aimAssist ativo) ─────────────────
-    if (silentAim || aimAssist) {
-        float fovRadiusPx = (float)screenW * (aimFovDeg / 90.0f) * 0.5f;
-        bool  locked      = sharedData && sharedData->aimAssistHasTarget;
+    // ── Círculo de FOV visual (controlado por showFovCircle + aimbot ativo) ──
+    if (showFovCircle && (silentAim || aimAssist || aimbot2)) {
+        float activeFov   = aimbot2 ? ab2Fov : aimFovDeg;
+        float fovRadiusPx = (float)screenW * (activeFov / 90.0f) * 0.5f;
+        bool  locked      = sharedData && (sharedData->aimAssistHasTarget || sharedData->aimbot2HasTarget);
         ImU32 circleColor = locked
-            ? IM_COL32(255, 80,  0,  200)   // laranja quando travado no alvo
-            : IM_COL32(255, 255, 255, 55);   // branco tênue quando procurando
+            ? IM_COL32(255, 80,  0,  200)
+            : IM_COL32(255, 255, 255, 55);
         draw->AddCircle(
             ImVec2(screenW * 0.5f, screenH * 0.5f),
             fovRadiusPx, circleColor, 64, 1.5f);
@@ -573,7 +583,12 @@ struct JawConfig {
     // v10 fields
     uint8_t  autoAim;  // auto aim (snap + disparo ao trocar arma)
     // v11 fields
-    uint8_t  aimbot2;   // aimbot2: snap via field offset cabeça (sem HeadCollider)
+    uint8_t  aimbot2;   // aimbot2: snap via GetHeadTF() (cabeça direta)
+    // v12 fields (aimbot2 settings + FOV circle toggle)
+    float    ab2Fov;
+    float    ab2Smooth;
+    uint8_t  ab2IgnoreProne;
+    uint8_t  showFovCircle;
 };
 #pragma pack(pop)
 
@@ -618,6 +633,11 @@ static void saveConfig() {
     c.drawNickName       = drawNickName;
     c.autoAim            = autoAim;
     c.aimbot2            = aimbot2;
+    // v12
+    c.ab2Fov             = ab2Fov;
+    c.ab2Smooth          = ab2Smooth;
+    c.ab2IgnoreProne     = ab2IgnoreProne;
+    c.showFovCircle      = showFovCircle;
     int fd = open(JAW_CONFIG_PATH, O_CREAT | O_WRONLY | O_TRUNC, 0666);
     if (fd >= 0) { write(fd, &c, sizeof(c)); close(fd); }
 }
@@ -664,6 +684,11 @@ static void loadConfig() {
     drawNickName       = c.drawNickName;
     autoAim            = c.autoAim;
     aimbot2            = c.aimbot2;
+    // v12
+    ab2Fov             = c.ab2Fov  > 0.0f ? c.ab2Fov  : 60.0f;
+    ab2Smooth          = c.ab2Smooth;
+    ab2IgnoreProne     = c.ab2IgnoreProne;
+    showFovCircle      = c.showFovCircle;
 }
 
 // ============================================================
@@ -1039,10 +1064,11 @@ void DrawMenu() {
             ToggleRow("ESP", &esp);
             if (esp) {
                 Sep();
-                ToggleRow("Caixas",    &drawEnemyBox);
-                ToggleRow("Snapline",  &drawSnapLine);
-                ToggleRow("Distancia", &drawDistance);
-                ToggleRow("Nick Name", &drawNickName);
+                ToggleRow("Caixas",       &drawEnemyBox);
+                ToggleRow("Snapline",     &drawSnapLine);
+                ToggleRow("Distancia",    &drawDistance);
+                ToggleRow("Nick Name",    &drawNickName);
+                ToggleRow("Circulo FOV",  &showFovCircle);
                 Sep();
                 ValueLabel("Max Distance", "%.0f m", espMaxDistance);
                 ImGui::SetNextItemWidth(-1.0f);
@@ -1176,24 +1202,41 @@ void DrawMenu() {
             }
             Sep();
 
-            // Aimbot 2 — snap via field offset da cabeça (sem HeadCollider)
+            // ──────────────────────────────────────────────────────────────────
+            // Aimbot 2 — GetHeadTF() direto: cabeça real, sem condição de disparo
+            // Filtros: parede, deitado, morto. Lock com histerese.
+            // ──────────────────────────────────────────────────────────────────
+            Sep();
             bool prevAB2 = aimbot2;
-            ToggleRow("Aimbot 2 (Head Field)", &aimbot2);
+            ToggleRow("Aimbot 2 (Head Direto)", &aimbot2);
             if (aimbot2 != prevAB2 && sharedData)
                 sharedData->aimbot2Enabled = aimbot2 ? 1 : 0;
             if (aimbot2) {
                 ImGui::Spacing();
-                bool hasTarget2 = sharedData && sharedData->autoAimHasTarget;
+                // Status de lock
+                bool hasLock = sharedData && sharedData->aimbot2HasTarget;
                 float rw2 = ImGui::GetContentRegionAvail().x;
-                if (hasTarget2) {
-                    float tw2 = ImGui::CalcTextSize("[ HEAD FIELD ]").x;
+                if (hasLock) {
+                    float tw2 = ImGui::CalcTextSize("[ HEAD LOCKED ]").x;
                     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (rw2 - tw2) * 0.5f);
-                    ImGui::TextColored(cGreen, "[ HEAD FIELD ]");
+                    ImGui::TextColored(cGreen, "[ HEAD LOCKED ]");
                 } else {
-                    float tw2 = ImGui::CalcTextSize("Sem alvo no ESP").x;
+                    float tw2 = ImGui::CalcTextSize("Sem alvo").x;
                     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (rw2 - tw2) * 0.5f);
-                    ImGui::TextColored(cDimText, "Sem alvo no ESP");
+                    ImGui::TextColored(cDimText, "Sem alvo");
                 }
+                ImGui::Spacing();
+                // FOV do Aimbot 2
+                ImGui::TextColored(cFgText, "FOV");
+                ImGui::SameLine(90.0f); ImGui::SetNextItemWidth(-1.0f);
+                ImGui::SliderFloat("##ab2fov", &ab2Fov, 5.0f, 180.0f, "%.0f graus");
+                // Smooth
+                ImGui::TextColored(cFgText, "Smooth");
+                ImGui::SameLine(90.0f); ImGui::SetNextItemWidth(-1.0f);
+                ImGui::SliderFloat("##ab2smooth", &ab2Smooth, 0.0f, 0.95f, "%.2f");
+                // Ignorar deitados
+                ImGui::Spacing();
+                ToggleRow("Ignorar Deitados", &ab2IgnoreProne);
             }
             ImGui::EndTabItem();
         }

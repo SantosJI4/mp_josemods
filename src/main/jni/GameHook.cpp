@@ -345,11 +345,17 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 #define ANIM_COMPONENT_ANIMATOR_OFFSET 0x20   // campo KFGPIOMOLHI (Animator) na base GCommon.AnimationSystemComponent (dump L644587/644603)
 #define HUMAN_BODY_BONE_HEAD           10    // UnityEngine.HumanBodyBones.Head
 
-// Aimbot 2 — field offset direto para a cabeça (v59-ab2)
-// Player.OLCJOGDHJJJ (dump L649988) = GCommon.ITransformNode* (head bone node) @ 0x640
-// GCommon.TransformNode.<transform>k__BackingField (dump L754000) @ 0x10 = UnityEngine.Transform*
-#define OFF_PLAYER_HEAD_NODE       0x640  // Player → ITransformNode* (head)
-#define OFF_TRANSFORMNODE_TRANSFORM 0x10  // ITransformNode → UnityEngine.Transform*
+// Aimbot 2 — GetHeadTF() direto (v59-ab2)
+// Player::GetHeadTF() (dump L652224) @ 0x67E689C — retorna UnityEngine.Transform* da cabeça
+// IsCrouching() (dump L651872) @ 0x67566AC — detectar agachado (bloquear se deitado)
+// get_IsDieing() (dump L651508) @ 0x675B1FC — detectar derrubado/sangrando
+#define OFF_GetHeadTF          0x67E689C
+#define OFF_IsCrouching        0x67566AC
+#define OFF_get_IsDieing       0x675B1FC
+
+// Aimbot 2 — campo legado (removido, mantido por documentação):
+// OFF_PLAYER_HEAD_NODE e OFF_TRANSFORMNODE_TRANSFORM eram field offsets supostos, substituídos
+// por chamada direta a GetHeadTF() que é mais confiável.
 
 // PlayerColliderChecker — hitbox real da cabeça (igual o servidor usa para dano)
 // Collider.get_bounds() retorna Bounds por valor: { m_Center @ +0x10, m_Extents @ +0x1C }
@@ -492,6 +498,10 @@ static void    (*fn_Collider_get_bounds_Injected)(void* collider, BoundsVal* out
 static bool (*fn_IsVisible)(void* self, void* method) = nullptr;
 // ADS check — Player::get_IsSighting() (v43)
 static bool (*fn_get_IsSighting)(void* self, void* method) = nullptr;
+// Aimbot 2 — cabeça direta + filtros
+static void* (*fn_GetHeadTF)(void* player, void* method)   = nullptr;  // GetHeadTF() → Transform*
+static bool  (*fn_IsCrouching)(void* player, void* method) = nullptr;  // agachado/deitado
+static bool  (*fn_get_IsDieing)(void* player, void* method)= nullptr;  // derrubado/sangrando
 // IsFiring — Player::IsFiring() (v44)
 static bool (*fn_IsFiring)(void* self, void* method) = nullptr;
 // Speed hack — PlayerAttributes::GetWeaponRunSpeedScale(int) (v41)
@@ -700,6 +710,14 @@ static bool    g_aimCandValid = false;
 static int     g_pendingAutoFire = 0;   // countdown para disparar após swap
 static int     g_pendingStopFire = 0;  // countdown para parar disparo
 static void*   g_localPlayer  = nullptr;        // ponteiro do player local (cache por frame)
+
+// ── Aimbot 2 — estado do alvo travado ────────────────────────────────────────
+// Sistema com histerese: uma vez travado num alvo, só solta quando ele sai do FOV
+// com margem extra (ab2ReleaseMult), morre ou some atrás de parede.
+static void*   g_ab2LockedTarget  = nullptr;    // ponteiro do inimigo atualmente travado
+static Vector3 g_ab2LockedHeadPos{};            // última posição válida da cabeça do alvo travado
+static bool    g_ab2HasLock       = false;      // true = aimbot2 está travado num alvo
+static float   g_ab2BestDist      = 1e9f;       // melhor candidato no frame atual (para seleção)
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ============================================================
@@ -886,7 +904,49 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
         // Cachear PlayerAttributes do player local para filtro nos hooks de speed/recoil
         void* attrPtr = *(void**)((uint8_t*)self + OFF_PlayerAttributes_field);
         if (attrPtr && (uintptr_t)attrPtr > 0x1000) g_localPlayerAttr = attrPtr;
-        // ── Aimbot (câmera): snap contínuo enquanto dispara ──────────────────
+        // ── Aimbot 2 (v59-ab2v2): snap direto à cabeça — SEM condição IsFiring ──
+        // Não precisa estar atirando. Snapa para a cabeça do alvo travado sempre
+        // que aimbot2Enabled e g_ab2HasLock (lock selecionado no loop de inimigos).
+        // Smooth configurável: 0 = snap instantâneo, 0.05-0.9 = lerp suave.
+        if (sharedData->aimbot2Enabled && g_ab2HasLock &&
+            fn_SetAimRotation && g_camTransform && fn_get_position) {
+            Vector3 camPos = fn_get_position(g_camTransform, nullptr);
+            if (!std::isnan(camPos.x) && !std::isnan(camPos.y) && !std::isnan(camPos.z)) {
+                float dx = g_ab2LockedHeadPos.x - camPos.x;
+                float dy = g_ab2LockedHeadPos.y - camPos.y;
+                float dz = g_ab2LockedHeadPos.z - camPos.z;
+                float len = sqrtf(dx*dx + dy*dy + dz*dz);
+                if (len >= 0.1f) {
+                    Quaternion targetQ = LookQuatFromDir(dx, dy, dz);
+                    float smooth = sharedData->aimbot2Smooth;
+                    if (smooth > 0.0f && smooth < 1.0f) {
+                        // Lerp entre rotação atual e target para suavidade
+                        Quaternion curQ = *(Quaternion*)((uint8_t*)self + OFF_m_CurrentAimRotation);
+                        float dot = curQ.x*targetQ.x + curQ.y*targetQ.y
+                                  + curQ.z*targetQ.z + curQ.w*targetQ.w;
+                        if (dot < 0.0f) {
+                            targetQ.x=-targetQ.x; targetQ.y=-targetQ.y;
+                            targetQ.z=-targetQ.z; targetQ.w=-targetQ.w;
+                        }
+                        float t = 1.0f - smooth;  // quanto mover por frame: 1=snap, ~0.05=muito suave
+                        targetQ.x = curQ.x + (targetQ.x - curQ.x) * t;
+                        targetQ.y = curQ.y + (targetQ.y - curQ.y) * t;
+                        targetQ.z = curQ.z + (targetQ.z - curQ.z) * t;
+                        targetQ.w = curQ.w + (targetQ.w - curQ.w) * t;
+                        // Normalizar quaternion
+                        float qlen = sqrtf(targetQ.x*targetQ.x + targetQ.y*targetQ.y
+                                         + targetQ.z*targetQ.z + targetQ.w*targetQ.w);
+                        if (qlen > 0.001f) {
+                            targetQ.x/=qlen; targetQ.y/=qlen;
+                            targetQ.z/=qlen; targetQ.w/=qlen;
+                        }
+                    }
+                    fn_SetAimRotation(self, targetQ, true, nullptr);
+                }
+            }
+        }
+
+        // ── Aimbot 1 (câmera): snap contínuo enquanto dispara ──────────────────
         if (g_aimCandValid && fn_SetAimRotation && g_camTransform && fn_get_position &&
             sharedData->silentAimEnabled) {
 
@@ -1045,14 +1105,24 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
             (g_aimCandValid && sharedData->silentAimEnabled) ? 1 : 0;
         // Auto Aim: atualiza indicador de alvo
         sharedData->autoAimHasTarget = g_aimCandValid ? 1 : 0;
+        // Aimbot 2: publica estado do lock
+        sharedData->aimbot2HasTarget = g_ab2HasLock ? 1 : 0;
 
-        // Resetar candidatos para este frame
+        // Resetar candidatos para este frame (aimbot1)
         g_aimBestScreenDist = 1e9f;
         g_aimBestHp         = 0x7fffffff;
         g_aimBestDepth      = 1e9f;
         g_aimCandValid      = false;
         g_aimCandDist       = 1e9f;
         g_localPlayer       = nullptr;  // reset cache do player local
+        // Resetar candidatos aimbot2 (lock é preservado entre frames,
+        // mas o "melhor candidato do frame" começa do zero)
+        g_ab2BestDist       = 1e9f;
+        // Se aimbot2 foi desativado, libera o lock
+        if (!sharedData->aimbot2Enabled) {
+            g_ab2LockedTarget = nullptr;
+            g_ab2HasLock      = false;
+        }
     }
 
     int idx = sharedData->playerCount;
@@ -1088,42 +1158,51 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     if (std::isnan(worldPos.x) || std::isnan(worldPos.y) || std::isnan(worldPos.z)) return;
 
     // ── Posição real da cabeça: 3 camadas de fallback ────────────────────────
-    // Prioridade 1: PlayerColliderChecker — hitbox exata que o servidor usa para headshot
-    // Prioridade 2: Animator.GetBoneTransform(Head) — bone visual
-    // Prioridade 3: worldPos.y + 1.75 — estimativa fixa
+    // P1: get_HeadCollider() → bounds.center  (hitbox exata registrada pelo servidor)
+    // P2: Animator.GetBoneTransform(Head=10) → position (bone visual, muito preciso)
+    // P3: worldPos.y + 1.75 — estimativa fixa
     Vector3 bottomWorld(worldPos.x, worldPos.y - 0.05f, worldPos.z);
     Vector3 topWorld;
     bool gotHead = false;
 
-    // ── Posição da cabeça: 4 camadas de precisão ─────────────────────────────
-    // P0: Player+0x640 (OLCJOGDHJJJ) → ITransformNode → transform @ 0x10  (aimbot2, sem chamada IL2CPP)
-    // P1: get_HeadCollider() → bounds.center  (hitbox exata registrada pelo servidor)
-    // P2: Animator.GetBoneTransform(Head=10) → position (bone visual, muito preciso)
-    // P3: worldPos.y + 1.75 (estimativa fixa — fallback de segurança)
-
-    // ── P0: Head field offset — leitura direta de memória (aimbot2) ──────────
-    // Usado como alvo do Aimbot 2 e como fallback superior quando ativo.
-    Vector3 headFieldPos{};
-    bool gotHeadField = false;
-    if (fn_get_position) {
-        void* headNode = *(void**)((uint8_t*)self + OFF_PLAYER_HEAD_NODE);
-        if (headNode && (uintptr_t)headNode > 0x1000) {
-            void* headTF = *(void**)((uint8_t*)headNode + OFF_TRANSFORMNODE_TRANSFORM);
-            if (headTF && (uintptr_t)headTF > 0x1000) {
-                Vector3 hp = fn_get_position(headTF, nullptr);
-                if (!std::isnan(hp.x) && !std::isnan(hp.y) && !std::isnan(hp.z) &&
-                    (hp.x != 0.0f || hp.y != 0.0f || hp.z != 0.0f)) {
-                    headFieldPos = hp;
-                    gotHeadField = true;
+    // ── Aimbot 2: GetHeadTF() — posição real da cabeça via método do jogo ────
+    // Filtros aplicados ANTES de usar como candidato:
+    //   • IsVisible()      — ignora inimigos atrás de paredes
+    //   • get_IsDieing()   — ignora derrubados/sangrando
+    //   • IsCrouching() + altura — ignora deitados (prone: agachado E posição Y baixa)
+    Vector3 ab2HeadPos{};
+    bool    ab2HeadValid = false;
+    if (sharedData->aimbot2Enabled && fn_GetHeadTF && fn_get_position) {
+        // Filtro: derrubado/sangrando
+        bool isDying = fn_get_IsDieing && fn_get_IsDieing(self, nullptr);
+        if (!isDying) {
+            // Filtro: deitado (prone) — agachado E altura abaixo de 0.5m da base
+            bool isProneSkip = false;
+            if (sharedData->aimbot2IgnoreProne && fn_IsCrouching) {
+                bool crouching = fn_IsCrouching(self, nullptr);
+                if (crouching) {
+                    // Deitado: posição da cabeça muito próxima da base do player
+                    // Normal em pé: cabeça ~1.7m acima. Agachado: ~1.2m. Deitado: <0.8m
+                    void* htf = fn_GetHeadTF(self, nullptr);
+                    if (htf) {
+                        Vector3 hp = fn_get_position(htf, nullptr);
+                        if (!std::isnan(hp.y) && (hp.y - worldPos.y) < 0.75f)
+                            isProneSkip = true;
+                    }
+                }
+            }
+            if (!isProneSkip) {
+                void* headTF = fn_GetHeadTF(self, nullptr);
+                if (headTF) {
+                    Vector3 hp = fn_get_position(headTF, nullptr);
+                    if (!std::isnan(hp.x) && !std::isnan(hp.y) && !std::isnan(hp.z) &&
+                        (hp.x != 0.0f || hp.y != 0.0f || hp.z != 0.0f)) {
+                        ab2HeadPos   = hp;
+                        ab2HeadValid = true;
+                    }
                 }
             }
         }
-    }
-
-    // P0 é usado quando aimbot2Enabled: substitui P1/P2 como fonte da posição de topo
-    if (!gotHead && gotHeadField && sharedData->aimbot2Enabled) {
-        topWorld    = headFieldPos;
-        gotHead     = true;
     }
 
     // ── P1: Head collider — hitbox real de colisão/dano ─────────────────────
@@ -1193,19 +1272,43 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     float dY = screenTop.y - screenH * 0.5f;
     float screenDist = sqrtf(dX * dX + dY * dY);
 
-    // ── Seleção de candidato ao alvo (aimbot câmera E/OU auto aim E/OU aimbot2) ──────────────
-    // silentAimEnabled → aimbot câmera (snap contínuo enquanto dispara)
-    // autoAimEnabled   → auto-snap + disparo automático ao trocar de arma
-    // aimbot2Enabled   → snap via field offset direto (cabeça sem HeadCollider)
-    // Todos usam g_aimCandTarget — selecionamos para qualquer um dos ativos.
-    if ((sharedData->silentAimEnabled || sharedData->autoAimEnabled || sharedData->aimbot2Enabled) && chp > 0) {
-        // v43: wall check via vtable IsVisible()
-        bool isVis = true;
-        if (fn_IsVisible) {
-            isVis = fn_IsVisible(self, nullptr);
+    // ── Aimbot 2: seleção de candidato (head direto, lock com histerese) ─────
+    // Totalmente separado do aimbot1. Sem condição IsFiring.
+    // Seleciona melhor candidato por distância da tela ao centro.
+    // Filtros já aplicados acima (isDying, prone, via ab2HeadValid).
+    if (sharedData->aimbot2Enabled && ab2HeadValid && chp > 0) {
+        // Filtro obrigatório: IsVisible (ignora inimigos atrás de parede)
+        bool ab2Vis = fn_IsVisible ? fn_IsVisible(self, nullptr) : true;
+        if (ab2Vis && screenTop.z <= 120.0f) {
+            // FOV do aimbot2 (separado do FOV do aimbot1)
+            float ab2FovDeg = sharedData->aimbot2FovDeg;
+            if (ab2FovDeg < 1.0f || ab2FovDeg > 180.0f) ab2FovDeg = 60.0f;
+            float ab2RadPx = (float)screenW * (ab2FovDeg / 90.0f) * 0.5f;
+
+            // ── Histerese: se self é o alvo travado, usa raio maior para soltar ──
+            float effectiveRadius = ab2RadPx;
+            if (self == g_ab2LockedTarget && g_ab2HasLock) {
+                effectiveRadius = ab2RadPx * 1.35f;  // margem 35% para não soltar ao mover
+            }
+
+            if (screenDist < effectiveRadius) {
+                // Candidato melhor = mais próximo ao centro da tela
+                if (screenDist < g_ab2BestDist) {
+                    g_ab2BestDist      = screenDist;
+                    // Travar imediatamente — salva ponteiro e posição da cabeça
+                    g_ab2LockedTarget  = self;
+                    g_ab2LockedHeadPos = ab2HeadPos;
+                    g_ab2HasLock       = true;
+                }
+            }
         }
+    }
+
+    // ── Aimbot 1 (silentAim / autoAim): seleção de candidato ─────────────────
+    if ((sharedData->silentAimEnabled || sharedData->autoAimEnabled) && chp > 0) {
+        // v43: wall check via vtable IsVisible()
+        bool isVis = fn_IsVisible ? fn_IsVisible(self, nullptr) : true;
         if (screenTop.z <= 120.0f && isVis) {
-            // Aimbot câmera: respeita FOV configurado pelo usuário
             bool inFov = true;
             if (sharedData->silentAimEnabled) {
                 float fovDeg = sharedData->aimAssistFovDeg;
@@ -1213,8 +1316,6 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
                 float fovRadiusPx = (float)screenW * (fovDeg / 90.0f) * 0.5f;
                 inFov = (screenDist < fovRadiusPx);
             }
-            // Auto Aim / Aimbot2 sem aimbot: sem restrição FOV — pega alvo mais próximo
-            // ao centro (cabeça do inimigo mais acessível na tela).
             if (inFov) {
                 int  priority = sharedData->aimTargetPriority;
                 bool isBetter = false;
@@ -1231,11 +1332,7 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
                     g_aimBestHp         = chp;
                     g_aimBestDepth      = screenTop.z;
                     g_aimCandDist       = screenDist;
-                    // Aimbot 2: usa field offset da cabeça quando disponível
-                    // Aimbot 1: usa topWorld (HeadCollider → Animator → estimativa)
-                    g_aimCandTarget     = (sharedData->aimbot2Enabled && gotHeadField)
-                                          ? headFieldPos
-                                          : topWorld;
+                    g_aimCandTarget     = topWorld;
                     g_aimCandValid      = true;
                 }
             }
@@ -1370,6 +1467,10 @@ void* hack_thread(void*) {
     fn_IsVisible      = RESOLVE_OFFSET(bool(*)(void*, void*),              OFF_IsVisible);
     fn_get_IsSighting = RESOLVE_OFFSET(bool(*)(void*, void*),              OFF_get_IsSighting);
     fn_IsFiring       = RESOLVE_OFFSET(bool(*)(void*, void*),              OFF_IsFiring);
+    // Aimbot 2 — GetHeadTF + filtros
+    fn_GetHeadTF      = RESOLVE_OFFSET(void*(*)(void*, void*),             OFF_GetHeadTF);
+    fn_IsCrouching    = RESOLVE_OFFSET(bool(*)(void*, void*),              OFF_IsCrouching);
+    fn_get_IsDieing   = RESOLVE_OFFSET(bool(*)(void*, void*),              OFF_get_IsDieing);
     // Auto Aim (fix4) — SyncStartFire e SyncStopFire da PlayerNetwork
     fn_SyncStartFire  = RESOLVE_OFFSET(SyncStartFireFn, OFF_SyncStartFire);
     fn_SyncStopFire   = RESOLVE_OFFSET(SyncStopFireFn,  OFF_SyncStopFire);
