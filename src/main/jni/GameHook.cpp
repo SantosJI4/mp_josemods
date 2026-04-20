@@ -430,10 +430,12 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 #define OFF_get_SkillScatterRateSighting 0x7261E98
 
 // ── Auto Aim (v59) — disparo automático ao trocar de arma ──────────────────
-// Player::OnChangeWeaponFinished() — chamado ao terminar animação de troca de arma
-// Dump L652277: public System.Void OnChangeWeaponFinished() // 0x67D5678
-#define OFF_OnChangeWeaponFinished   0x67D5678
-// VerticleViewPlayer::LateUpdate — DobbyHook para capturar self do VVP e disparar
+// Player::SwapWeapon(int slot, bool force, List<WeaponItem>) — chamado ao INICIAR troca
+// Dump L652285: public System.Void SwapWeapon(int, bool, List) // 0x67D6194
+// FIX v59: usamos SwapWeapon (não OnChangeWeaponFinished) porque com fastWeaponSwitch
+// o CD é sempre 0 -> animação nunca termina -> OnChangeWeaponFinished nunca é chamado.
+#define OFF_SwapWeapon               0x67D6194
+// VerticleViewPlayer::LateUpdate — VmtHook (via IL2CPP API) para capturar self do VVP
 // Dump: private System.Void LateUpdate() // 0x75EB88C
 #define OFF_VVP_LateUpdate           0x75EB88C
 // VerticleViewPlayer::OnTriggerShoot(bool isSkill) — dispara a arma
@@ -520,7 +522,8 @@ static float (*orig_get_SkillScatterRateSighting)(void* self, void* method) = nu
 // ── Auto Aim (v59) ───────────────────────────────────────────────────────────
 typedef void (*OnTriggerShootFn)(void* self, bool isSkill, void* method);
 static OnTriggerShootFn fn_OnTriggerShoot = nullptr;
-static void (*orig_OnChangeWeaponFinished)(void* self, void* method) = nullptr;
+typedef void (*SwapWeaponFn)(void* self, int32_t slot, bool force, void* list, void* method);
+static SwapWeaponFn orig_SwapWeapon = nullptr;
 static void (*orig_VVP_LateUpdate)(void* self, void* method) = nullptr;
 
 // Aimbot — Player::SetAimRotation
@@ -825,17 +828,17 @@ static float Hook_get_SkillScatterRateSighting(void* self, void* method) {
 }
 
 // ============================================================
-// AUTO AIM — Player::OnChangeWeaponFinished
-// Chamado quando a animação de troca de arma termina.
-// Se autoAimEnabled + alvo válido → inicia countdown de auto-fire.
+// AUTO AIM — Player::SwapWeapon(int slot, bool force, List* list)
+// Chamado quando o player INICIA a troca de arma (antes do CD).
+// Funciona mesmo com fastWeaponSwitch ON (CD=0, animação pulada).
 // ============================================================
-static void Hook_OnChangeWeaponFinished(void* self, void* method) {
-    if (orig_OnChangeWeaponFinished) orig_OnChangeWeaponFinished(self, method);
+static void Hook_SwapWeapon(void* self, int32_t slot, bool force, void* list, void* method) {
+    if (orig_SwapWeapon) orig_SwapWeapon(self, slot, force, list, method);
     if (!self || !sharedData || !hookActive.load()) return;
     if (!sharedData->autoAimEnabled) return;
     if (!fn_IsLocalPlayer || !fn_IsLocalPlayer(self, nullptr)) return;
     if (g_aimCandValid) {
-        g_pendingAutoFire.store(4);  // snap no frame 0, dispara no frame 0 do VVP
+        g_pendingAutoFire.store(5);  // 5 frames: dá tempo ao VVP capturar e snap completar
     }
 }
 
@@ -916,7 +919,7 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
         }
 
         // ── Auto Aim: snap + disparo direto quando countdown chega a zero ───
-        // g_localVVP é capturado por Hook_VVP_LateUpdate (DobbyHook) — chamamos
+        // g_localVVP é capturado por Hook_VVP_LateUpdate (VmtHook) — chamamos
         // fn_OnTriggerShoot diretamente aqui, sem dependência de ordem de frame.
         if (sharedData->autoAimEnabled && g_pendingAutoFire.load() > 0) {
             int pending = g_pendingAutoFire.fetch_sub(1) - 1;
@@ -1678,8 +1681,30 @@ void* hack_thread(void*) {
         hookLogWrite("ERRO: CameraControllerBase nao encontrada");
     }
 
-    // ── Hook inline (Dobby) para metodos nao-virtuais (v53) ──────────────────
-    LOGI("[+] Instalando Dobby hooks (metodos nao-virtuais)...");
+    // AUTO AIM — VmtHook em VerticleViewPlayer::LateUpdate
+    // Capture do ponteiro VVP local via IL2CPP class API (mesmo padrão do Player).
+    // VmtHook é mais confiável que DobbyHook para LateUpdate (já comprovado com Player).
+    void* vvpClass = p_class_from_name(cs_image, "COW.GamePlay", "VerticleViewPlayer");
+    if (vvpClass) {
+        void* vvpLateUpdateMI = p_class_get_method(vvpClass, "LateUpdate", 0);
+        if (vvpLateUpdateMI) {
+            if (VmtHook(vvpLateUpdateMI, (void*)Hook_VVP_LateUpdate, (void**)&orig_VVP_LateUpdate)) {
+                LOGI("VMT Hook VerticleViewPlayer::LateUpdate aplicado: orig=%p", orig_VVP_LateUpdate);
+                hookLogWrite("VMT VVP_LateUpdate: orig=%p", orig_VVP_LateUpdate);
+            } else {
+                LOGE("VMT Hook VerticleViewPlayer::LateUpdate FALHOU");
+                hookLogWrite("ERRO: VMT VVP_LateUpdate falhou");
+            }
+        } else {
+            LOGE("LateUpdate nao encontrado em VerticleViewPlayer");
+            hookLogWrite("ERRO: VVP LateUpdate nao encontrado");
+        }
+    } else {
+        LOGE("VerticleViewPlayer nao encontrada");
+        hookLogWrite("ERRO: VerticleViewPlayer nao encontrada");
+    }
+
+    // ── Hook inline (Dobby) para metodos nao-virtuais (v53)
     hookLogWrite("Instalando hooks Dobby (metodos nao-virtuais)...");
     // ── NOTA: GetWeaponRunSpeedScale, GetScatterRate, get_IsAmmoFree,
     // get_FSModeUseMedikitFasterRate, get_InSwapWeaponCD e IsMoving sao
@@ -1841,31 +1866,17 @@ void* hack_thread(void*) {
         }
     }
 
-    // Auto Aim: Player::OnChangeWeaponFinished() — detecta fim da troca de arma
+    // Auto Aim: Player::SwapWeapon(int,bool,List) — detecta início de troca de arma
     {
-        void* addr = (void*)(il2cpp_base + OFF_OnChangeWeaponFinished);
-        int r = DobbyHook(addr, (void*)Hook_OnChangeWeaponFinished,
-                          (void**)&orig_OnChangeWeaponFinished);
+        void* addr = (void*)(il2cpp_base + OFF_SwapWeapon);
+        int r = DobbyHook(addr, (void*)Hook_SwapWeapon,
+                          (void**)&orig_SwapWeapon);
         if (r == 0) {
-            LOGI("Dobby OnChangeWeaponFinished OK: orig=%p", orig_OnChangeWeaponFinished);
-            hookLogWrite("Dobby OnChangeWeaponFinished: orig=%p", orig_OnChangeWeaponFinished);
+            LOGI("Dobby SwapWeapon OK: orig=%p", orig_SwapWeapon);
+            hookLogWrite("Dobby SwapWeapon: orig=%p", orig_SwapWeapon);
         } else {
-            LOGE("Dobby OnChangeWeaponFinished FALHOU (r=%d)", r);
-            hookLogWrite("ERRO: Dobby OnChangeWeaponFinished r=%d", r);
-        }
-    }
-
-    // Auto Aim: VerticleViewPlayer::LateUpdate — disparo automático
-    {
-        void* addr = (void*)(il2cpp_base + OFF_VVP_LateUpdate);
-        int r = DobbyHook(addr, (void*)Hook_VVP_LateUpdate,
-                          (void**)&orig_VVP_LateUpdate);
-        if (r == 0) {
-            LOGI("Dobby VVP_LateUpdate OK: orig=%p", orig_VVP_LateUpdate);
-            hookLogWrite("Dobby VVP_LateUpdate: orig=%p", orig_VVP_LateUpdate);
-        } else {
-            LOGE("Dobby VVP_LateUpdate FALHOU (r=%d)", r);
-            hookLogWrite("ERRO: Dobby VVP_LateUpdate r=%d", r);
+            LOGE("Dobby SwapWeapon FALHOU (r=%d)", r);
+            hookLogWrite("ERRO: Dobby SwapWeapon r=%d", r);
         }
     }
 
