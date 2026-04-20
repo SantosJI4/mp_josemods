@@ -104,6 +104,7 @@ static bool medkitFastEnabled = false;
 static bool fastWeaponSwitch  = false;
 static bool medkitRunEnabled  = false;
 static bool autoAim           = false;  // v59: auto aim (snap + disparo ao trocar arma)
+static bool aimbot2           = false;  // v59-ab2: snap via field offset cabeça (sem HeadCollider)
 static bool drawNickName      = true;
 
 // ============================================================
@@ -322,6 +323,7 @@ void DrawESP(int screenW, int screenH) {
     sharedData->fastWeaponSwitch   = fastWeaponSwitch  ? 1 : 0;
     sharedData->medkitRunEnabled   = medkitRunEnabled  ? 1 : 0;
     sharedData->autoAimEnabled        = autoAim          ? 1 : 0;
+    sharedData->aimbot2Enabled        = aimbot2          ? 1 : 0;
     // triggerHeld é gerenciado exclusivamente pelo hotkeyThread
     // ────────────────────────────────────────────────────────────────────────
 
@@ -570,6 +572,8 @@ struct JawConfig {
     uint8_t  drawNickName;
     // v10 fields
     uint8_t  autoAim;  // auto aim (snap + disparo ao trocar arma)
+    // v11 fields
+    uint8_t  aimbot2;   // aimbot2: snap via field offset cabeça (sem HeadCollider)
 };
 #pragma pack(pop)
 
@@ -613,6 +617,7 @@ static void saveConfig() {
     c.medkitRunEnabled   = medkitRunEnabled;
     c.drawNickName       = drawNickName;
     c.autoAim            = autoAim;
+    c.aimbot2            = aimbot2;
     int fd = open(JAW_CONFIG_PATH, O_CREAT | O_WRONLY | O_TRUNC, 0666);
     if (fd >= 0) { write(fd, &c, sizeof(c)); close(fd); }
 }
@@ -658,6 +663,7 @@ static void loadConfig() {
     medkitRunEnabled   = c.medkitRunEnabled;
     drawNickName       = c.drawNickName;
     autoAim            = c.autoAim;
+    aimbot2            = c.aimbot2;
 }
 
 // ============================================================
@@ -1165,6 +1171,27 @@ void DrawMenu() {
                 } else {
                     float tw = ImGui::CalcTextSize("Sem alvo no ESP").x;
                     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (rw - tw) * 0.5f);
+                    ImGui::TextColored(cDimText, "Sem alvo no ESP");
+                }
+            }
+            Sep();
+
+            // Aimbot 2 — snap via field offset da cabeça (sem HeadCollider)
+            bool prevAB2 = aimbot2;
+            ToggleRow("Aimbot 2 (Head Field)", &aimbot2);
+            if (aimbot2 != prevAB2 && sharedData)
+                sharedData->aimbot2Enabled = aimbot2 ? 1 : 0;
+            if (aimbot2) {
+                ImGui::Spacing();
+                bool hasTarget2 = sharedData && sharedData->autoAimHasTarget;
+                float rw2 = ImGui::GetContentRegionAvail().x;
+                if (hasTarget2) {
+                    float tw2 = ImGui::CalcTextSize("[ HEAD FIELD ]").x;
+                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (rw2 - tw2) * 0.5f);
+                    ImGui::TextColored(cGreen, "[ HEAD FIELD ]");
+                } else {
+                    float tw2 = ImGui::CalcTextSize("Sem alvo no ESP").x;
+                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (rw2 - tw2) * 0.5f);
                     ImGui::TextColored(cDimText, "Sem alvo no ESP");
                 }
             }

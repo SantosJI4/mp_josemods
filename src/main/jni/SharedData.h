@@ -108,6 +108,13 @@ struct SharedESPData {
     volatile int autoAimEnabled;         // 1 = ativo
     volatile int autoAimHasTarget;       // Hook escreve 1 quando há alvo válido no ESP
 
+    // ── Aimbot 2 (v59-ab2) ──────────────────────────────────────────────────
+    // Lê a posição da cabeça diretamente via field offset Player+0x640 (OLCJOGDHJJJ)
+    // → ITransformNode.transform (campo 0x10) → fn_get_position.
+    // Mais estável que HeadCollider — não depende de collider ativo.
+    // Funciona em paralelo com o aimbot original (silentAim/autoAim).
+    volatile int aimbot2Enabled;         // 1 = ativo (usa head field offset direto)
+
     ESPEntry players[MAX_ESP_PLAYERS];
 };
 

@@ -345,6 +345,12 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 #define ANIM_COMPONENT_ANIMATOR_OFFSET 0x20   // campo KFGPIOMOLHI (Animator) na base GCommon.AnimationSystemComponent (dump L644587/644603)
 #define HUMAN_BODY_BONE_HEAD           10    // UnityEngine.HumanBodyBones.Head
 
+// Aimbot 2 — field offset direto para a cabeça (v59-ab2)
+// Player.OLCJOGDHJJJ (dump L649988) = GCommon.ITransformNode* (head bone node) @ 0x640
+// GCommon.TransformNode.<transform>k__BackingField (dump L754000) @ 0x10 = UnityEngine.Transform*
+#define OFF_PLAYER_HEAD_NODE       0x640  // Player → ITransformNode* (head)
+#define OFF_TRANSFORMNODE_TRANSFORM 0x10  // ITransformNode → UnityEngine.Transform*
+
 // PlayerColliderChecker — hitbox real da cabeça (igual o servidor usa para dano)
 // Collider.get_bounds() retorna Bounds por valor: { m_Center @ +0x10, m_Extents @ +0x1C }
 // List<ColliderInfo> layout IL2CPP: _items (array*) @ +0x10, _size @ +0x18
@@ -1089,10 +1095,36 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     Vector3 topWorld;
     bool gotHead = false;
 
-    // ── Posição da cabeça: 3 camadas de precisão ─────────────────────────────
+    // ── Posição da cabeça: 4 camadas de precisão ─────────────────────────────
+    // P0: Player+0x640 (OLCJOGDHJJJ) → ITransformNode → transform @ 0x10  (aimbot2, sem chamada IL2CPP)
     // P1: get_HeadCollider() → bounds.center  (hitbox exata registrada pelo servidor)
     // P2: Animator.GetBoneTransform(Head=10) → position (bone visual, muito preciso)
     // P3: worldPos.y + 1.75 (estimativa fixa — fallback de segurança)
+
+    // ── P0: Head field offset — leitura direta de memória (aimbot2) ──────────
+    // Usado como alvo do Aimbot 2 e como fallback superior quando ativo.
+    Vector3 headFieldPos{};
+    bool gotHeadField = false;
+    if (fn_get_position) {
+        void* headNode = *(void**)((uint8_t*)self + OFF_PLAYER_HEAD_NODE);
+        if (headNode && (uintptr_t)headNode > 0x1000) {
+            void* headTF = *(void**)((uint8_t*)headNode + OFF_TRANSFORMNODE_TRANSFORM);
+            if (headTF && (uintptr_t)headTF > 0x1000) {
+                Vector3 hp = fn_get_position(headTF, nullptr);
+                if (!std::isnan(hp.x) && !std::isnan(hp.y) && !std::isnan(hp.z) &&
+                    (hp.x != 0.0f || hp.y != 0.0f || hp.z != 0.0f)) {
+                    headFieldPos = hp;
+                    gotHeadField = true;
+                }
+            }
+        }
+    }
+
+    // P0 é usado quando aimbot2Enabled: substitui P1/P2 como fonte da posição de topo
+    if (!gotHead && gotHeadField && sharedData->aimbot2Enabled) {
+        topWorld    = headFieldPos;
+        gotHead     = true;
+    }
 
     // ── P1: Head collider — hitbox real de colisão/dano ─────────────────────
     // Usa get_bounds_Injected (out Bounds& ret) — ponteiro de saída em x1, sem SRET.
@@ -1161,11 +1193,12 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     float dY = screenTop.y - screenH * 0.5f;
     float screenDist = sqrtf(dX * dX + dY * dY);
 
-    // ── Seleção de candidato ao alvo (aimbot câmera E/OU auto aim) ──────────────
+    // ── Seleção de candidato ao alvo (aimbot câmera E/OU auto aim E/OU aimbot2) ──────────────
     // silentAimEnabled → aimbot câmera (snap contínuo enquanto dispara)
     // autoAimEnabled   → auto-snap + disparo automático ao trocar de arma
-    // Ambos usam g_aimCandTarget — selecionamos para qualquer um dos dois ativos.
-    if ((sharedData->silentAimEnabled || sharedData->autoAimEnabled) && chp > 0) {
+    // aimbot2Enabled   → snap via field offset direto (cabeça sem HeadCollider)
+    // Todos usam g_aimCandTarget — selecionamos para qualquer um dos ativos.
+    if ((sharedData->silentAimEnabled || sharedData->autoAimEnabled || sharedData->aimbot2Enabled) && chp > 0) {
         // v43: wall check via vtable IsVisible()
         bool isVis = true;
         if (fn_IsVisible) {
@@ -1180,7 +1213,7 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
                 float fovRadiusPx = (float)screenW * (fovDeg / 90.0f) * 0.5f;
                 inFov = (screenDist < fovRadiusPx);
             }
-            // Auto Aim sem aimbot: sem restrição FOV — pega alvo mais próximo
+            // Auto Aim / Aimbot2 sem aimbot: sem restrição FOV — pega alvo mais próximo
             // ao centro (cabeça do inimigo mais acessível na tela).
             if (inFov) {
                 int  priority = sharedData->aimTargetPriority;
@@ -1198,7 +1231,11 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
                     g_aimBestHp         = chp;
                     g_aimBestDepth      = screenTop.z;
                     g_aimCandDist       = screenDist;
-                    g_aimCandTarget     = topWorld;
+                    // Aimbot 2: usa field offset da cabeça quando disponível
+                    // Aimbot 1: usa topWorld (HeadCollider → Animator → estimativa)
+                    g_aimCandTarget     = (sharedData->aimbot2Enabled && gotHeadField)
+                                          ? headFieldPos
+                                          : topWorld;
                     g_aimCandValid      = true;
                 }
             }
