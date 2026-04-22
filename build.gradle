@@ -4,38 +4,30 @@ buildscript {
         mavenCentral()
     }
     dependencies {
-        classpath 'com.android.tools.build:gradle:7.4.2'
-    }
-}
-
-allprojects {
-    repositories {
-        google()
-        mavenCentral()
+        classpath 'com.android.tools.build:gradle:4.2.2'
     }
 }
 
 apply plugin: 'com.android.application'
 
+repositories {
+    google()
+    mavenCentral()
+}
+
 android {
     compileSdkVersion 30
-    aaptOptions {
-        cruncherEnabled false
-    }
+    buildToolsVersion '30.0.3'
+
     defaultConfig {
         applicationId "com.android.support"
         minSdkVersion 19
         targetSdkVersion 30
         versionCode 1
         versionName "3.2"
-        ndk {
-            abiFilters 'arm64-v8a'
-        }
+        multiDexEnabled true
     }
-    buildFeatures {
-        viewBinding true
-        buildConfig false
-    }
+
     buildTypes {
         release {
             shrinkResources false
@@ -46,18 +38,25 @@ android {
             minifyEnabled false
         }
     }
-    // externalNativeBuild desativado: cmake do AIDE+ e x86_64, nao roda em ARM64.
-    // Compile os .so no PC (Android Studio / gradle desktop) e coloque em:
-    //   src/main/jniLibs/arm64-v8a/
-    // O Gradle pega automaticamente da jniLibs sem precisar de externalNativeBuild.
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    lintOptions {
+        abortOnError false
+    }
+
     sourceSets {
         main {
             jniLibs.srcDirs = ['src/main/jniLibs']
         }
     }
-    ndkVersion '23.1.7779620'
 }
+
 dependencies {
     implementation fileTree(dir: 'libs', include: ['*.jar'])
     implementation 'androidx.annotation:annotation:1.5.0'
+    implementation 'androidx.multidex:multidex:2.0.1'
 }
