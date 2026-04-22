@@ -59,4 +59,6 @@ android {
 }
 dependencies {
     implementation fileTree(dir: 'libs', include: ['*.jar'])
+    implementation 'androidx.annotation:annotation:1.5.0'
+    implementation 'androidx.viewbinding:viewbinding:7.4.2'
 }
