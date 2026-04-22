@@ -42,9 +42,13 @@ android {
             minifyEnabled false
         }
     }
-    externalNativeBuild {
-        cmake {
-            path file('src/main/jni/CMakeLists.txt')
+    // externalNativeBuild desativado: cmake do AIDE+ e x86_64, nao roda em ARM64.
+    // Compile os .so no PC (Android Studio / gradle desktop) e coloque em:
+    //   src/main/jniLibs/arm64-v8a/
+    // O Gradle pega automaticamente da jniLibs sem precisar de externalNativeBuild.
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ['src/main/jniLibs']
         }
     }
     ndkVersion '23.1.7779620'
