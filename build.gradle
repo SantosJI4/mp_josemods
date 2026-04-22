@@ -19,6 +19,11 @@ android {
     compileSdkVersion 30
     buildToolsVersion '30.0.3'
 
+    aaptOptions {
+        cruncherEnabled false
+        useNewCruncher false
+    }
+
     defaultConfig {
         applicationId "com.android.support"
         minSdkVersion 19
