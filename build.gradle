@@ -32,6 +32,10 @@ android {
             abiFilters 'arm64-v8a'
         }
     }
+    buildFeatures {
+        viewBinding false
+        buildConfig false
+    }
     buildTypes {
         release {
             shrinkResources false
