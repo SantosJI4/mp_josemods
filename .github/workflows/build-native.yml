@@ -1,0 +1,45 @@
+name: Build Native Libs (arm64-v8a)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/main/jni/**'
+  workflow_dispatch:   # permite rodar manualmente no GitHub
+
+permissions:
+  contents: write
+
+jobs:
+  build-native:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install NDK 23.1.7779620
+        run: |
+          echo "y" | ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager \
+            "ndk;23.1.7779620" \
+            --sdk_root=${ANDROID_HOME}
+
+      - name: Build native libs with ndk-build
+        run: |
+          export NDK=${ANDROID_HOME}/ndk/23.1.7779620
+          $NDK/ndk-build \
+            NDK_PROJECT_PATH=$GITHUB_WORKSPACE/src/main/jni \
+            APP_BUILD_SCRIPT=$GITHUB_WORKSPACE/src/main/jni/Android.mk \
+            NDK_APPLICATION_MK=$GITHUB_WORKSPACE/src/main/jni/Application.mk \
+            NDK_OUT=$GITHUB_WORKSPACE/src/main/jni/obj \
+            NDK_LIBS_OUT=$GITHUB_WORKSPACE/src/main/jniLibs \
+            -j4
+
+      - name: Commit compiled .so files
+        run: |
+          git config user.name  "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add src/main/jniLibs/
+          git diff --staged --quiet || \
+            git commit -m "ci: update compiled native libs [skip ci]"
+          git push
