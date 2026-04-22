@@ -1,4 +1,4 @@
-﻿package com.android.support;
+package com.android.support;
 
 import android.app.Activity;
 import android.content.Intent;
