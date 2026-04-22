@@ -41,11 +41,12 @@ android {
         }
     }
     externalNativeBuild {
-        ndkBuild {
-            path file('src/main/jni/Android.mk')
+        cmake {
+            path file('src/main/jni/CMakeLists.txt')
+            version '3.22.1'
         }
     }
-	ndkVersion = '23.1.7779620'
+    ndkVersion '23.1.7779620'
 }
 dependencies {
     implementation fileTree(dir: 'libs', include: ['*.jar'])
