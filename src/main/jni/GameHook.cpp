@@ -718,6 +718,12 @@ static void*   g_ab2LockedTarget  = nullptr;    // ponteiro do inimigo atualment
 static Vector3 g_ab2LockedHeadPos{};            // última posição válida da cabeça do alvo travado
 static bool    g_ab2HasLock       = false;      // true = aimbot2 está travado num alvo
 static float   g_ab2BestDist      = 1e9f;       // melhor candidato no frame atual (para seleção)
+
+// ── Aimbot 1 lock state (histerese, como aimbot 2) ──────────────────────────
+static void*   g_ab1LockedTarget  = nullptr;    // inimigo atualmente travado
+static Vector3 g_ab1LockedHeadPos{};            // última posição válida da cabeça do alvo
+static bool    g_ab1HasLock       = false;      // true = aimbot1 travado num alvo
+static float   g_ab1BestDist      = 1e9f;       // melhor candidato deste frame
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ============================================================
@@ -946,28 +952,45 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
             }
         }
 
-        // ── Aimbot 1 (câmera): snap contínuo enquanto dispara ──────────────────
-        if (g_aimCandValid && fn_SetAimRotation && g_camTransform && fn_get_position &&
+        // ── Aimbot 1 (silentAim): SLERP suave + lock à cabeça real ──────────────
+        // g_ab1LockedHeadPos = posição GetHeadTF do alvo travado (atualizado no loop de inimigos)
+        // Filtros já aplicados no loop: isDying, prone, parede, FOV, histerese
+        if (g_ab1HasLock && fn_SetAimRotation && g_camTransform && fn_get_position &&
             sharedData->silentAimEnabled) {
 
             bool isFiring = fn_IsFiring && fn_IsFiring(self, nullptr);
             if (isFiring) {
                 Vector3 camPos = fn_get_position(g_camTransform, nullptr);
                 if (!std::isnan(camPos.x) && !std::isnan(camPos.y) && !std::isnan(camPos.z)) {
-                    float dx = g_aimCandTarget.x - camPos.x;
-                    float dy = g_aimCandTarget.y - camPos.y;
-                    float dz = g_aimCandTarget.z - camPos.z;
+                    float dx = g_ab1LockedHeadPos.x - camPos.x;
+                    float dy = g_ab1LockedHeadPos.y - camPos.y;
+                    float dz = g_ab1LockedHeadPos.z - camPos.z;
                     float len = sqrtf(dx*dx + dy*dy + dz*dz);
-                    if (len >= 0.01f) {
-                        float rageOff = sharedData->aimRageOffsetY;
-                        if (rageOff != 0.0f) dy += rageOff;
-                        Quaternion aimQ = LookQuatFromDir(dx, dy, dz);
-                        Quaternion curQ = *(Quaternion*)((uint8_t*)self + OFF_m_CurrentAimRotation);
-                        float dot = curQ.x*aimQ.x + curQ.y*aimQ.y + curQ.z*aimQ.z + curQ.w*aimQ.w;
-                        if (dot < 0.0f) {
-                            aimQ.x=-aimQ.x; aimQ.y=-aimQ.y; aimQ.z=-aimQ.z; aimQ.w=-aimQ.w;
+                    if (len >= 0.1f) {
+                        Quaternion targetQ = LookQuatFromDir(dx, dy, dz);
+                        float smooth = sharedData->aimbotSmooth;
+                        if (smooth > 0.0f && smooth < 1.0f) {
+                            // SLERP: interpolação suave frame a frame
+                            Quaternion curQ = *(Quaternion*)((uint8_t*)self + OFF_m_CurrentAimRotation);
+                            float dot = curQ.x*targetQ.x + curQ.y*targetQ.y
+                                      + curQ.z*targetQ.z + curQ.w*targetQ.w;
+                            if (dot < 0.0f) {
+                                targetQ.x=-targetQ.x; targetQ.y=-targetQ.y;
+                                targetQ.z=-targetQ.z; targetQ.w=-targetQ.w;
+                            }
+                            float t = 1.0f - smooth; // 1=snap, 0.05=muito suave
+                            targetQ.x = curQ.x + (targetQ.x - curQ.x) * t;
+                            targetQ.y = curQ.y + (targetQ.y - curQ.y) * t;
+                            targetQ.z = curQ.z + (targetQ.z - curQ.z) * t;
+                            targetQ.w = curQ.w + (targetQ.w - curQ.w) * t;
+                            float qlen = sqrtf(targetQ.x*targetQ.x + targetQ.y*targetQ.y
+                                             + targetQ.z*targetQ.z + targetQ.w*targetQ.w);
+                            if (qlen > 0.001f) {
+                                targetQ.x/=qlen; targetQ.y/=qlen;
+                                targetQ.z/=qlen; targetQ.w/=qlen;
+                            }
                         }
-                        fn_SetAimRotation(self, aimQ, true, nullptr);
+                        fn_SetAimRotation(self, targetQ, true, nullptr);
                     }
                 }
             }
@@ -1122,6 +1145,12 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
         if (!sharedData->aimbot2Enabled) {
             g_ab2LockedTarget = nullptr;
             g_ab2HasLock      = false;
+        }
+        // Aimbot 1: reset candidato do frame; lock preservado entre frames
+        g_ab1BestDist = 1e9f;
+        if (!sharedData->silentAimEnabled) {
+            g_ab1LockedTarget = nullptr;
+            g_ab1HasLock      = false;
         }
     }
 
@@ -1304,37 +1333,75 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
         }
     }
 
-    // ── Aimbot 1 (silentAim / autoAim): seleção de candidato ─────────────────
-    if ((sharedData->silentAimEnabled || sharedData->autoAimEnabled) && chp > 0) {
-        // v43: wall check via vtable IsVisible()
-        bool isVis = fn_IsVisible ? fn_IsVisible(self, nullptr) : true;
-        if (screenTop.z <= 120.0f && isVis) {
-            bool inFov = true;
-            if (sharedData->silentAimEnabled) {
-                float fovDeg = sharedData->aimAssistFovDeg;
-                if (fovDeg < 1.0f || fovDeg > 90.0f) fovDeg = 90.0f;
-                float fovRadiusPx = (float)screenW * (fovDeg / 90.0f) * 0.5f;
-                inFov = (screenDist < fovRadiusPx);
+    // ── Aimbot 1 (silentAim): seleção completa com lock, GetHeadTF e filtros ────
+    // Prioridade única: mais próximo ao centro da tela (sem HP/distância)
+    // Filtros: isDying, deitado/prone, atrás de parede, fora do FOV
+    if (sharedData->silentAimEnabled && chp > 0) do {
+        // Filtro 1: derrubado/sangrando — duas checagens para robustez
+        bool isKnocked = *(bool*)((uint8_t*)self + OFF_IsKnockedDownBleed);
+        if (isKnocked) break;
+        if (fn_get_IsDieing && fn_get_IsDieing(self, nullptr)) break;
+
+        // Filtro 2: deitado (prone) — agachado E cabeça < 0.75m da base
+        if (fn_IsCrouching && fn_IsCrouching(self, nullptr) && fn_GetHeadTF) {
+            void* htf_prone = fn_GetHeadTF(self, nullptr);
+            if (htf_prone) {
+                Vector3 hp_prone = fn_get_position(htf_prone, nullptr);
+                if (!std::isnan(hp_prone.y) && (hp_prone.y - worldPos.y) < 0.75f) break;
             }
-            if (inFov) {
-                int  priority = sharedData->aimTargetPriority;
-                bool isBetter = false;
-                if (priority == 1) {
-                    isBetter = (chp < g_aimBestHp);
-                } else if (priority == 2) {
-                    float depth = screenTop.z;
-                    isBetter = (depth < g_aimBestDepth);
-                } else {
-                    isBetter = (screenDist < g_aimBestScreenDist);
+        }
+
+        // Filtro 3: atrás de parede
+        if (fn_IsVisible && !fn_IsVisible(self, nullptr)) break;
+
+        // Filtro 4: fora do FOV
+        float fovDeg1 = sharedData->aimAssistFovDeg;
+        if (fovDeg1 < 1.0f || fovDeg1 > 180.0f) fovDeg1 = 60.0f;
+        float fovRadiusPx1 = (float)screenW * (fovDeg1 / 90.0f) * 0.5f;
+
+        // Histerese: alvo travado usa raio 35% maior para não soltar ao mover
+        float ab1Radius = (self == g_ab1LockedTarget && g_ab1HasLock)
+                          ? fovRadiusPx1 * 1.35f : fovRadiusPx1;
+        if (screenDist >= ab1Radius) break;
+
+        // Cabeça via GetHeadTF — segue o bone real, sem lag de collider/estimativa
+        Vector3 ab1Head = topWorld;
+        if (fn_GetHeadTF) {
+            void* htf_a1 = fn_GetHeadTF(self, nullptr);
+            if (htf_a1) {
+                Vector3 hp_a1 = fn_get_position(htf_a1, nullptr);
+                if (!std::isnan(hp_a1.x) && !std::isnan(hp_a1.y) && !std::isnan(hp_a1.z) &&
+                    (hp_a1.x != 0.0f || hp_a1.y != 0.0f || hp_a1.z != 0.0f)) {
+                    ab1Head = hp_a1;
                 }
-                if (isBetter) {
-                    g_aimBestScreenDist = screenDist;
-                    g_aimBestHp         = chp;
-                    g_aimBestDepth      = screenTop.z;
-                    g_aimCandDist       = screenDist;
-                    g_aimCandTarget     = topWorld;
-                    g_aimCandValid      = true;
-                }
+            }
+        }
+
+        // Seleciona apenas o mais próximo ao centro — sem prioridade HP ou distância
+        if (screenDist < g_ab1BestDist) {
+            g_ab1BestDist      = screenDist;
+            g_ab1LockedTarget  = self;
+            g_ab1LockedHeadPos = ab1Head;
+            g_ab1HasLock       = true;
+            // Atualiza legado g_aimCandTarget para autoAim/HUD
+            g_aimCandTarget    = ab1Head;
+            g_aimCandDist      = screenDist;
+            g_aimCandValid     = true;
+        }
+    } while(0);
+
+    // autoAim sem silentAim: seleção simples com FOV (sem filtros avançados)
+    if (sharedData->autoAimEnabled && !sharedData->silentAimEnabled && chp > 0) {
+        bool isVis = fn_IsVisible ? fn_IsVisible(self, nullptr) : true;
+        if (isVis) {
+            float fovDeg2 = sharedData->aimAssistFovDeg;
+            if (fovDeg2 < 1.0f || fovDeg2 > 180.0f) fovDeg2 = 60.0f;
+            float fovRadiusPx2 = (float)screenW * (fovDeg2 / 90.0f) * 0.5f;
+            if (screenDist < fovRadiusPx2 && screenDist < g_aimBestScreenDist) {
+                g_aimBestScreenDist = screenDist;
+                g_aimCandTarget     = topWorld;
+                g_aimCandDist       = screenDist;
+                g_aimCandValid      = true;
             }
         }
     }
