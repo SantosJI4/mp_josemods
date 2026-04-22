@@ -20,10 +20,7 @@ apply plugin: 'com.android.application'
 android {
     compileSdkVersion 30
     aaptOptions {
-        noCompress ''
-        ignoreAssetsPattern '!.svn:!.git:.*:!CVS:!thumbs.db:!picasa.ini:!*.scc:*~'
         cruncherEnabled false
-        failOnMissingConfigEntry false
     }
     defaultConfig {
         applicationId "com.android.support"
