@@ -23,6 +23,7 @@ android {
         applicationId "com.android.support"
         minSdkVersion 19
         targetSdkVersion 30
+        
         versionCode 1
         versionName "3.2"
         multiDexEnabled true
