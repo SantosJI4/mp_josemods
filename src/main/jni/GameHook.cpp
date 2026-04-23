@@ -910,11 +910,15 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
         // Cachear PlayerAttributes do player local para filtro nos hooks de speed/recoil
         void* attrPtr = *(void**)((uint8_t*)self + OFF_PlayerAttributes_field);
         if (attrPtr && (uintptr_t)attrPtr > 0x1000) g_localPlayerAttr = attrPtr;
-        // ── Aimbot 2 (v59-ab2v2): snap direto à cabeça — SEM condição IsFiring ──
-        // Não precisa estar atirando. Snapa para a cabeça do alvo travado sempre
-        // que aimbot2Enabled e g_ab2HasLock (lock selecionado no loop de inimigos).
+        // Liberar locks se nenhum alvo válido foi encontrado no frame anterior.
+        // Evita tremer/mirar em alvo caído ou fora do FOV quando campo está vazio.
+        if (g_ab1BestDist >= 9e8f) { g_ab1HasLock = false; g_ab1LockedTarget = nullptr; }
+        if (g_ab2BestDist >= 9e8f) { g_ab2HasLock = false; g_ab2LockedTarget = nullptr; }
+
+        // ── Aimbot 2: snap direto à cabeça — apenas quando IsFiring ──
         // Smooth configurável: 0 = snap instantâneo, 0.05-0.9 = lerp suave.
-        if (sharedData->aimbot2Enabled && g_ab2HasLock &&
+        bool isFiringAb2 = fn_IsFiring && fn_IsFiring(self, nullptr);
+        if (sharedData->aimbot2Enabled && g_ab2HasLock && isFiringAb2 &&
             fn_SetAimRotation && g_camTransform && fn_get_position) {
             Vector3 camPos = fn_get_position(g_camTransform, nullptr);
             if (!std::isnan(camPos.x) && !std::isnan(camPos.y) && !std::isnan(camPos.z)) {
@@ -1202,8 +1206,12 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     Vector3 ab2HeadPos{};
     bool    ab2HeadValid = false;
     if (sharedData->aimbot2Enabled && fn_GetHeadTF && fn_get_position) {
-        // Filtro: derrubado/sangrando
-        bool isDying = fn_get_IsDieing && fn_get_IsDieing(self, nullptr);
+        // Filtro: derrubado/sangrando (inclui knocked-down/bleeding)
+        bool isKnockedAb2 = *(bool*)((uint8_t*)self + OFF_IsKnockedDownBleed);
+        bool isDying = isKnockedAb2 || (fn_get_IsDieing && fn_get_IsDieing(self, nullptr));
+        if (isDying && self == g_ab2LockedTarget) {
+            g_ab2HasLock = false; g_ab2LockedTarget = nullptr;
+        }
         if (!isDying) {
             // Filtro: deitado (prone) — agachado E altura abaixo de 0.5m da base
             bool isProneSkip = false;
@@ -1308,6 +1316,9 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     if (sharedData->aimbot2Enabled && ab2HeadValid && chp > 0) {
         // Filtro obrigatório: IsVisible (ignora inimigos atrás de parede)
         bool ab2Vis = fn_IsVisible ? fn_IsVisible(self, nullptr) : true;
+        if (!ab2Vis && self == g_ab2LockedTarget) {
+            g_ab2HasLock = false; g_ab2LockedTarget = nullptr;
+        }
         if (ab2Vis && screenTop.z <= 120.0f) {
             // FOV do aimbot2 (separado do FOV do aimbot1)
             float ab2FovDeg = sharedData->aimbot2FovDeg;
@@ -1337,22 +1348,34 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
     // Prioridade única: mais próximo ao centro da tela (sem HP/distância)
     // Filtros: isDying, deitado/prone, atrás de parede, fora do FOV
     if (sharedData->silentAimEnabled && chp > 0) do {
-        // Filtro 1: derrubado/sangrando — duas checagens para robustez
+        // Filtro 1: derrubado/sangrando — hard filter: limpa lock imediatamente
         bool isKnocked = *(bool*)((uint8_t*)self + OFF_IsKnockedDownBleed);
-        if (isKnocked) break;
-        if (fn_get_IsDieing && fn_get_IsDieing(self, nullptr)) break;
+        if (isKnocked) {
+            if (self == g_ab1LockedTarget) { g_ab1HasLock = false; g_ab1LockedTarget = nullptr; }
+            break;
+        }
+        if (fn_get_IsDieing && fn_get_IsDieing(self, nullptr)) {
+            if (self == g_ab1LockedTarget) { g_ab1HasLock = false; g_ab1LockedTarget = nullptr; }
+            break;
+        }
 
         // Filtro 2: deitado (prone) — agachado E cabeça < 0.75m da base
         if (fn_IsCrouching && fn_IsCrouching(self, nullptr) && fn_GetHeadTF) {
             void* htf_prone = fn_GetHeadTF(self, nullptr);
             if (htf_prone) {
                 Vector3 hp_prone = fn_get_position(htf_prone, nullptr);
-                if (!std::isnan(hp_prone.y) && (hp_prone.y - worldPos.y) < 0.75f) break;
+                if (!std::isnan(hp_prone.y) && (hp_prone.y - worldPos.y) < 0.75f) {
+                    if (self == g_ab1LockedTarget) { g_ab1HasLock = false; g_ab1LockedTarget = nullptr; }
+                    break;
+                }
             }
         }
 
-        // Filtro 3: atrás de parede
-        if (fn_IsVisible && !fn_IsVisible(self, nullptr)) break;
+        // Filtro 3: atrás de parede — hard filter: limpa lock
+        if (fn_IsVisible && !fn_IsVisible(self, nullptr)) {
+            if (self == g_ab1LockedTarget) { g_ab1HasLock = false; g_ab1LockedTarget = nullptr; }
+            break;
+        }
 
         // Filtro 4: fora do FOV
         float fovDeg1 = sharedData->aimAssistFovDeg;
