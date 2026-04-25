@@ -48,76 +48,24 @@ struct SharedESPData {
     int screenH;
     int playerCount;
     volatile int espEnabled;      // Overlay seta 1/0 → hook verifica
-    volatile int debugLastCall;   // Diagnóstico: último il2cpp call completado
-    volatile int resetSelf;       // Overlay seta 1 → hook reseta cache do self player
-
-    // ── Aim Assist (Head Magnetism) ──────────────────────────────────────────
-    // Overlay escreve configurações → hook aplica rotação suave da câmera
-    volatile int aimAssistEnabled;  // Toggle: 0 = off, 1 = on
-    float        aimAssistSpeed;    // Máx graus por frame (0.1–8.0). "Sensi" do aim.
-    float        aimAssistFovDeg;   // Cone de ativação em graus (ex: 30)
-    float        aimAssistDeadzone; // Ângulo mínimo para ativar correção (evita jitter)
-    volatile int aimAssistHasTarget;// Hook escreve 1 quando há alvo no cone
-
-    // ── Silent Aim (v31: aimbot direto) ───────────────────────────────────
-    // Mover câmera diretamente para a cabeça do inimigo (visível ao jogador).
-    // A câmera NÃO é restaurada após orig — mira permanece no alvo.
-    volatile int silentAimEnabled;  // Toggle: 0 = off, 1 = on
-
-    // ── Aim Target Priority ──────────────────────────────────────────────────
-    // 0 = Nearest (Center Screen) — menor distância ao centro da tela
-    // 1 = Lowest HP — inimigo com menor HP dentro do FOV
-    // 2 = Nearest Distance — menor profundidade de câmera (clipW)
-    volatile int aimTargetPriority;
-    // ── Aimbot Mode ──────────────────────────────────────────────────
-    // 0 = Legit: interpolação suave (lerp) por frame
-    // 1 = Rage:  snap instantâneo + offsetY (capa) para o topo da malha
-    volatile int aimMode;
-    float        aimLegitSmooth; // legado (não utilizado, manter offset)
-    float        aimRageOffsetY; // Rage: offset Y sobre o alvo (capa) ex: 0.05
-    float        aimbotSmooth;   // Aimbot: 0.0=instant snap, 0.0-0.95=lerp suave
-
-    // ── Trigger Key (hold-to-aim) ─────────────────────────────────
-    // triggerKey  = 0  → aimbot sempre ativo quando aimAssistEnabled
-    // triggerKey  = 114/115 → aimbot só ativo enquanto tecla estiver PRESSIONADA
-    // triggerHeld = 1 enquanto a tecla estiver segurada (overlay atualiza)
-    volatile int triggerHeld; // 1 = tecla trigger pressionada agora
-    int32_t      triggerKey;  // keycode (0 = sem trigger / sempre ativo)
-
-    // ── Anti-Recoil ──────────────────────────────────────────────────────
-    // Salva euler antes de orig, restaura após orig.
-    // Cancela o recoil (variação angular) adicionado pelo jogo por frame.
-    // Funciona independente do aimbot.
-    volatile int recoilEnabled; // 1 = ativo, 0 = desativado
-
-    // ── Speed Hack ─────────────────────────────────────────────────────
-    // Chama set_MoveSpeed(player, speedValue) no player local a cada frame.
-    // speedValue normal: ~6.5. Valores acima aceleram o personagem.
-    volatile int speedEnabled; // 1 = ativo, 0 = desativado
-    float        speedValue;   // velocidade alvo (ex: 15.0 = ~2x normal)
-
-    // ── Player Hacks (v49) ───────────────────────────────────────────────
-    volatile int ammoEnabled;        // 1 = munição infinita (get_IsAmmoFree=true)
-    volatile int medkitFastEnabled;  // 1 = medkit rápido (EatSpeedScale alto)
-    volatile int fastWeaponSwitch;   // 1 = troca de arma instantânea (InSwapWeaponCD=false)
-    volatile int medkitRunEnabled;   // 1 = usar medkit correndo (CanMedkitOnMove=true)
-
-    // ── Auto Aim (v59) ───────────────────────────────────────────────────────
-    // Troca de arma → snap automático na cabeça do inimigo + disparo automático.
-    // OnChangeWeaponFinished hook → g_pendingAutoFire → snap + OnTriggerShoot(VVP).
-    volatile int autoAimEnabled;         // 1 = ativo
-    volatile int autoAimHasTarget;       // Hook escreve 1 quando há alvo válido no ESP
-
-    // ── Aimbot 2 (v59-ab2) ──────────────────────────────────────────────────
-    // Chama GetHeadTF() → posição real da cabeça. Sempre vai direto à cabeça.
-    // Filtros: ignora paredes (IsVisible), invisíveis, deitados (IsCrouching+altura).
-    // Sistema de lock com histerese: trava num alvo, só solta quando sai do FOV+margem.
-    volatile int aimbot2Enabled;         // 1 = ativo
-    volatile int aimbot2HasTarget;       // Hook escreve 1 quando há alvo travado
-    float        aimbot2FovDeg;          // FOV de ativação (graus, 5-90)
-    float        aimbot2Smooth;          // Suavidade: 0=snap, 0.0-0.95=lerp
-    volatile int aimbot2IgnoreProne;     // 1 = ignorar players deitados/agachados
-    volatile int aimbot2ShowFov;         // 1 = desenhar círculo FOV do aimbot2 na tela
+    volatile int aimbot2Enabled;        // Overlay ativa o aimbot 2
+    volatile int aimbot2IgnoreProne;     // Ignorar alvos deitados
+    volatile float aimbot2FovDeg;        // FOV do aimbot 2
+    volatile float aimbot2Smooth;        // Suavidade do aimbot 2
+    volatile int aimbot2HasTarget;       // Hook reporta lock do aimbot 2
+    volatile int silentAimEnabled; // Legacy: aimbot 1 / hidden fallback
+    volatile int autoAimEnabled;  // Legacy: auto aim
+    volatile int aimAssistHasTarget; // Legacy HUD / target state
+    volatile int autoAimHasTarget;   // Legacy HUD / target state
+    volatile float aimAssistFovDeg;  // Legacy FOV para aimbot 1 / auto aim
+    volatile float aimbotSmooth;     // Legacy smooth para aimbot 1
+    volatile int triggerKey;        // Legacy trigger key
+    volatile int triggerHeld;       // Legacy trigger state
+    volatile int recoilEnabled;     // Hook anti-recoil state
+    volatile int speedEnabled;      // Hook speed hack state
+    volatile float speedValue;      // Hook speed value
+    volatile int debugLastCall;     // Diagnóstico: último il2cpp call completado
+    volatile int resetSelf;         // Overlay seta 1 → hook reseta cache do self player
 
     ESPEntry players[MAX_ESP_PLAYERS];
 };

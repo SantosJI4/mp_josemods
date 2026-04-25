@@ -65,50 +65,8 @@ static float espMaxDistance = 999.0f;
 static float linePositionX = 0.5f;
 
 // ============================================================
-// Aim Assist State
+// Safe overlay state
 // ============================================================
-static bool  aimAssist       = false;
-static float aimSpeed        = 2.5f;  // Graus por frame (sensi do aim)
-static float aimFovDeg       = 30.0f; // Cone de ativação em graus
-static float aimDeadzone     = 1.5f;  // Ângulo mínimo para ativar (anti-jitter)
-
-// ============================================================
-// Aimbot State (v31)
-// ============================================================
-static bool  silentAim      = false;
-static bool  recoilEnabled  = false;  // v31: anti-recoil
-static float aimbotSmooth   = 0.0f;   // 0.0=snap instant, 0.0-0.95=lerp suave
-static bool  speedEnabled   = false;  // v32: speed hack
-static float speedValue     = 13.0f;  // velocidade (normal ~6.5)
-
-// ============================================================
-// Aim Target Priority
-// 0 = Nearest Center, 1 = Lowest HP, 2 = Nearest Distance
-// ============================================================
-static int   aimTargetPriority = 0;
-
-// ============================================================
-// Aimbot Mode (v27)
-// 0 = Legit (suave/lerp), 1 = Rage (snap instantâneo)
-// ============================================================
-static int   aimMode        = 0;      // 0=Legit, 1=Rage
-static float aimLegitSmooth = 0.12f;  // fator lerp (0.01–0.50)
-static float aimRageOffsetY = 0.0f;   // offset Y sobre a cabeça (0=bone da cabeça exato)
-static int   triggerKey     = 0;      // 0=sempre ativo, 114=Vol-, 115=Vol+
-
-// ============================================================
-// Player Hacks (v49)
-// ============================================================
-static bool ammoEnabled       = false;
-static bool medkitFastEnabled = false;
-static bool fastWeaponSwitch  = false;
-static bool medkitRunEnabled  = false;
-static bool autoAim           = false;  // v59: auto aim (snap + disparo ao trocar arma)
-static bool aimbot2           = false;  // v59-ab2v2: snap head direto via GetHeadTF
-static float ab2Fov           = 60.0f; // FOV em graus para aimbot2 (5-180)
-static float ab2Smooth        = 0.15f; // Suavidade: 0=snap, 0.9=muito suave
-static bool ab2IgnoreProne    = true;  // Ignorar players deitados/agachados
-static bool showFovCircle     = true;  // Desenhar círculo de FOV na tela (qualquer aimbot)
 static bool drawNickName      = true;
 
 // ============================================================
@@ -178,9 +136,29 @@ static void stopRecording() {
 // ============================================================
 // Hotkeys State  (Linux keycodes: Vol- = 114, Vol+ = 115)
 // ============================================================
-static int hotkeyAim    = 115;  // KEY_VOLUMEUP  — toggle Head Magnetism
-static int hotkeySilent = 114;  // KEY_VOLUMEDOWN — toggle Silent Aim
 static int hotkeyEsp    = 0;    // 0 = desativado
+static int hotkeyAim    = 0;    // reserved for goal of shared memory controls
+static int hotkeySilent = 0;
+
+static bool aimAssist       = false;
+static float aimSpeed       = 4.0f;
+static float aimFovDeg      = 45.0f;
+static float aimDeadzone    = 0.0f;
+static bool silentAim       = false;
+static int32_t aimTargetPriority = 0;
+static int32_t aimMode      = 0;
+static float aimLegitSmooth = 0.25f;
+static float aimRageOffsetY = 0.0f;
+static int32_t triggerKey   = 0;
+static bool autoAim         = false;
+static bool aimbot2         = false;
+static float ab2Fov         = 60.0f;
+static float ab2Smooth      = 0.0f;
+static bool ab2IgnoreProne  = true;
+static bool recoilEnabled   = false;
+static float aimbotSmooth   = 0.0f;
+static bool speedEnabled    = false;
+static float speedValue     = 10.0f;
 
 // SharedMemory (leitura do hook injetado no jogo)
 static SharedESPData* sharedData = nullptr;
@@ -310,29 +288,8 @@ void DrawESP(int screenW, int screenH) {
     // Hook SEMPRE coleta players (espEnabled=1 fixo) — draw controlado pelo toggle
     sharedData->espEnabled = 1;
 
-    // ── Sincronizar Aimbot (v31: aimbot direto + anti-recoil) ────────────────
-    sharedData->aimAssistEnabled  = 0;
-    sharedData->aimAssistFovDeg   = aimFovDeg;
-    sharedData->silentAimEnabled   = silentAim ? 1 : 0;
-    sharedData->aimTargetPriority  = aimTargetPriority;
-    sharedData->aimRageOffsetY     = aimRageOffsetY;
-    sharedData->triggerKey         = triggerKey;
-    sharedData->recoilEnabled      = recoilEnabled ? 1 : 0;
-    sharedData->aimbotSmooth       = aimbotSmooth;
-    sharedData->speedEnabled       = speedEnabled ? 1 : 0;
-    sharedData->speedValue         = speedValue;
-    // Player Hacks (v49)
-    sharedData->ammoEnabled        = ammoEnabled       ? 1 : 0;
-    sharedData->medkitFastEnabled  = medkitFastEnabled ? 1 : 0;
-    sharedData->fastWeaponSwitch   = fastWeaponSwitch  ? 1 : 0;
-    sharedData->medkitRunEnabled   = medkitRunEnabled  ? 1 : 0;
-    sharedData->autoAimEnabled        = autoAim          ? 1 : 0;
-    sharedData->aimbot2Enabled        = aimbot2          ? 1 : 0;
-    sharedData->aimbot2FovDeg         = ab2Fov;
-    sharedData->aimbot2Smooth         = ab2Smooth;
-    sharedData->aimbot2IgnoreProne    = ab2IgnoreProne   ? 1 : 0;
-    sharedData->aimbot2ShowFov        = (showFovCircle && aimbot2) ? 1 : 0;
-    // triggerHeld é gerenciado exclusivamente pelo hotkeyThread
+    // Shared memory is only used for ESP data; no aim hooks are enabled.
+    sharedData->espEnabled = 1;
     // ────────────────────────────────────────────────────────────────────────
 
     if (!esp) return;
@@ -359,21 +316,6 @@ void DrawESP(int screenW, int screenH) {
     // Snapline: origem no centro inferior/topo da tela — usa scaleX para alinhar com o jogo
     ImVec2 snapOrigin = ImVec2((float)gameW * linePositionX * scaleX, 0.0f);
     auto* draw = ImGui::GetBackgroundDrawList();
-
-    // ── Círculo de FOV visual ─ desenhado ANTES do early-return, sempre visível quando aimbot ativo
-    // Controlado por showFovCircle (toggle na aba ESP). Suporta aimbot1 e aimbot2.
-    if (showFovCircle && (silentAim || aimAssist || aimbot2)) {
-        float cx          = (float)gameW * 0.5f * scaleX;
-        float cy          = (float)gameH * 0.5f * scaleY;
-        // aimbot2 usa seu próprio FOV, aimbot1 usa aimFovDeg
-        float activeFov   = aimbot2 ? ab2Fov : aimFovDeg;
-        float fovRadiusPx = (float)gameW * (activeFov / 90.0f) * 0.5f * scaleX;
-        bool  locked      = sharedData && (sharedData->aimAssistHasTarget || sharedData->aimbot2HasTarget);
-        ImU32 circleColor = locked
-            ? IM_COL32(255, 80,  0,  200)
-            : IM_COL32(255, 255, 255, 55);
-        draw->AddCircle(ImVec2(cx, cy), fovRadiusPx, circleColor, 64, 1.5f);
-    }
 
     bool hasTarget = false;
     for (int i = 0; i < count; i++) {
@@ -580,15 +522,6 @@ struct JawConfig {
     uint8_t  fastWeaponSwitch;
     uint8_t  medkitRunEnabled;
     uint8_t  drawNickName;
-    // v10 fields
-    uint8_t  autoAim;  // auto aim (snap + disparo ao trocar arma)
-    // v11 fields
-    uint8_t  aimbot2;   // aimbot2: snap via GetHeadTF() (cabeça direta)
-    // v12 fields (aimbot2 settings + FOV circle toggle)
-    float    ab2Fov;
-    float    ab2Smooth;
-    uint8_t  ab2IgnoreProne;
-    uint8_t  showFovCircle;
 };
 #pragma pack(pop)
 
@@ -605,39 +538,8 @@ static void saveConfig() {
     c.espColor[3]  = espLineColor.w;
     c.espMaxDist   = espMaxDistance;
     c.lineX        = linePositionX;
-    c.aimAssist    = aimAssist;
-    c.aimSpeed     = aimSpeed;
-    c.aimFovDeg    = aimFovDeg;
-    c.aimDeadzone  = aimDeadzone;
-    c.silentAim          = silentAim;
-    c.hotkeyAim          = hotkeyAim;
-    c.hotkeySilent       = hotkeySilent;
-    c.hotkeyEsp          = hotkeyEsp;
-    c.aimTargetPriority  = aimTargetPriority;
-    // v5
-    c.aimMode            = aimMode;
-    c.aimLegitSmooth     = aimLegitSmooth;
-    c.aimRageOffsetY     = aimRageOffsetY;
-    c.triggerKey         = triggerKey;
-    // v7
-    c.recoilEnabled      = recoilEnabled;
-    c.aimbotSmooth       = aimbotSmooth;
-    // v8
-    c.speedEnabled       = speedEnabled;
-    c.speedValue         = speedValue;
-    // v9
-    c.ammoEnabled        = ammoEnabled;
-    c.medkitFastEnabled  = medkitFastEnabled;
-    c.fastWeaponSwitch   = fastWeaponSwitch;
-    c.medkitRunEnabled   = medkitRunEnabled;
-    c.drawNickName       = drawNickName;
-    c.autoAim            = autoAim;
-    c.aimbot2            = aimbot2;
-    // v12
-    c.ab2Fov             = ab2Fov;
-    c.ab2Smooth          = ab2Smooth;
-    c.ab2IgnoreProne     = ab2IgnoreProne;
-    c.showFovCircle      = showFovCircle;
+    c.hotkeyEsp    = hotkeyEsp;
+    c.drawNickName = drawNickName;
     int fd = open(JAW_CONFIG_PATH, O_CREAT | O_WRONLY | O_TRUNC, 0666);
     if (fd >= 0) { write(fd, &c, sizeof(c)); close(fd); }
 }
@@ -656,39 +558,8 @@ static void loadConfig() {
     espLineColor  = ImVec4(c.espColor[0], c.espColor[1], c.espColor[2], c.espColor[3]);
     espMaxDistance= c.espMaxDist;
     linePositionX = c.lineX;
-    aimAssist     = c.aimAssist;
-    aimSpeed      = c.aimSpeed;
-    aimFovDeg     = c.aimFovDeg;
-    aimDeadzone   = c.aimDeadzone;
-    silentAim          = c.silentAim;
-    hotkeyAim          = c.hotkeyAim;
-    hotkeySilent       = c.hotkeySilent;
-    hotkeyEsp          = c.hotkeyEsp;
-    aimTargetPriority  = c.aimTargetPriority;
-    // v5
-    aimMode            = c.aimMode;
-    aimLegitSmooth     = c.aimLegitSmooth;
-    aimRageOffsetY     = c.aimRageOffsetY;
-    triggerKey         = c.triggerKey;
-    // v7
-    recoilEnabled      = c.recoilEnabled;
-    aimbotSmooth       = c.aimbotSmooth;
-    // v8
-    speedEnabled       = c.speedEnabled;
-    speedValue         = c.speedValue;
-    // v9
-    ammoEnabled        = c.ammoEnabled;
-    medkitFastEnabled  = c.medkitFastEnabled;
-    fastWeaponSwitch   = c.fastWeaponSwitch;
-    medkitRunEnabled   = c.medkitRunEnabled;
-    drawNickName       = c.drawNickName;
-    autoAim            = c.autoAim;
-    aimbot2            = c.aimbot2;
-    // v12
-    ab2Fov             = c.ab2Fov  > 0.0f ? c.ab2Fov  : 60.0f;
-    ab2Smooth          = c.ab2Smooth;
-    ab2IgnoreProne     = c.ab2IgnoreProne;
-    showFovCircle      = c.showFovCircle;
+    hotkeyEsp     = c.hotkeyEsp;
+    drawNickName  = c.drawNickName;
 }
 
 // ============================================================
@@ -766,21 +637,8 @@ static void* hotkeyThread(void*) {
         // ── Trigger key: detectar HOLD/RELEASE em tempo real ──────────────
         // Se triggerKey está configurado, essa tecla faz "hold-to-aim".
         // Tecla de trigger não aciona toggles de features.
-        if (triggerKey > 0 && ev.code == (uint16_t)triggerKey) {
-            if (sharedData)
-                sharedData->triggerHeld = (ev.value >= 1) ? 1 : 0;
-            continue;  // não cai nos toggles abaixo
-        }
         // ── Toggles normais só em key-press (value==1) ────────────────────
         if (ev.value != 1) continue;
-        // hotkeyAim agora controla silentAim (v29: único aimbot)
-        if (hotkeyAim > 0 && ev.code == (uint16_t)hotkeyAim) {
-            silentAim = !silentAim;
-            if (sharedData) {
-                sharedData->silentAimEnabled  = silentAim ? 1 : 0;
-                if (!silentAim) sharedData->aimAssistHasTarget = 0;
-            }
-        }
         if (hotkeyEsp > 0 && ev.code == (uint16_t)hotkeyEsp)
             esp = !esp;
     }
@@ -1209,8 +1067,14 @@ void DrawMenu() {
             Sep();
             bool prevAB2 = aimbot2;
             ToggleRow("Aimbot 2 (Head Direto)", &aimbot2);
-            if (aimbot2 != prevAB2 && sharedData)
+            if (aimbot2 != prevAB2 && sharedData) {
                 sharedData->aimbot2Enabled = aimbot2 ? 1 : 0;
+                if (aimbot2) {
+                    sharedData->aimbot2FovDeg = ab2Fov;
+                    sharedData->aimbot2Smooth = ab2Smooth;
+                    sharedData->aimbot2IgnoreProne = ab2IgnoreProne ? 1 : 0;
+                }
+            }
             if (aimbot2) {
                 ImGui::Spacing();
                 // Status de lock
@@ -1229,14 +1093,22 @@ void DrawMenu() {
                 // FOV do Aimbot 2
                 ImGui::TextColored(cFgText, "FOV");
                 ImGui::SameLine(90.0f); ImGui::SetNextItemWidth(-1.0f);
-                ImGui::SliderFloat("##ab2fov", &ab2Fov, 5.0f, 180.0f, "%.0f graus");
+                if (ImGui::SliderFloat("##ab2fov", &ab2Fov, 5.0f, 180.0f, "%.0f graus") && sharedData)
+                    sharedData->aimbot2FovDeg = ab2Fov;
                 // Smooth
                 ImGui::TextColored(cFgText, "Smooth");
                 ImGui::SameLine(90.0f); ImGui::SetNextItemWidth(-1.0f);
-                ImGui::SliderFloat("##ab2smooth", &ab2Smooth, 0.0f, 0.95f, "%.2f");
+                if (ImGui::SliderFloat("##ab2smooth", &ab2Smooth, 0.0f, 0.95f, "%.2f") && sharedData)
+                    sharedData->aimbot2Smooth = ab2Smooth;
                 // Ignorar deitados
                 ImGui::Spacing();
+                bool prevProne = ab2IgnoreProne;
                 ToggleRow("Ignorar Deitados", &ab2IgnoreProne);
+                if (sharedData) {
+                    sharedData->aimbot2FovDeg = ab2Fov;
+                    sharedData->aimbot2Smooth = ab2Smooth;
+                    sharedData->aimbot2IgnoreProne = ab2IgnoreProne ? 1 : 0;
+                }
             }
             ImGui::EndTabItem();
         }
@@ -1250,13 +1122,7 @@ void DrawMenu() {
             ImGui::Spacing();
 
             const char* knames[] = { "OFF", "Vol-  (114)", "Vol+  (115)" };
-            int aidx = (hotkeyAim == 114) ? 1 : (hotkeyAim == 115) ? 2 : 0;
             int eidx = (hotkeyEsp == 114) ? 1 : (hotkeyEsp == 115) ? 2 : 0;
-
-            ImGui::TextColored(cFgText, "Aimbot");
-            ImGui::SameLine(90.0f); ImGui::SetNextItemWidth(-1.0f);
-            if (ImGui::Combo("##hka", &aidx, knames, 3))
-                hotkeyAim = (aidx == 1) ? 114 : (aidx == 2) ? 115 : 0;
 
             ImGui::TextColored(cFgText, "ESP");
             ImGui::SameLine(90.0f); ImGui::SetNextItemWidth(-1.0f);

@@ -332,10 +332,6 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 #define OFF_get_MaxHP               0x67CDE1C
 #define OFF_IsKnockedDownBleed      0x1150  // offset do campo bool no objeto Player
 
-// Aim Assist — UnityEngine.Transform (mesma classe de get_position)
-#define OFF_Transform_get_eulerAngles 0x9C5C2B4
-#define OFF_Transform_set_eulerAngles 0x9C5C33C
-
 // Animator.GetBoneTransform(HumanBodyBones) — para pegar o Transform do bone da cabeça
 // HumanBodyBones.Head = 10
 // Player layout: offset 0x700 = NewPlayerAnimationSystemComponent*
@@ -369,21 +365,6 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 
 // (offsets GetPartByCollider e IsHeadShotCheck removidos em v31 — server-side validates)
 
-// Speed Hack — hook em PlayerAttributes::GetWeaponRunSpeedScale(int) (v41)
-// Controla o multiplicador de velocidade ao segurar arma. Mais correto que GetMoveSpeedForFPPMode.
-// Dump L714386: public System.Single GetWeaponRunSpeedScale(System.Int32) // 0x725EE1C
-#define OFF_GetWeaponRunSpeedScale  0x725EE1C  // PlayerAttributes::GetWeaponRunSpeedScale(int)
-
-// Recoil — hook em PlayerAttributes::GetScatterRate() (v41)
-// Controla o spread/scatter das balas (recoil da arma). Retornar 0 = sem recoil.
-// Dump L714459: public System.Single GetScatterRate() // 0x7261F4C
-#define OFF_GetScatterRate          0x7261F4C  // PlayerAttributes::GetScatterRate()
-
-// Player::get_Attributes() — retorna o PlayerAttributes do player (usado para cache)
-// Dump L651529: public COW.GamePlay.PlayerAttributes get_Attributes() // 0x6752B38
-// Offset do campo PlayerAttributes dentro de Player (para cache do local player attr):
-#define OFF_PlayerAttributes_field  0x708      // Player.JKPFFNEMJIF (protected PlayerAttributes)
-
 // Aimbot — Player::SetAimRotation(Quaternion q, bool forceUpdate) (v40)
 // Método oficial do jogo para definir para onde o player mira.
 // Dump L651569: public System.Void SetAimRotation(Quaternion, bool) // 0x67718B8
@@ -401,56 +382,10 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 // Dump L652303: public System.Boolean IsFiring() // 0x675D420
 #define OFF_IsFiring                0x675D420
 
-// Camera Controller — CameraControllerBase::LateUpdate
-// Hookeado para aplicar aimbot/anti-recoil DEPOIS que o controlador posiciona a câmera.
-// Offset é o RVA do código da função (como OFF_LateUpdate).
-#define OFF_CameraController_LateUpdate 0x68FCE30
-
 // ── Player Hacks (v49) ──────────────────────────────────────────────────────
 // NickName — Player::get_NickName() — string IL2CPP do nome do player
 // Dump L651414: public System.String get_NickName() // 0x676CDF0
 #define OFF_get_NickName              0x676CDF0
-// get_IsAmmoFree — PlayerAttributes::get_IsAmmoFree() — true = infinito
-// Dump L714448: public System.Boolean get_IsAmmoFree() // 0x7261D18
-#define OFF_get_IsAmmoFree            0x7261D18
-// get_FSModeUseMedikitFasterRate — PlayerAttributes — fator de velocidade do medkit
-// Dump L714436: public System.Single get_FSModeUseMedikitFasterRate() // 0x7261740
-#define OFF_get_FSModeUseMedikitFasterRate 0x7261740
-// get_InSwapWeaponCD — Player — true = em cooldown de troca de arma
-// Dump L651567: public System.Boolean get_InSwapWeaponCD() // 0x67717AC
-#define OFF_get_InSwapWeaponCD        0x67717AC
-// IsMoving — Player — false = player não se move (backup para medkit andando)
-// Dump L651981: public System.Boolean IsMoving(); // 0x676650C
-#define OFF_IsMoving                  0x676650C
-// get_CanMedkitOnMove — Player — true = pode usar medkit andando (função principal)
-// Dump L653473: public System.Boolean get_CanMedkitOnMove(); // 0x6766680
-#define OFF_get_CanMedkitOnMove       0x6766680
-// CancelPreparation — Player — cancela o uso de item em andamento (medkit/item)
-// Hook: quando medkitRunEnabled, ignoramos o cancelamento para manter o medkit ativo.
-// Dump L652441: public System.Void CancelPreparation(); // 0x6805AC8
-#define OFF_CancelPreparation         0x6805AC8
-// get_EatSpeedScale — PlayerAttributes — multiplicador de velocidade de uso de itens
-// Dump L714414: public System.Single get_EatSpeedScale(); // 0x7261068
-#define OFF_get_EatSpeedScale         0x7261068
-
-// ── Anti-recoil adicional (v55) ─────────────────────────────────────────────
-// get_SkillScatterRate — PlayerAttributes — scatter adicional de habilidade
-// Dump L714455: public float get_SkillScatterRate() // 0x7261DE4
-#define OFF_get_SkillScatterRate      0x7261DE4
-// get_SkillScatterRateSighting — PlayerAttributes — scatter extra durante ADS de habilidade
-// Dump L714457: public float get_SkillScatterRateSighting() // 0x7261E98
-#define OFF_get_SkillScatterRateSighting 0x7261E98
-
-// ── Auto Aim (v59-fix4) — SyncStartFire via PlayerNetwork ──────────────────
-// PlayerNetwork::SwapWeapon override — chamado SEMPRE (via vtable) ao trocar arma
-// Dump L661975: public override System.Void SwapWeapon(int,bool,List) // 0x6A30774
-#define OFF_SwapWeapon_PlayerNetwork  0x6A30774
-// PlayerNetwork::SyncStartFire(byte) — sincroniza disparo com o servidor
-// Dump L661892: public virtual System.Void SyncStartFire(byte) // 0x6A1F670
-#define OFF_SyncStartFire             0x6A1F670
-// PlayerNetwork::SyncStopFire() — para o disparo
-// Dump L661898: public virtual System.Void SyncStopFire() // 0x6A21304
-#define OFF_SyncStopFire              0x6A21304
 
 // ============================================================
 // Function Pointers — resolvidos via base + offset direto
@@ -571,8 +506,6 @@ static uintptr_t g_il2cpp_base = 0;
 
 // Original LateUpdate
 static void (*orig_OnUpdate)(void* self, void* methodInfo) = nullptr;
-// Original CameraControllerBase::LateUpdate
-static void (*orig_CameraLateUpdate)(void* self, void* methodInfo) = nullptr;
 
 // Shared memory
 static SharedESPData* sharedData = nullptr;
@@ -594,13 +527,6 @@ static float   g_aimBestScreenDist = 1e9f;         // prioridade 0: menor distâ
 static int     g_aimBestHp         = 0x7fffffff;   // prioridade 1: menor HP (Lowest HP mode)
 static float   g_aimBestDepth      = 1e9f;         // prioridade 2: menor clipW (Nearest Distance)
 static bool    g_aimHasTarget      = false;        // alvo válido neste frame
-// Euler da câmera lido no início de cada frame (em Hook_OnUpdate/newFrame).
-// Usado pelo anti-recoil em Hook_CameraLateUpdate sem precisar ler antes do orig.
-static Vector3 g_cachedCamEuler{0.0f, 0.0f, 0.0f};
-static bool    g_camEulerValid  = false;
-// NOTA: NÃO há estado acumulado de pitch/yaw.
-// Lemos os euler angles REAIS da câmera a cada frame e aplicamos apenas um delta.
-// Isso garante que o input do jogador nunca seja ignorado.
 // ───────────────────────────────────────────────────────────────────────────
 
 // ============================================================
@@ -686,71 +612,16 @@ static Vector3 ManualWorldToScreen(Vector3 world, const Matrix4x4& vp, int sw, i
 // HOOK DO OnUpdate — Chamado pelo jogo para CADA player
 // ============================================================
 
-// ── Aimbot via camera euler angles (v36/v39 approach) ──────────────────────────────
-// Aplicado em Hook_CameraLateUpdate DEPOIS do orig → câmera aponta para a cabeça do alvo.
-// CalculateViewAngle converte src→dst em pitch/yaw Unity.
-struct Angles  { float pitch, yaw; };
-
-static Angles CalculateViewAngle(Vector3 src, Vector3 dst) {
-    float dx = dst.x - src.x;
-    float dy = dst.y - src.y;
-    float dz = dst.z - src.z;
-    float hd = sqrtf(dx * dx + dz * dz);
-    if (hd < 0.0001f) return {0.0f, 0.0f};
-    float yaw   =  atan2f(dx, dz) * (180.0f / (float)M_PI);
-    float pitch = -atan2f(dy, hd) * (180.0f / (float)M_PI);
-    if (pitch >  89.0f) pitch =  89.0f;
-    if (pitch < -89.0f) pitch = -89.0f;
-    return {pitch, yaw};
-}
-
 static Vector3 g_aimCandTarget{0.0f, 0.0f, 0.0f};  // melhor alvo deste frame
 static float   g_aimCandDist  = 1e9f;
 static bool    g_aimCandValid = false;
-static int     g_pendingAutoFire = 0;   // countdown para disparar após swap
-static int     g_pendingStopFire = 0;  // countdown para parar disparo
-static void*   g_localPlayer  = nullptr;        // ponteiro do player local (cache por frame)
 
-// ── Aimbot 2 — estado do alvo travado ────────────────────────────────────────
-// Sistema com histerese: uma vez travado num alvo, só solta quando ele sai do FOV
-// com margem extra (ab2ReleaseMult), morre ou some atrás de parede.
-static void*   g_ab2LockedTarget  = nullptr;    // ponteiro do inimigo atualmente travado
-static Vector3 g_ab2LockedHeadPos{};            // última posição válida da cabeça do alvo travado
-static bool    g_ab2HasLock       = false;      // true = aimbot2 está travado num alvo
-static float   g_ab2BestDist      = 1e9f;       // melhor candidato no frame atual (para seleção)
-
-// ── Aimbot 1 lock state (histerese, como aimbot 2) ──────────────────────────
+// ── Aimbot 1 lock state (histerese) ──────────────────────────────────────────
 static void*   g_ab1LockedTarget  = nullptr;    // inimigo atualmente travado
 static Vector3 g_ab1LockedHeadPos{};            // última posição válida da cabeça do alvo
 static bool    g_ab1HasLock       = false;      // true = aimbot1 travado num alvo
 static float   g_ab1BestDist      = 1e9f;       // melhor candidato deste frame
 // ─────────────────────────────────────────────────────────────────────────────
-
-// ============================================================
-// HOOK DE VELOCIDADE — PlayerAttributes::GetWeaponRunSpeedScale(int) (v41)
-// Retorna multiplicador de velocidade ao segurar arma.
-// Filtramos pelo ponteiro PlayerAttributes do player local (g_localPlayerAttr).
-// ============================================================
-static float Hook_GetWeaponRunSpeedScale(void* self, int32_t weaponType, void* method) {
-    float result = orig_GetWeaponRunSpeedScale
-        ? orig_GetWeaponRunSpeedScale(self, weaponType, method)
-        : 1.0f;
-    if (sharedData && sharedData->speedEnabled && sharedData->speedValue > 0.5f) {
-        return sharedData->speedValue;
-    }
-    return result;
-}
-
-// ============================================================
-// HOOK DE RECOIL — PlayerAttributes::GetScatterRate() (v41)
-// Controla o spread/scatter das balas. Retornar 0 = sem espalhamento.
-// ============================================================
-static float Hook_GetScatterRate(void* self, void* method) {
-    if (sharedData && sharedData->recoilEnabled) {
-        return 0.0f;
-    }
-    return orig_GetScatterRate ? orig_GetScatterRate(self, method) : 1.0f;
-}
 
 // ============================================================
 // PLAYER HACKS (v49)
@@ -785,176 +656,12 @@ static void il2cppStringToUtf8(void* strObj, char* out, int maxOut) {
     out[written] = '\0';
 }
 
-// PlayerAttributes::get_IsAmmoFree() → true = munição infinita
-static bool Hook_GetIsAmmoFree(void* self, void* method) {
-    if (sharedData && sharedData->ammoEnabled) {
-        return true;
-    }
-    return orig_get_IsAmmoFree ? orig_get_IsAmmoFree(self, method) : false;
-}
-
-// PlayerAttributes::get_FSModeUseMedikitFasterRate() — rate ADITIVO do modo FS
-// ERRO ANTERIOR: retornar 10.0 causava medkit de 29 segundos (rate é tempo extra, não velocidade)
-// Fix: passa pelo original sem interferir. Medkit fast é via get_EatSpeedScale.
-static float Hook_GetFSModeUseMedikitFasterRate(void* self, void* method) {
-    return orig_get_FSModeUseMedikitFasterRate
-        ? orig_get_FSModeUseMedikitFasterRate(self, method)
-        : 0.0f;
-}
-
-// PlayerAttributes::get_EatSpeedScale() → multiplicador de TEMPO de uso de itens
-// IMPORTANTE: valor alto = MAIS tempo (mais lento). Valor baixo = menos tempo (mais rápido).
-// 0.01f = quase instantâneo. Default ≈ 1.0
-static float Hook_GetEatSpeedScale(void* self, void* method) {
-    if (sharedData && sharedData->medkitFastEnabled) {
-        return 0.15f;  // ~0.5s (default ≈ 3s × 0.15 = 0.45s)
-    }
-    return orig_get_EatSpeedScale ? orig_get_EatSpeedScale(self, method) : 1.0f;
-}
-
-// Player::get_CanMedkitOnMove() → true = pode usar medkit em movimento
-// Esta é a função principal — mais específica que IsMoving()
-static bool Hook_GetCanMedkitOnMove(void* self, void* method) {
-    if (sharedData && sharedData->medkitRunEnabled) {
-        return true;
-    }
-    return orig_get_CanMedkitOnMove ? orig_get_CanMedkitOnMove(self, method) : false;
-}
-
-// Player::CancelPreparation() — jogo chama quando detecta movimento durante uso de item
-// No-op quando medkitRunEnabled: impede o jogo de cancelar o medkit ao andar.
-static void Hook_CancelPreparation(void* self, void* method) {
-    if (sharedData && sharedData->medkitRunEnabled) return;
-    if (orig_CancelPreparation) orig_CancelPreparation(self, method);
-}
-
-// Player::get_InSwapWeaponCD() → false = sem cooldown de troca de arma
-static bool Hook_GetInSwapWeaponCD(void* self, void* method) {
-    if (sharedData && sharedData->fastWeaponSwitch) {
-        return false;
-    }
-    return orig_get_InSwapWeaponCD ? orig_get_InSwapWeaponCD(self, method) : false;
-}
-
-// Player::IsMoving() → false = jogo pensa que player está parado → medkit não cancela
-static bool Hook_IsMoving(void* self, void* method) {
-    if (sharedData && sharedData->medkitRunEnabled) {
-        return false;
-    }
-    return orig_IsMoving ? orig_IsMoving(self, method) : false;
-}
-
-// Anti-recoil adicional: SkillScatterRate (bônus de dispersão de habilidade)
-static float Hook_get_SkillScatterRate(void* self, void* method) {
-    if (sharedData && sharedData->recoilEnabled) return 0.0f;
-    return orig_get_SkillScatterRate ? orig_get_SkillScatterRate(self, method) : 1.0f;
-}
-
-// Anti-recoil adicional: SkillScatterRateSighting (dispersão durante ADS de habilidade)
-static float Hook_get_SkillScatterRateSighting(void* self, void* method) {
-    if (sharedData && sharedData->recoilEnabled) return 0.0f;
-    return orig_get_SkillScatterRateSighting ? orig_get_SkillScatterRateSighting(self, method) : 1.0f;
-}
-
-// ============================================================
-// AUTO AIM (fix4) — PlayerNetwork::SwapWeapon override
-// DobbyHook no endereço direto 0x6A30774 (override correto — nunca é o base 0x67D6194).
-// Detecta troca de arma do player local e agenda snap+fire via SyncStartFire.
-// ============================================================
-static void Hook_SwapWeapon(void* self, int32_t slot, bool force, void* list, void* method) {
-    if (orig_SwapWeapon) orig_SwapWeapon(self, slot, force, list, method);
-    if (!self || !sharedData || !hookActive.load()) return;
-    if (!sharedData->autoAimEnabled) return;
-    if (!fn_IsLocalPlayer || !fn_IsLocalPlayer(self, nullptr)) return;
-    if (g_aimCandValid) {
-        g_pendingAutoFire = 5;  // 5 frames: deixa a troca completar antes de atirar
-    }
-}
-
-// ============================================================
-// HOOK DA CÂMERA — CameraControllerBase::LateUpdate
-// Aplicado DEPOIS que o controlador posiciona a câmera.
-// Aimbot e anti-recoil correm aqui (v33).
-//
-// FIX v33-crash: orig é chamado PRIMEIRO (seguro) e os euler angles
-// pré-frame vêm de g_cachedCamEuler (setado em Hook_OnUpdate/newFrame),
-// eliminando a leitura de g_camTransform antes do orig que causava crash
-// quando o ponteiro estava inválido/stale. Guards NaN adicionados.
-// ============================================================
-static void Hook_CameraLateUpdate(void* self, void* methodInfo) {
-    // Chamar original PRIMEIRO — câmera posicionada corretamente
-    if (orig_CameraLateUpdate)
-        orig_CameraLateUpdate(self, methodInfo);
-
-    if (!hookActive.load() || !sharedData || !g_camTransform ||
-        !fn_get_eulerAngles || !fn_set_eulerAngles) return;
-
-    // Anti-recoil SÓ quando disparando (triggerHeld==1).
-    // v47: não conflitar com aimbot — quando silentAim ativo e com alvo válido,
-    // o aimbot já controla a mira. Anti-recoil rodando junto desfaz o snap frame a frame.
-    bool aimbotControlling = sharedData->silentAimEnabled && g_aimCandValid;
-    if (sharedData->recoilEnabled && g_camEulerValid &&
-        sharedData->triggerHeld == 1 && !aimbotControlling) {
-        Vector3 postOrig = fn_get_eulerAngles(g_camTransform, nullptr);
-        if (std::isnan(postOrig.y) || std::isnan(postOrig.z)) return;
-        fn_set_eulerAngles(g_camTransform,
-            Vector3(g_cachedCamEuler.x, postOrig.y, postOrig.z), nullptr);
-    }
-}
-
 static void Hook_OnUpdate(void* self, void* methodInfo) {
     // ── Player local: SetAimRotation (v40) ───────────────────────────────────
     if (self && sharedData && hookActive.load() &&
         fn_IsLocalPlayer && fn_IsLocalPlayer(self, nullptr)) {
-        g_localPlayer = self;
-        // Cachear PlayerAttributes do player local para filtro nos hooks de speed/recoil
-        void* attrPtr = *(void**)((uint8_t*)self + OFF_PlayerAttributes_field);
-        if (attrPtr && (uintptr_t)attrPtr > 0x1000) g_localPlayerAttr = attrPtr;
-        // Liberar locks se nenhum alvo válido foi encontrado no frame anterior.
-        // Evita tremer/mirar em alvo caído ou fora do FOV quando campo está vazio.
+        // Liberar lock se nenhum alvo válido foi encontrado no frame anterior.
         if (g_ab1BestDist >= 9e8f) { g_ab1HasLock = false; g_ab1LockedTarget = nullptr; }
-        if (g_ab2BestDist >= 9e8f) { g_ab2HasLock = false; g_ab2LockedTarget = nullptr; }
-
-        // ── Aimbot 2: snap direto à cabeça — apenas quando IsFiring ──
-        // Smooth configurável: 0 = snap instantâneo, 0.05-0.9 = lerp suave.
-        bool isFiringAb2 = fn_IsFiring && fn_IsFiring(self, nullptr);
-        if (sharedData->aimbot2Enabled && g_ab2HasLock && isFiringAb2 &&
-            fn_SetAimRotation && g_camTransform && fn_get_position) {
-            Vector3 camPos = fn_get_position(g_camTransform, nullptr);
-            if (!std::isnan(camPos.x) && !std::isnan(camPos.y) && !std::isnan(camPos.z)) {
-                float dx = g_ab2LockedHeadPos.x - camPos.x;
-                float dy = g_ab2LockedHeadPos.y - camPos.y;
-                float dz = g_ab2LockedHeadPos.z - camPos.z;
-                float len = sqrtf(dx*dx + dy*dy + dz*dz);
-                if (len >= 0.1f) {
-                    Quaternion targetQ = LookQuatFromDir(dx, dy, dz);
-                    float smooth = sharedData->aimbot2Smooth;
-                    if (smooth > 0.0f && smooth < 1.0f) {
-                        // Lerp entre rotação atual e target para suavidade
-                        Quaternion curQ = *(Quaternion*)((uint8_t*)self + OFF_m_CurrentAimRotation);
-                        float dot = curQ.x*targetQ.x + curQ.y*targetQ.y
-                                  + curQ.z*targetQ.z + curQ.w*targetQ.w;
-                        if (dot < 0.0f) {
-                            targetQ.x=-targetQ.x; targetQ.y=-targetQ.y;
-                            targetQ.z=-targetQ.z; targetQ.w=-targetQ.w;
-                        }
-                        float t = 1.0f - smooth;  // quanto mover por frame: 1=snap, ~0.05=muito suave
-                        targetQ.x = curQ.x + (targetQ.x - curQ.x) * t;
-                        targetQ.y = curQ.y + (targetQ.y - curQ.y) * t;
-                        targetQ.z = curQ.z + (targetQ.z - curQ.z) * t;
-                        targetQ.w = curQ.w + (targetQ.w - curQ.w) * t;
-                        // Normalizar quaternion
-                        float qlen = sqrtf(targetQ.x*targetQ.x + targetQ.y*targetQ.y
-                                         + targetQ.z*targetQ.z + targetQ.w*targetQ.w);
-                        if (qlen > 0.001f) {
-                            targetQ.x/=qlen; targetQ.y/=qlen;
-                            targetQ.z/=qlen; targetQ.w/=qlen;
-                        }
-                    }
-                    fn_SetAimRotation(self, targetQ, true, nullptr);
-                }
-            }
-        }
 
         // ── Aimbot 1 (silentAim): SLERP suave + lock à cabeça real ──────────────
         // g_ab1LockedHeadPos = posição GetHeadTF do alvo travado (atualizado no loop de inimigos)
@@ -1000,38 +707,39 @@ static void Hook_OnUpdate(void* self, void* methodInfo) {
             }
         }
 
-        // ── Auto Aim (fix4): snap + SyncStartFire quando countdown chega a zero ──
-        if (sharedData->autoAimEnabled) {
-            // Parar disparo anterior se estava rodando
-            if (g_pendingStopFire > 0) {
-                g_pendingStopFire--;
-                if (g_pendingStopFire == 0 && fn_SyncStopFire)
-                    fn_SyncStopFire(self, nullptr);
-            }
-            // Disparar quando swap detectado
-            if (g_pendingAutoFire > 0) {
-                g_pendingAutoFire--;
-                if (g_pendingAutoFire == 0 && g_aimCandValid &&
-                    fn_SyncStartFire && fn_SetAimRotation &&
-                    g_camTransform && fn_get_position) {
-                    Vector3 camPos = fn_get_position(g_camTransform, nullptr);
-                    if (!std::isnan(camPos.x) && !std::isnan(camPos.y) && !std::isnan(camPos.z)) {
-                        float dx = g_aimCandTarget.x - camPos.x;
-                        float dy = g_aimCandTarget.y - camPos.y;
-                        float dz = g_aimCandTarget.z - camPos.z;
-                        float len = sqrtf(dx*dx + dy*dy + dz*dz);
-                        if (len >= 0.01f) {
-                            float rageOff = sharedData->aimRageOffsetY;
-                            if (rageOff != 0.0f) dy += rageOff;
-                            Quaternion aimQ = LookQuatFromDir(dx, dy, dz);
-                            Quaternion curQ = *(Quaternion*)((uint8_t*)self + OFF_m_CurrentAimRotation);
-                            float dot = curQ.x*aimQ.x+curQ.y*aimQ.y+curQ.z*aimQ.z+curQ.w*aimQ.w;
-                            if (dot < 0.0f) { aimQ.x=-aimQ.x; aimQ.y=-aimQ.y; aimQ.z=-aimQ.z; aimQ.w=-aimQ.w; }
-                            fn_SetAimRotation(self, aimQ, true, nullptr);
-                            fn_SyncStartFire(self, 0, nullptr);  // self = PlayerNetwork*
-                            g_pendingStopFire = 4;  // parar após 4 frames (~66ms)
+        // ── Aimbot 2: Head direct snap, agressivo quando habilitado ─────────────
+        if (g_ab2HasLock && fn_SetAimRotation && g_camTransform && fn_get_position &&
+            sharedData->aimbot2Enabled) {
+            Vector3 camPos = fn_get_position(g_camTransform, nullptr);
+            if (!std::isnan(camPos.x) && !std::isnan(camPos.y) && !std::isnan(camPos.z)) {
+                float dx = g_ab2LockedHeadPos.x - camPos.x;
+                float dy = g_ab2LockedHeadPos.y - camPos.y;
+                float dz = g_ab2LockedHeadPos.z - camPos.z;
+                float len = sqrtf(dx*dx + dy*dy + dz*dz);
+                if (len >= 0.1f) {
+                    Quaternion targetQ = LookQuatFromDir(dx, dy, dz);
+                    float smooth = sharedData->aimbot2Smooth;
+                    if (smooth > 0.0f && smooth < 1.0f) {
+                        Quaternion curQ = *(Quaternion*)((uint8_t*)self + OFF_m_CurrentAimRotation);
+                        float dot = curQ.x*targetQ.x + curQ.y*targetQ.y
+                                  + curQ.z*targetQ.z + curQ.w*targetQ.w;
+                        if (dot < 0.0f) {
+                            targetQ.x=-targetQ.x; targetQ.y=-targetQ.y;
+                            targetQ.z=-targetQ.z; targetQ.w=-targetQ.w;
+                        }
+                        float t = 1.0f - smooth;
+                        targetQ.x = curQ.x + (targetQ.x - curQ.x) * t;
+                        targetQ.y = curQ.y + (targetQ.y - curQ.y) * t;
+                        targetQ.z = curQ.z + (targetQ.z - curQ.z) * t;
+                        targetQ.w = curQ.w + (targetQ.w - curQ.w) * t;
+                        float qlen = sqrtf(targetQ.x*targetQ.x + targetQ.y*targetQ.y
+                                         + targetQ.z*targetQ.z + targetQ.w*targetQ.w);
+                        if (qlen > 0.001f) {
+                            targetQ.x/=qlen; targetQ.y/=qlen;
+                            targetQ.z/=qlen; targetQ.w/=qlen;
                         }
                     }
+                    fn_SetAimRotation(self, targetQ, true, nullptr);
                 }
             }
         }
