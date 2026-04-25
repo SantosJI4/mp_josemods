@@ -334,6 +334,12 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 #define OFF_get_IsAmmoFree          0x0
 #define OFF_get_FSModeUseMedikitFasterRate 0x0
 #define OFF_get_InSwapWeaponCD      0x0
+#define OFF_IsMoving                0x0
+#define OFF_get_CanMedkitOnMove     0x0
+#define OFF_CancelPreparation       0x0
+#define OFF_get_EatSpeedScale       0x0
+#define OFF_get_SkillScatterRate    0x0
+#define OFF_get_SkillScatterRateSighting 0x0
 #define OFF_Screen_get_width        0x9C14D60
 #define OFF_Screen_get_height       0x9C14D88
 #define OFF_IsLocalPlayer           0x67558A4
