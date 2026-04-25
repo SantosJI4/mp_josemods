@@ -324,6 +324,16 @@ static uintptr_t resolveElfSymbol(uintptr_t loadBase, const char *symName) {
 #define OFF_get_projectionMatrix    0x9C06E2C
 #define OFF_get_transform           0x9C4DF54
 #define OFF_get_position            0x9C5C0F4
+#define OFF_Transform_get_eulerAngles 0x0
+#define OFF_Transform_set_eulerAngles 0x0
+#define OFF_SyncStartFire           0x0
+#define OFF_SyncStopFire            0x0
+#define OFF_SwapWeapon_PlayerNetwork 0x0
+#define OFF_GetWeaponRunSpeedScale  0x0
+#define OFF_GetScatterRate          0x0
+#define OFF_get_IsAmmoFree          0x0
+#define OFF_get_FSModeUseMedikitFasterRate 0x0
+#define OFF_get_InSwapWeaponCD      0x0
 #define OFF_Screen_get_width        0x9C14D60
 #define OFF_Screen_get_height       0x9C14D88
 #define OFF_IsLocalPlayer           0x67558A4
@@ -446,6 +456,23 @@ static float (*orig_GetScatterRate)(void* self, void* method) = nullptr;
 // Cache do ponteiro PlayerAttributes do player local (para filtrar no hook)
 static void* g_localPlayerAttr = nullptr;
 static void* g_localPlayer = nullptr;
+
+typedef void (*CameraLateUpdateFn)(void* self, void* method);
+static CameraLateUpdateFn orig_CameraLateUpdate = nullptr;
+
+static void Hook_CameraLateUpdate(void* self, void* method);
+static void Hook_SwapWeapon(void* self, int32_t slot, bool force, void* list, void* method);
+static float Hook_GetWeaponRunSpeedScale(void* self, int32_t weaponType, void* method);
+static float Hook_GetScatterRate(void* self, void* method);
+static bool  Hook_GetIsAmmoFree(void* self, void* method);
+static float Hook_GetFSModeUseMedikitFasterRate(void* self, void* method);
+static bool  Hook_GetInSwapWeaponCD(void* self, void* method);
+static bool  Hook_IsMoving(void* self, void* method);
+static bool  Hook_GetCanMedkitOnMove(void* self, void* method);
+static void  Hook_CancelPreparation(void* self, void* method);
+static float Hook_GetEatSpeedScale(void* self, void* method);
+static float Hook_get_SkillScatterRate(void* self, void* method);
+static float Hook_get_SkillScatterRateSighting(void* self, void* method);
 
 // ── Player Hacks (v49) ───────────────────────────────────────────────────────
 // NickName — Player::get_NickName() — só chamado, não hookeado
@@ -1799,6 +1826,52 @@ void* hack_thread(void*) {
     }
 
     return nullptr;
+}
+
+static void Hook_CameraLateUpdate(void* self, void* method) {
+    if (orig_CameraLateUpdate) orig_CameraLateUpdate(self, method);
+    if (g_camTransform && fn_get_eulerAngles) {
+        Vector3 e = fn_get_eulerAngles(g_camTransform, nullptr);
+        g_cachedCamEuler = e;
+        g_camEulerValid = true;
+    }
+}
+
+static void Hook_SwapWeapon(void* self, int32_t slot, bool force, void* list, void* method) {
+    if (orig_SwapWeapon) orig_SwapWeapon(self, slot, force, list, method);
+}
+static float Hook_GetWeaponRunSpeedScale(void* self, int32_t weaponType, void* method) {
+    return orig_GetWeaponRunSpeedScale ? orig_GetWeaponRunSpeedScale(self, weaponType, method) : 1.0f;
+}
+static float Hook_GetScatterRate(void* self, void* method) {
+    return orig_GetScatterRate ? orig_GetScatterRate(self, method) : 0.0f;
+}
+static bool Hook_GetIsAmmoFree(void* self, void* method) {
+    return orig_get_IsAmmoFree ? orig_get_IsAmmoFree(self, method) : false;
+}
+static float Hook_GetFSModeUseMedikitFasterRate(void* self, void* method) {
+    return orig_get_FSModeUseMedikitFasterRate ? orig_get_FSModeUseMedikitFasterRate(self, method) : 1.0f;
+}
+static bool Hook_GetInSwapWeaponCD(void* self, void* method) {
+    return orig_get_InSwapWeaponCD ? orig_get_InSwapWeaponCD(self, method) : false;
+}
+static bool Hook_IsMoving(void* self, void* method) {
+    return orig_IsMoving ? orig_IsMoving(self, method) : false;
+}
+static bool Hook_GetCanMedkitOnMove(void* self, void* method) {
+    return orig_get_CanMedkitOnMove ? orig_get_CanMedkitOnMove(self, method) : false;
+}
+static void Hook_CancelPreparation(void* self, void* method) {
+    if (orig_CancelPreparation) orig_CancelPreparation(self, method);
+}
+static float Hook_GetEatSpeedScale(void* self, void* method) {
+    return orig_get_EatSpeedScale ? orig_get_EatSpeedScale(self, method) : 1.0f;
+}
+static float Hook_get_SkillScatterRate(void* self, void* method) {
+    return orig_get_SkillScatterRate ? orig_get_SkillScatterRate(self, method) : 0.0f;
+}
+static float Hook_get_SkillScatterRateSighting(void* self, void* method) {
+    return orig_get_SkillScatterRateSighting ? orig_get_SkillScatterRateSighting(self, method) : 0.0f;
 }
 
 // ============================================================
