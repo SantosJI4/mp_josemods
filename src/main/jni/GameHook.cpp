@@ -445,6 +445,7 @@ static float (*orig_GetWeaponRunSpeedScale)(void* self, int32_t weaponType, void
 static float (*orig_GetScatterRate)(void* self, void* method) = nullptr;
 // Cache do ponteiro PlayerAttributes do player local (para filtrar no hook)
 static void* g_localPlayerAttr = nullptr;
+static void* g_localPlayer = nullptr;
 
 // ── Player Hacks (v49) ───────────────────────────────────────────────────────
 // NickName — Player::get_NickName() — só chamado, não hookeado
@@ -527,6 +528,8 @@ static float   g_aimBestScreenDist = 1e9f;         // prioridade 0: menor distâ
 static int     g_aimBestHp         = 0x7fffffff;   // prioridade 1: menor HP (Lowest HP mode)
 static float   g_aimBestDepth      = 1e9f;         // prioridade 2: menor clipW (Nearest Distance)
 static bool    g_aimHasTarget      = false;        // alvo válido neste frame
+static bool    g_camEulerValid     = false;
+static Vector3 g_cachedCamEuler{};
 // ───────────────────────────────────────────────────────────────────────────
 
 // ============================================================
@@ -621,6 +624,12 @@ static void*   g_ab1LockedTarget  = nullptr;    // inimigo atualmente travado
 static Vector3 g_ab1LockedHeadPos{};            // última posição válida da cabeça do alvo
 static bool    g_ab1HasLock       = false;      // true = aimbot1 travado num alvo
 static float   g_ab1BestDist      = 1e9f;       // melhor candidato deste frame
+
+// Aimbot 2 state
+static void*   g_ab2LockedTarget  = nullptr;    // alvo atualmente travado pelo aimbot2
+static Vector3 g_ab2LockedHeadPos{};            // última posição válida da cabeça do alvo do aimbot2
+static bool    g_ab2HasLock       = false;      // true = aimbot2 travado num alvo
+static float   g_ab2BestDist      = 1e9f;       // melhor candidato deste frame para aimbot2
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ============================================================
