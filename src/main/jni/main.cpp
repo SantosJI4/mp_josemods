@@ -159,6 +159,11 @@ static bool recoilEnabled   = false;
 static float aimbotSmooth   = 0.0f;
 static bool speedEnabled    = false;
 static float speedValue     = 10.0f;
+static bool showFovCircle   = true;
+static bool ammoEnabled     = false;
+static bool medkitFastEnabled = false;
+static bool fastWeaponSwitch = false;
+static bool medkitRunEnabled = false;
 
 // SharedMemory (leitura do hook injetado no jogo)
 static SharedESPData* sharedData = nullptr;

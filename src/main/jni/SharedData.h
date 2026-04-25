@@ -57,6 +57,7 @@ struct SharedESPData {
     volatile int autoAimEnabled;  // Legacy: auto aim
     volatile int aimAssistHasTarget; // Legacy HUD / target state
     volatile int autoAimHasTarget;   // Legacy HUD / target state
+    volatile int aimTargetPriority;  // Overlay target priority selection
     volatile float aimAssistFovDeg;  // Legacy FOV para aimbot 1 / auto aim
     volatile float aimbotSmooth;     // Legacy smooth para aimbot 1
     volatile int triggerKey;        // Legacy trigger key
